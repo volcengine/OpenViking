@@ -460,6 +460,9 @@ def _build_where_clause(
         if field in (array_fields or set()):
             comparisons = [f"NOT (%s = ANY({quoted_field}))" for _ in conds]
             return " AND ".join(comparisons), list(conds)
+        if field == "type":
+            # Legacy index rows may have no type. They still pass type exclusions.
+            quoted_field = f"COALESCE({quoted_field}, '')"
         placeholders = ", ".join(["%s"] * len(conds))
         return f"{quoted_field} NOT IN ({placeholders})", list(conds)
 

@@ -35,6 +35,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
+from openviking.session.archive_source_recall import search_archive_sources
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
 from openviking.utils.search_filters import (
@@ -380,6 +381,22 @@ class GlobRequest(BaseModel):
     extra_fields: Optional[list[str]] = None
     tags: Optional[List[str]] = None
     include_tags: bool = False
+
+
+class ArchiveSourceSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    limit: int = Field(default=5, ge=1, le=20)
+
+
+@router.post("/archive-sources")
+async def archive_source_search(
+    request: ArchiveSourceSearchRequest,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    result = await search_archive_sources(get_service().fs, request.query, request.limit, ctx)
+    return Response(status="ok", result=_sanitize_floats(result))
 
 
 @router.post("/find")

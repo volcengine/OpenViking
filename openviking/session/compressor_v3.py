@@ -10,6 +10,7 @@ to the process-global StreamingPolicyTrainer.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field, replace
@@ -19,9 +20,11 @@ from uuid import uuid4
 
 from openviking.config.generation import get_output_language_override
 from openviking.core.context import Context
+from openviking.core.namespace import canonical_user_root
 from openviking.message import Message
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.observability.reporting.facts import event_context
+from openviking.pyagfs.exceptions import AGFSClientError
 from openviking.server.identity import RequestContext
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
@@ -30,6 +33,7 @@ from openviking.session.extraction_batch import (
 )
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.agent_file import ensure_agent_file
+from openviking.session.memory.archive_source_ranges import ArchiveSourceExcerpt
 from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
     CASE_MEMORY_TYPE,
@@ -95,6 +99,7 @@ from openviking.session.train import (
 from openviking.session.train.components.trajectory_analyzer import _evaluation_feedback_message
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -503,6 +508,11 @@ class SessionCompressorV3:
             allowed_memory_types = effective_types - AGENT_EVOLUTION_MEMORY_TYPES
 
         message_list = list(messages)
+        archive_source_selection_enabled = bool(
+            archive_uri
+            and allow_self_memory
+            and get_openviking_config().memory.archive_source_selection_enabled
+        )
         fast_path_case = _training_case_from_first_message(
             message_list,
             allowed_memory_types,
@@ -533,6 +543,7 @@ class SessionCompressorV3:
                 peer_memory_enabled=peer_memory_enabled,
                 allowed_peer_ids=allowed_peer_ids,
                 event_search_tags=event_search_tags,
+                archive_source_selection_enabled=archive_source_selection_enabled,
             )
             agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
             cases_allowed = (
@@ -580,11 +591,18 @@ class SessionCompressorV3:
                     train_result.get("memory_diff"),
                 ],
             )
-            return _v3_extraction_response(
+            response = _v3_extraction_response(
                 contexts=result.contexts,
                 train_result=train_result,
                 archive_uri=archive_uri or "",
             )
+            if archive_source_selection_enabled and result.archive_source_candidates:
+                if isinstance(response, list):
+                    response = {"contexts": response, "session_skills": []}
+                response["archive_source_candidates"] = [
+                    asdict(span) for span in result.archive_source_candidates
+                ]
+            return response
         except Exception:
             if strict_extract_errors:
                 raise
@@ -737,6 +755,7 @@ class SessionCompressorV3:
         peer_memory_enabled: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
         event_search_tags: Optional[List[str]] = None,
+        archive_source_selection_enabled: bool = False,
     ) -> "_V3ExtractionResult":
         del user
         if not messages:
@@ -783,6 +802,7 @@ class SessionCompressorV3:
             memory_registry=registry,
             vlm_config=vlm_config,
             output_language_override=output_language_override,
+            archive_source_selection_enabled=archive_source_selection_enabled,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -867,6 +887,12 @@ class SessionCompressorV3:
                 archive_uri=archive_uri,
             )
 
+        chatlog_proofs = {}
+        if archive_source_selection_enabled and operations.archive_source_ranges:
+            chatlog_proofs = await _written_chatlog_proofs(
+                viking_fs, ctx, extract_context, extraction_id, patch_operations, result
+            )
+
         contexts = _contexts_from_update_result(result)
         canonical_cases = await _canonical_cases_from_update_result(
             operations=patch_operations,
@@ -881,6 +907,13 @@ class SessionCompressorV3:
             case_uri_by_name=_case_uri_by_name(canonical_cases, patch_operations, result),
             skipped_operations=_serialize_skipped_operations(
                 getattr(result, "skipped_operations", [])
+            ),
+            archive_source_candidates=(
+                extract_context.archive_source_candidates(
+                    operations.archive_source_ranges, messages, chatlog_proofs
+                )
+                if archive_source_selection_enabled
+                else []
             ),
         )
 
@@ -1488,6 +1521,7 @@ class _V3ExtractionResult:
     memory_diff: dict[str, Any] | None = None
     case_uri_by_name: dict[str, str] = field(default_factory=dict)
     skipped_operations: list[dict[str, Any]] = field(default_factory=list)
+    archive_source_candidates: list[ArchiveSourceExcerpt] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -2176,6 +2210,48 @@ def _same_memory_file(before: Optional[MemoryFile], after: Optional[MemoryFile])
     return before.model_dump(exclude={"uri", "memory_type"}) == after.model_dump(
         exclude={"uri", "memory_type"}
     )
+
+
+
+async def _written_chatlog_proofs(
+    fs: Any,
+    ctx: RequestContext,
+    extract_context: ExtractContext,
+    extraction_id: str,
+    operations: ResolvedOperations,
+    result: MemoryUpdateResult,
+) -> dict[int, tuple[str, str]]:
+    if fs is None:
+        return {}
+    successful = set(result.written_uris + result.edited_uris)
+    successful.difference_update(result.deleted_uris, (uri for uri, _ in result.errors))
+    event_root = f"{canonical_user_root(ctx)}/memories/events/"
+    uris = {
+        uri
+        for op in operations.upsert_operations
+        if op.memory_type == EVENT_MEMORY_TYPE
+        and op.source is not None
+        and op.source.extraction_id == extraction_id
+        for uri in op.uris
+        if uri in successful and uri.startswith(event_root)
+    }
+    proofs = {}
+    for uri in sorted(uris):
+        try:
+            raw = await fs.read_file(uri, ctx=ctx)
+            event = MemoryFileUtils.read(raw, uri=uri)
+            if (
+                event.memory_type != EVENT_MEMORY_TYPE
+                or event.extra_fields.get("source_extraction_id") != extraction_id
+            ):
+                continue
+            covered = extract_context.covered_chatlog_messages(event)
+        except (AGFSClientError, OSError, ValueError, OpenVikingError):
+            continue
+        if covered:
+            proof = (uri, hashlib.sha256(raw.encode("utf-8")).hexdigest())
+            proofs.update({id(message): proof for message in covered})
+    return proofs
 
 
 def _serialize_skipped_operations(items: Any) -> list[dict[str, Any]]:

@@ -14,6 +14,11 @@ from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin
 
 from openviking.core.peer_id import safe_peer_id
+from openviking.session.memory.archive_source_ranges import (
+    ARCHIVE_SOURCE_RANGE_INSTRUCTION,
+    ARCHIVE_SOURCE_RANGES_FIELD,
+    MAX_ARCHIVE_SOURCE_SPANS,
+)
 from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
 from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
 from openviking.session.memory.extraction_output_protocol.base import (
@@ -129,7 +134,15 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         link_rules = (
             prompts.PYTHON_LINK_RULES if context.link_enabled else prompts.PYTHON_LINKS_DISABLED
         )
-        return "\n".join((*self._render_contract_preamble(context), *schema_rules, *link_rules))
+        source_rules = ()
+        if getattr(context.operations_model, "_archive_source_ranges_enabled", False):
+            source_rules = (
+                f"- sdk.retain_archive_sources(ranges: list[str]): "
+                f"{ARCHIVE_SOURCE_RANGE_INSTRUCTION}",
+            )
+        return "\n".join(
+            (*self._render_contract_preamble(context), *schema_rules, *source_rules, *link_rules)
+        )
 
     @staticmethod
     def _render_contract_preamble(context: ExtractionOutputContext) -> tuple[str, ...]:
@@ -647,6 +660,7 @@ class _PythonProgramCompiler:
         self.objects: dict[str, _MemoryObject] = {}
         self.values: dict[str, Any] = {}
         self.links: list[dict[str, Any]] = []
+        self.archive_source_ranges: list[str] = []
         self._singleton_identities: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
         self._next_new_page_id = self._find_next_new_page_id(100)
         self._committed = False
@@ -967,6 +981,20 @@ class _PythonProgramCompiler:
             )
             self._next_new_page_id = self._find_next_new_page_id(self._next_new_page_id + 1)
             return obj
+        if method == "retain_archive_sources" and getattr(
+            self.context.operations_model, "_archive_source_ranges_enabled", False
+        ):
+            if node.args or not statement:
+                self._error(
+                    node, "sdk.retain_archive_sources(ranges=...) must be a standalone call"
+                )
+            ranges = self._eval_keywords(node, allowed={"ranges"}).get("ranges")
+            if isinstance(ranges, (list, tuple)):
+                remaining = MAX_ARCHIVE_SOURCE_SPANS - len(self.archive_source_ranges)
+                self.archive_source_ranges.extend(
+                    value for value in ranges[:remaining] if isinstance(value, str)
+                )
+            return None
         if method == "commit":
             kwargs = self._eval_keywords(node)
             if node.args or kwargs or not statement:
@@ -1248,6 +1276,8 @@ class _PythonProgramCompiler:
 
     def _build_operations(self) -> Any:
         payload: dict[str, Any] = {name: [] for name in self.context.operations_model.model_fields}
+        if getattr(self.context.operations_model, "_archive_source_ranges_enabled", False):
+            payload[ARCHIVE_SOURCE_RANGES_FIELD] = self.archive_source_ranges
         deleted_ids: set[int] = set()
         replacement_ids: dict[int, int] = {}
         for obj in self.objects.values():

@@ -26,6 +26,11 @@ from openviking.message.part import TextPart
 from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
+from openviking.session.memory.archive_source_ranges import (
+    ArchiveSourceExcerpt,
+    plain_archive_text,
+    selected_archive_source_indexes,
+)
 from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryOperationSkipCode,
@@ -48,6 +53,7 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
+from openviking.storage.archive_source import MAX_ARCHIVE_SOURCE_CHARS
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
@@ -80,6 +86,7 @@ class ChunkMeta:
     source_message_id: str
     chunk_index: int
     chunk_count: int
+    start_char: int = 0
 
 
 def _collect_search_tags_by_uri(
@@ -364,6 +371,7 @@ class ExtractContext:
             return [(message, None)]
 
         chunk_messages = []
+        start_char = 0
         for idx, chunk in enumerate(chunks):
             chunk_message = Message(
                 id=f"{message.id}#chunk_{idx}",
@@ -379,10 +387,61 @@ class ExtractContext:
                         source_message_id=message.id,
                         chunk_index=idx,
                         chunk_count=len(chunks),
+                        start_char=start_char,
                     ),
                 )
             )
+            start_char += len(chunk)
         return chunk_messages
+
+    def archive_source_candidates(
+        self,
+        ranges: list[str],
+        original_messages: list[Message],
+        chatlog_proofs: dict[int, tuple[str, str]],
+    ) -> list[ArchiveSourceExcerpt]:
+        indexes = selected_archive_source_indexes(ranges, len(self.messages))
+        if not indexes:
+            return []
+        original_by_id = {message.id: message for message in original_messages}
+        candidates = []
+        for index in indexes:
+            message = self.messages[index]
+            text = plain_archive_text(message)
+            chunk = self.chunk_meta.get(id(message))
+            message_id = chunk.source_message_id if chunk else message.id
+            original = original_by_id.get(message_id)
+            if original is None or not text.strip():
+                continue
+            start = chunk.start_char if chunk else 0
+            end = start + len(text)
+            if plain_archive_text(original)[start:end] == text:
+                excerpt = text[:MAX_ARCHIVE_SOURCE_CHARS]
+                if excerpt.strip():
+                    uri, digest = chatlog_proofs.get(id(message), ("", ""))
+                    candidates.append(ArchiveSourceExcerpt(message_id, excerpt, uri, digest))
+        return candidates
+
+    def covered_chatlog_messages(self, event: MemoryFile) -> list[Message]:
+        """Identify messages fully present in the persisted canonical Events ChatLog."""
+        ranges = event.extra_fields.get("ranges")
+        summary = event.extra_fields.get("summary")
+        if not isinstance(ranges, str) or not ranges or not isinstance(summary, str):
+            return []
+        message_range = self.read_message_ranges(ranges)
+        chatlog = message_range.pretty_print()
+        if not chatlog or self.get_resource_event_content(ranges, summary):
+            return []
+        timestamp = message_range._first_message_time_with_weekday() or "N/A"
+        expected = f"# Summary\n{summary}\n# {timestamp} ChatLog:\n{chatlog}"
+        if event.content.strip() != expected.strip():
+            return []
+        return [
+            message
+            for group in message_range.elements
+            for message in group
+            if (text := plain_archive_text(message)) and text in chatlog
+        ]
 
     @classmethod
     def _split_text_for_extraction(cls, text: str) -> List[str]:

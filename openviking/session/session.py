@@ -2647,6 +2647,12 @@ class Session:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.service.task_work_index import get_task_context
+        from openviking.session.archive_source_recall import (
+            ARCHIVE_SOURCE_CANDIDATES,
+            ARCHIVE_SOURCE_CHATLOG_PROOFS,
+            enqueue_archive_sources,
+            uncovered_archive_source_excerpts,
+        )
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
 
@@ -2660,6 +2666,7 @@ class Session:
         completed_memory_steps: Dict[str, set[str]] = {}
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archives.archive_index_from_uri(archive_uri)
+        archived_message_ids = {message.id for message in messages}
 
         try:
             (
@@ -2832,6 +2839,7 @@ class Session:
                     async def _record_memory_step(
                         step: str,
                         step_messages: List[Message],
+                        source_candidates: list[dict[str, str]] | None = None,
                     ) -> None:
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
@@ -2839,16 +2847,37 @@ class Session:
                         # Persist progress before waiting for sibling Phase 2
                         # tasks. A process restart or a sibling failure can then
                         # resume without applying this memory step twice.
-                        await self._merge_archive_meta(
-                            archive_uri,
-                            {
-                                "completed_memory_steps": (
-                                    self._archives.serialize_completed_memory_steps(
-                                        completed_memory_steps
-                                    )
-                                )
-                            },
-                        )
+                        updates = {
+                            "completed_memory_steps": self._archives.serialize_completed_memory_steps(
+                                completed_memory_steps
+                            )
+                        }
+                        if source_candidates:
+                            meta = await self._archives.read_meta(archive_uri)
+                            saved = dict.fromkeys(
+                                excerpt
+                                for excerpt in meta.get(ARCHIVE_SOURCE_CANDIDATES) or []
+                                if isinstance(excerpt, str)
+                            )
+                            existing_proofs = meta.get(ARCHIVE_SOURCE_CHATLOG_PROOFS)
+                            proofs = dict(existing_proofs) if isinstance(existing_proofs, dict) else {}
+                            for candidate in source_candidates:
+                                if candidate["message_id"] not in archived_message_ids:
+                                    continue
+                                excerpt = candidate["excerpt"]
+                                if excerpt in saved:
+                                    # An identical excerpt at another position may be uncovered.
+                                    proofs.pop(excerpt, None)
+                                elif candidate.get("chatlog_uri") and candidate.get("chatlog_sha256"):
+                                    proofs[excerpt] = {
+                                        "uri": candidate["chatlog_uri"],
+                                        "sha256": candidate["chatlog_sha256"],
+                                    }
+                                saved[excerpt] = None
+                            updates[ARCHIVE_SOURCE_CANDIDATES] = list(saved)
+                            if proofs or existing_proofs:
+                                updates[ARCHIVE_SOURCE_CHATLOG_PROOFS] = proofs
+                        await self._merge_archive_meta(archive_uri, updates)
 
                     async def _run_recorded_memory_step(
                         operation_name: str,
@@ -2857,7 +2886,12 @@ class Session:
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
                         result = await _run_retryable_phase2_step(operation_name, fn)
-                        await _record_memory_step(step, step_messages)
+                        candidates = (
+                            result.get(ARCHIVE_SOURCE_CANDIDATES)
+                            if isinstance(result, dict)
+                            else None
+                        )
+                        await _record_memory_step(step, step_messages, candidates)
                         return result
 
                     # Summary and V3 long-term memory extraction run concurrently.
@@ -3012,6 +3046,20 @@ class Session:
                                 "memory and session skill extraction skipped (disabled by config or memory_policy)"
                             )
                         await _run_archive_summary()
+
+                    if (
+                        memory_extraction_enabled
+                        and self_memory_enabled
+                        and ov_config.memory.archive_source_selection_enabled
+                        and self._viking_fs
+                    ):
+                        meta = await self._archives.read_meta(archive_uri)
+                        await enqueue_archive_sources(
+                            self._viking_fs,
+                            archive_uri,
+                            await uncovered_archive_source_excerpts(self._viking_fs, meta, self.ctx),
+                            self.ctx,
+                        )
 
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its

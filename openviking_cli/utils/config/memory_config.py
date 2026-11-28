@@ -104,6 +104,10 @@ class MemoryConfig(BaseModel):
             "'json' preserves the legacy structured JSON protocol."
         ),
     )
+    archive_source_selection_enabled: bool = Field(
+        default=False,
+        description="Select and index original passages during Session memory extraction.",
+    )
     session_skill_extraction_enabled: bool = Field(
         default=False,
         description=(

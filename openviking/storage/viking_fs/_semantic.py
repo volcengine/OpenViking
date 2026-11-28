@@ -3,10 +3,12 @@
 """Semantic retrieval mixin for VikingFS."""
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.core.context import ContextLevel
+from openviking.core.namespace import canonical_session_root
 from openviking.core.retrieval_targets import resolve_retrieval_targets
 from openviking.core.retrieval_types import SearchType
 from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log
@@ -30,6 +32,7 @@ from openviking.utils.image_search import build_multimodal_embedding_input
 from openviking.utils.time_decay import parse_duration_ms
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.retrieval_config import RetrievalConfig
 
 
@@ -195,11 +198,29 @@ class _SemanticMixin:
 
         real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        include_archive_sources = (
+            not filter_only
+            and not image_url
+            and search_type == "semantic"
+            and get_openviking_config().memory.archive_source_selection_enabled
+        )
+        if (
+            include_archive_sources
+            and retrieval_targets.target_directories
+            and not retrieval_targets.first_explicit_directory
+            and real_ctx.actor_peer_id
+            and real_ctx.role in {Role.USER, Role.ADMIN}
+            and real_ctx.data_access is None
+        ):
+            retrieval_targets = replace(
+                retrieval_targets,
+                target_directories=[
+                    *retrieval_targets.target_directories, canonical_session_root(real_ctx)
+                ],
+            )
 
         real_ctx = self.authorize_read(real_ctx, retrieval_targets.target_directories)
         if real_ctx.data_access is not None:
-            from dataclasses import replace
-
             retrieval_targets = replace(
                 retrieval_targets, target_directories=list(real_ctx.data_access.effective_targets)
             )
@@ -228,6 +249,7 @@ class _SemanticMixin:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            archive_source_fs=self if include_archive_sources else None,
         )
 
         typed_query = TypedQuery(

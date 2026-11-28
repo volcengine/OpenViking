@@ -6,7 +6,7 @@ Global vector retrieval with optional reranking of the recalled candidates.
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.retrieval_targets import default_target_directories
@@ -23,6 +23,7 @@ from openviking.retrieve.rerank_scoring import RerankScores, finite_score, reran
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
 from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
+from openviking.storage.archive_source import ARCHIVE_SOURCE_RECORD_TYPE
 from openviking.storage.expr import FilterExpr
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
@@ -37,6 +38,9 @@ from openviking_cli.retrieve.types import (
 )
 from openviking_cli.utils.config import RerankConfig
 from openviking_cli.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from openviking.storage.viking_fs import VikingFS
 
 logger = get_logger(__name__)
 
@@ -74,6 +78,8 @@ class HierarchicalRetriever:
         storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
+        *,
+        archive_source_fs: "VikingFS | None" = None,
     ):
         """Initialize retriever with rerank_config.
 
@@ -85,6 +91,7 @@ class HierarchicalRetriever:
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
+        self.archive_source_fs = archive_source_fs
         self.rerank_max_input_tokens = rerank_config.max_input_tokens if rerank_config else 0
 
         # Applies only to scores the reranker produced, never to raw vector scores.
@@ -204,7 +211,18 @@ class HierarchicalRetriever:
         ):
             context_type = ContextType.RESOURCE.value
 
-        search_limit = limit * self.RERANK_CANDIDATE_MULTIPLIER if use_rerank else limit
+        include_archive_sources = (
+            self.archive_source_fs is not None
+            and search_type == "semantic"
+            and not image_query
+            and context_type in {None, ContextType.MEMORY.value}
+            and (not level or ContextLevel.DETAIL in level)
+        )
+        search_limit = (
+            limit * self.RERANK_CANDIDATE_MULTIPLIER
+            if use_rerank or include_archive_sources
+            else limit
+        )
         with telemetry.measure("search.vector_retrieval"):
             if search_type == "keywords":
                 vector_results = await vector_proxy.search_by_keywords_in_tenant(
@@ -225,26 +243,43 @@ class HierarchicalRetriever:
                     extra_filter=scope_dsl,
                     level=level,
                     limit=search_limit,
+                    include_archive_sources=include_archive_sources,
                     **decay_kwargs,
                 )
         telemetry.count("vector.searches", 1)
         telemetry.count("vector.scored", len(vector_results))
         telemetry.count("vector.scanned", len(vector_results))
 
-        # Recall scores already include event decay from the vector engine.
-        # Keep the highest-scored hit for each URI before model reranking.
-        collected_by_uri: Dict[str, Dict[str, Any]] = {}
+        if include_archive_sources:
+            from openviking.session.archive_source_recall import visible_archive_source_hits
+
+            sources = [
+                hit for hit in vector_results if hit.get("type") == ARCHIVE_SOURCE_RECORD_TYPE
+            ]
+            if sources:
+                ordinary = [
+                    hit for hit in vector_results if hit.get("type") != ARCHIVE_SOURCE_RECORD_TYPE
+                ]
+                visible = await visible_archive_source_hits(self.archive_source_fs, sources, ctx)
+                vector_results = ordinary + visible
+
+        # A single archive may contain several independently relevant excerpts.
+        collected: Dict[tuple[str, str | None], Dict[str, Any]] = {}
         for result in vector_results:
             uri = result.get("uri", "")
             if not uri:
                 continue
             score = self._finite_score(result.get("_score", 0.0))
-            previous = collected_by_uri.get(uri)
+            excerpt = (
+                result["abstract"] if result.get("type") == ARCHIVE_SOURCE_RECORD_TYPE else None
+            )
+            key = (uri, excerpt)
+            previous = collected.get(key)
             if previous is None or score > previous["_score"]:
-                collected_by_uri[uri] = {**result, "_score": score}
+                collected[key] = {**result, "_score": score}
 
         candidates = sorted(
-            collected_by_uri.values(), key=lambda candidate: candidate["_score"], reverse=True
+            collected.values(), key=lambda candidate: candidate["_score"], reverse=True
         )
         scores = [candidate["_score"] for candidate in candidates]
         reranked = [False] * len(candidates)
@@ -354,7 +389,11 @@ class HierarchicalRetriever:
                     else ContextType.RESOURCE,
                     level=level,
                     abstract=abstract,
-                    category=c.get("category", ""),
+                    category=(
+                        ARCHIVE_SOURCE_RECORD_TYPE
+                        if c.get("type") == ARCHIVE_SOURCE_RECORD_TYPE
+                        else c.get("category", "")
+                    ),
                     score=final_score,
                     search_tags=normalize_search_tags(c.get("search_tags"), discard_invalid=True),
                     origin_score=c.get("_origin_score"),
