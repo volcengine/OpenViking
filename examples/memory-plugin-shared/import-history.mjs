@@ -1214,7 +1214,9 @@ export function planImport(opts, { env = process.env, now = Date.now(), connecti
     const turns = mergeTurns(candidate.messages).map((turn) => {
       let text = redactSecrets(turn.text, secrets);
       if (text.length > opts.maxMessageChars) {
-        text = `${text.slice(0, opts.maxMessageChars)}\n... [truncated, ${text.length - opts.maxMessageChars} more characters]`;
+        // Never end on half a surrogate pair: the server cannot store it and refuses the batch.
+        const kept = text.slice(0, opts.maxMessageChars).replace(/[\uD800-\uDBFF]$/, "");
+        text = `${kept}\n... [truncated, ${text.length - kept.length} more characters]`;
       }
       return { role: turn.role, text, createdAt: turn.createdAt };
     });
