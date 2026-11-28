@@ -13,7 +13,7 @@ from openviking.server.config import ToolOutputExternalizationConfig
 from openviking.session import Session
 from openviking.session.tool_result_store import ToolResultStore
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from tests.utils.mock_agfs import MockLocalAGFS
 
 
@@ -163,3 +163,32 @@ async def test_list_tool_results_filters_tool_name_before_limit():
     result = await store.list(tool_name="target", limit=1)
 
     assert result["tool_results"] == [{"tool_result_id": "tr_target", "tool_name": "target"}]
+
+
+async def test_read_metadata_propagates_storage_errors_as_themselves():
+    class FlakyVikingFS:
+        def __init__(self):
+            self.fail_metadata = False
+
+        async def read_file(self, uri, *, ctx):  # noqa: ANN001
+            if self.fail_metadata:
+                raise TimeoutError("storage timeout")
+            raise NotFoundError(uri, "file")
+
+    fs = FlakyVikingFS()
+    store = ToolResultStore(
+        fs,
+        "viking://user/alice/sessions/read-metadata-errors",
+        "read-metadata-errors",
+        ctx=None,
+    )
+
+    # A genuinely missing result stays a NotFoundError.
+    with pytest.raises(NotFoundError):
+        await store.read_metadata("tr_missing")
+
+    # A transient storage failure must not masquerade as "not found" -
+    # the read API would report an existing tool result as 404.
+    fs.fail_metadata = True
+    with pytest.raises(TimeoutError):
+        await store.read_metadata("tr_missing")
