@@ -158,7 +158,7 @@ class CompileScheduler:
 
     async def scan_once(self, now: Optional[datetime] = None) -> None:
         now = now or datetime.now(TZ)
-        async for account_id, compile_name, record in self._store.list_configs():
+        async for account_id, compile_name, record in self._store.list_configs(auto_update=True):
             try:
                 owner_user_id = record["execution_context"]["owner_user_id"]
                 if is_due(record, now):

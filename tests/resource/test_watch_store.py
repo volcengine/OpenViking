@@ -54,14 +54,14 @@ def _mysql_connection(params):
     return pymysql.connect(**values, charset="utf8mb4", autocommit=True)
 
 
-@pytest_asyncio.fixture(params=["file", "sqlite", "mysql", "postgres"])
+@pytest_asyncio.fixture(params=["file", "sqlite", "mysql", "postgres", "http"])
 async def make_store(request, tmp_path):
     """Return a factory for stores sharing one database (one per simulated node)."""
     created: list[WatchStore] = []
     cleanup = None
     if request.param == "file":
         viking_fs = local_viking_fs(tmp_path / "agfs")
-    elif request.param == "sqlite":
+    elif request.param in {"sqlite", "http"}:
         params = {
             "path": str(tmp_path / "watch.db"),
             "credential_encryption_key": ENCRYPTION_KEY,
@@ -137,10 +137,18 @@ async def make_store(request, tmp_path):
                 "mysql": MySQLWatchStore,
                 "postgres": PostgresWatchStore,
                 "sqlite": SQLiteWatchStore,
+                "http": SQLiteWatchStore,
             }[request.param]
             store = cls(service_name=service_name, params={**params, **overrides})
         await store.initialize()
         created.append(store)
+        if request.param == "http":
+            from tests.utils.task_service import StoreHTTPPeer
+
+            client_store = StoreHTTPPeer(watches=store).client().watches
+            await client_store.initialize()
+            created.insert(0, client_store)
+            return client_store
         return store
 
     try:

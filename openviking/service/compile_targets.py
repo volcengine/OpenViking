@@ -243,6 +243,9 @@ RUN_FIELDS = frozenset(
 )
 
 
+CompileConfigKey = tuple[str, str, str]  # account_id, compile_name, owner_user_id
+
+
 class CompileStore(Protocol):
     """Persistence for creator-scoped configs and runs.
 
@@ -277,8 +280,10 @@ class CompileStore(Protocol):
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         fresh: bool = False,
+        auto_update: bool | None = None,
+        after_key: CompileConfigKey | None = None,
     ) -> AsyncIterator[tuple[str, str, dict]]:
-        """Iterate configurations matching the filters and cursor."""
+        """Iterate matching configurations, strictly after the optional full key."""
 
     async def list_runs(
         self,
@@ -368,10 +373,14 @@ class CompileStateStore:
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         fresh: bool = False,
+        auto_update: bool | None = None,
+        after_key: CompileConfigKey | None = None,
     ) -> AsyncIterator[tuple[str, str, dict]]:
         if limit is not None and limit <= 0:
             return
         if account_id is not None and user_id is not None and compile_name and cursor is None:
+            if after_key is not None and (account_id, compile_name, user_id) <= after_key:
+                return
             if fresh:
                 try:
                     await self._agfs.stat(
@@ -380,14 +389,24 @@ class CompileStateStore:
                 except (AGFSNotFoundError, FileNotFoundError):
                     return
             record = await self.get(account_id, user_id, compile_name)
-            if record is not None:
+            if record is not None and (
+                auto_update is None or record.get("auto_update") is auto_update
+            ):
                 yield account_id, compile_name, record
             return
-        accounts = [account_id] if account_id is not None else await self.list_accounts()
+        accounts = [account_id] if account_id is not None else sorted(await self.list_accounts())
         for account in accounts:
+            if after_key is not None and account < after_key[0]:
+                continue
             async for name, record in self.iter_records(
-                account, user_id=user_id, cursor=cursor, compile_name=compile_name
+                account,
+                user_id=user_id,
+                cursor=cursor,
+                compile_name=compile_name,
+                after_key=after_key,
             ):
+                if auto_update is not None and record.get("auto_update") is not auto_update:
+                    continue
                 yield account, name, record
                 if limit is not None:
                     limit -= 1
@@ -595,6 +614,7 @@ class CompileStateStore:
         user_id: Optional[str] = None,
         cursor: Optional[str] = None,
         compile_name: Optional[str] = None,
+        after_key: CompileConfigKey | None = None,
     ) -> AsyncIterator[tuple[str, dict]]:
         """Yield matching configs in (name, owner) order; cursors are name or name:owner."""
         if compile_name is not None:
@@ -618,6 +638,8 @@ class CompileStateStore:
             for entry in entries:
                 name = self._segment_name(str(entry.get("name") or ""))
                 if name is None or (compile_name is not None and name != compile_name):
+                    continue
+                if after_key is not None and (account_id, name, owner_user_id) <= after_key:
                     continue
                 if cursor_name is not None:
                     if cursor_owner is None and name <= cursor_name:

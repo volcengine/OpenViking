@@ -877,12 +877,12 @@ class OpenVikingService:
             self._rule_cleanup_scheduler = None
         compile_config = self._config.compile_api
         compile_store: CompileStore
-        sql_compile_store = config.storage.build_compile_store(config.service_name)
-        if sql_compile_store is not None:
-            await sql_compile_store.load()
-            self._close_compile_store = sql_compile_store.close
-            self.compile_config_cleanup = sql_compile_store.delete_config
-            compile_store = sql_compile_store
+        configured_compile_store = config.storage.build_compile_store(config.service_name)
+        if configured_compile_store is not None:
+            await configured_compile_store.load()
+            self._close_compile_store = configured_compile_store.close
+            self.compile_config_cleanup = configured_compile_store.delete_config
+            compile_store = configured_compile_store
         else:
             compile_store = CompileStateStore(self._agfs_client)
         compile_lifecycle = CompileLifecycle(compile_store, self._viking_fs)

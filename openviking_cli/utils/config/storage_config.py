@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from openviking_cli.utils.logger import get_logger
 
 from .agfs_config import AGFSConfig
+from .http_store_config import HTTPStoreConfig
 from .parse_output_config import ParseOutputConfig
 from .transaction_config import TransactionConfig
 from .vectordb_config import VectorDBBackendConfig
@@ -25,9 +26,9 @@ class TaskStoreConfig(BaseModel):
     @classmethod
     def normalize_provider(cls, provider: str) -> str:
         provider = provider.strip().lower()
-        if provider not in {"file", "mysql", "postgres", "sqlite"}:
+        if provider not in {"file", "mysql", "postgres", "sqlite", "http"}:
             raise ValueError(
-                "storage.task_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite', "
+                "storage.task_store.provider must be 'file', 'mysql', 'postgres', 'sqlite' or 'http', "
                 f"got {provider!r}"
             )
         return provider
@@ -42,9 +43,9 @@ class WatchStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
+        if self.provider not in {"file", "mysql", "postgres", "sqlite", "http"}:
             raise ValueError(
-                "storage.watch_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite', "
+                "storage.watch_store.provider must be 'file', 'mysql', 'postgres', 'sqlite' or 'http', "
                 f"got {self.provider!r}"
             )
         if self.provider == "sqlite":
@@ -80,9 +81,9 @@ class CompileStoreConfig(BaseModel):
     @model_validator(mode="after")
     def normalize_provider(self):
         self.provider = self.provider.strip().lower()
-        if self.provider not in {"file", "mysql", "postgres", "sqlite"}:
+        if self.provider not in {"file", "mysql", "postgres", "sqlite", "http"}:
             raise ValueError(
-                "storage.compile_store.provider must be 'file', 'mysql', 'postgres' or 'sqlite'"
+                "storage.compile_store.provider must be 'file', 'mysql', 'postgres', 'sqlite' or 'http'"
             )
         return self
 
@@ -133,6 +134,7 @@ class StorageConfig(BaseModel):
     )
 
     compile_store: CompileStoreConfig = Field(default_factory=CompileStoreConfig)
+    task_service: HTTPStoreConfig | None = None
 
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
@@ -153,6 +155,12 @@ class StorageConfig(BaseModel):
     @model_validator(mode="after")
     def resolve_paths(self):
         """Normalize storage paths and map legacy transaction settings into native pathlock config."""
+        for store in (self.task_store, self.watch_store, self.compile_store):
+            if store.provider == "http":
+                if store.params or self.task_service is None:
+                    raise ValueError(
+                        "HTTP store connection settings belong in storage.task_service"
+                    )
         if "lock_timeout" in self.transaction.model_fields_set:
             logger.info(
                 "'transaction.lock_timeout' is deprecated and ignored. The runtime wait timeout is fixed at 0.0 seconds.",
@@ -210,7 +218,11 @@ class StorageConfig(BaseModel):
             provider = "file" if PersistentTaskStore.has_task_store(agfs) else "sqlite"
 
         store: TaskWorkStore
-        if provider == "mysql":
+        if provider == "http":
+            from openviking.storage.task_service import HTTPTaskWorkStore
+
+            store = HTTPTaskWorkStore(self._build_task_service())
+        elif provider == "mysql":
             from openviking.service.task_store_mysql import MySQLTaskWorkStore
 
             store = MySQLTaskWorkStore(params=self.task_store.params, service_name=service_name)
@@ -230,6 +242,10 @@ class StorageConfig(BaseModel):
 
     def build_watch_store(self, *, service_name: str, viking_fs: Any):
         """Build the configured Watch store."""
+        if self.watch_store.provider == "http":
+            from openviking.storage.task_service import HTTPWatchStore
+
+            return HTTPWatchStore(self._build_task_service())
         if self.watch_store.provider == "postgres":
             from openviking.resource.watch_store_postgres import PostgresWatchStore
 
@@ -250,10 +266,14 @@ class StorageConfig(BaseModel):
         return FileWatchStore(viking_fs)
 
     def build_compile_store(self, service_name: str):
-        """Build the selected relational Compile store; file is wired with AGFS."""
+        """Build the selected Compile store; file is wired with AGFS."""
         provider = self.compile_store.provider
         if provider == "file":
             return None
+        if provider == "http":
+            from openviking.storage.task_service.compile import HTTPCompileStore
+
+            return HTTPCompileStore(self._build_task_service())
         params = dict(self.compile_store.params)
         try:
             if provider == "mysql":
@@ -272,3 +292,10 @@ class StorageConfig(BaseModel):
             raise RuntimeError(
                 f"Compile {provider} storage requires openviking[{provider}]"
             ) from exc
+
+    def _build_task_service(self):
+        from openviking.storage.task_service import HTTPTaskService
+
+        if self.task_service is None:
+            raise ValueError("storage.task_service is required for HTTP stores")
+        return HTTPTaskService(self.task_service)

@@ -24,6 +24,7 @@ from openviking.service.compile_targets import (
     RUN_FIELDS,
     STATE_FIELDS,
     TERMINAL,
+    CompileConfigKey,
     same_json_value,
     validate_compile_name,
     validate_task_id,
@@ -383,12 +384,18 @@ class SQLCompileStore:
         cursor: str | None = None,
         limit: int | None = None,
         fresh: bool = False,
+        auto_update: bool | None = None,
+        after_key: CompileConfigKey | None = None,
     ) -> AsyncIterator[tuple[str, str, dict]]:
         # All sessions use the primary; no store cache to bypass.
         if limit is not None and limit <= 0:
             return
         c = self._configs.c
         filters = [c.service_name == self._service_name]
+        if auto_update is not None:
+            filters.append(c.auto_update.is_(auto_update))
+        if after_key is not None:
+            filters.append(_after((c.account_id, c.compile_name, c.owner_user_id), after_key))
         order = []
         if account_id is not None:
             _validate_id(account_id, "account_id", validate_account_id)

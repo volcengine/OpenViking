@@ -104,13 +104,13 @@ async def _provision_task_schema(admin, params, schema_names):
                     await connection.exec_driver_sql(statement)
 
 
-@pytest.fixture(params=["file", "mysql", "postgres", "sqlite"])
+@pytest.fixture(params=["file", "mysql", "postgres", "sqlite", "http"])
 async def task_stores(request, tmp_path):
     if request.param == "file":
         store = PersistentTaskStore(_FakeAgfs())
         yield store, store
         return
-    if request.param == "sqlite":
+    if request.param in {"sqlite", "http"}:
         pytest.importorskip("aiosqlite")
         from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
 
@@ -119,7 +119,20 @@ async def task_stores(request, tmp_path):
         try:
             await first.load()
             await second.load()
-            yield first, second
+            if request.param == "http":
+                from tests.utils.task_service import StoreHTTPPeer
+
+                left = StoreHTTPPeer(tasks=first).client().tasks
+                right = StoreHTTPPeer(tasks=second).client().tasks
+                try:
+                    await left.load()
+                    await right.load()
+                    yield left, right
+                finally:
+                    await left.close()
+                    await right.close()
+            else:
+                yield first, second
         finally:
             await first.close()
             await second.close()
