@@ -29,6 +29,7 @@ MEMORY_ROOT_URI = "viking://~/memories"
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_ADD_IMAGE_BYTES = 30 * 1024 * 1024
 MAX_QUERY_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_NATIVE_BATCH_MESSAGES = 100
 RETRYABLE_OPENVIKING_CODES = {
     "ABORTED",
     "DEADLINE_EXCEEDED",
@@ -192,7 +193,7 @@ class AMLAddRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: str = Field(min_length=1)
-    messages: list[AMLMessage] = Field(min_length=1, max_length=20)
+    messages: list[AMLMessage] = Field(min_length=1)
     user_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
 
@@ -296,12 +297,14 @@ class OpenVikingBackend:
         self, *, user_id: str, session_id: str, messages: list[dict[str, Any]]
     ) -> None:
         async with self._client(user_id) as client:
-            result = await self._retry(
-                "batch add",
-                lambda: client.batch_add_messages(session_id, messages),
-            )
-            if not isinstance(result, dict) or result.get("added") != len(messages):
-                raise OpenVikingBackendError("OpenViking did not add every message")
+            for offset in range(0, len(messages), MAX_NATIVE_BATCH_MESSAGES):
+                batch = messages[offset : offset + MAX_NATIVE_BATCH_MESSAGES]
+                result = await self._retry(
+                    "batch add",
+                    lambda batch=batch: client.batch_add_messages(session_id, batch),
+                )
+                if not isinstance(result, dict) or result.get("added") != len(batch):
+                    raise OpenVikingBackendError("OpenViking did not add every message")
 
             commit = await self._retry(
                 "commit",
