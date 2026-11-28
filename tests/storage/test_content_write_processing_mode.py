@@ -327,3 +327,32 @@ async def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_s
     )
 
     assert MemoryFileUtils.read(rendered.decode("utf-8"), uri=uri).content == "new memory content"
+
+
+@pytest.mark.asyncio
+async def test_memory_replace_preserves_metadata_from_trailing_comment(ctx):
+    uri = "viking://user/account-1/memories/entities/software_tool/memory_fields.md"
+    body = '# A format example\n\n<!-- MEMORY_FIELDS {"example": true} -->\n\nSome notes.'
+    existing = (
+        f"{body}\n\n<!-- MEMORY_FIELDS\n"
+        '{"memory_type": "entities", "category": "software_tool", "name": "memory_fields", '
+        '"version": 3}\n-->\n'
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+
+    rendered = await coordinator._render_final_bytes(
+        uri,
+        "Updated notes.",
+        mode="replace",
+        existing_raw=existing,
+        ctx=ctx,
+    )
+
+    assert MemoryFileUtils.read(rendered.decode("utf-8"), uri=uri).to_metadata() == {
+        "memory_type": "entities",
+        "category": "software_tool",
+        "name": "memory_fields",
+        "version": 3,
+        "content": "Updated notes.",
+    }
+    assert MemoryFileUtils.read(existing, uri=uri).content == body

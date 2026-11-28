@@ -8,7 +8,10 @@ from typing import Any, Dict, List
 
 import json_repair
 
-from openviking.session.memory.utils.memory_fields import MEMORY_FIELDS_COMMENT_RE
+from openviking.session.memory.utils.memory_fields import (
+    find_memory_fields_trailer,
+    strip_memory_fields_trailer,
+)
 from openviking.telemetry import tracer
 from openviking.utils.message_format import format_messages
 from openviking_cli.utils import get_logger
@@ -37,7 +40,7 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
     if not content:
         return {"content": ""}
 
-    match = MEMORY_FIELDS_COMMENT_RE.search(content)
+    match = find_memory_fields_trailer(content)
 
     result = {}
 
@@ -58,8 +61,6 @@ def parse_memory_file_with_fields(content: str) -> Dict[str, Any]:
                     extra={"degraded": True, "error_type": type(e).__name__},
                 )
 
-    # Remove the comment from content
-    content_without_comment = MEMORY_FIELDS_COMMENT_RE.sub("", content).strip()
-    result["content"] = content_without_comment
+    result["content"] = strip_memory_fields_trailer(content)
 
     return result

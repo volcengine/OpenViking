@@ -392,16 +392,16 @@ class TestParseMemoryFileWithFields:
 
     def test_parses_memory_fields_comment(self):
         """Test parsing MEMORY_FIELDS HTML comment."""
-        content = """<!-- MEMORY_FIELDS
+        content = """Here is the actual file content.
+It has multiple lines.
+<!-- MEMORY_FIELDS
 {
   "tool_name": "web_search",
   "static_desc": "Searches the web for information",
   "total_calls": 100,
   "success_count": 92
 }
--->
-Here is the actual file content.
-It has multiple lines."""
+-->"""
         result = parse_memory_file_with_fields(content)
         assert result["tool_name"] == "web_search"
         assert result["static_desc"] == "Searches the web for information"
@@ -425,30 +425,32 @@ It has multiple lines."""
     def test_handles_invalid_json_in_comment(self):
         """Test handles invalid JSON in MEMORY_FIELDS comment gracefully."""
         # Use truly invalid JSON that even json_repair can't parse
-        content = """<!-- MEMORY_FIELDS
+        content = """File content
+<!-- MEMORY_FIELDS
 not json at all, just random text
--->
-File content"""
+-->"""
         result = parse_memory_file_with_fields(content)
         assert "File content" in result["content"]
         # No extra fields added
         assert "not" not in result
 
-    def test_removes_comment_from_content(self):
-        """Test that the comment is completely removed from content."""
-        content = """Before comment
-<!-- MEMORY_FIELDS {"test": "value"} -->
-After comment"""
+    def test_preserves_memory_fields_examples_in_content(self):
+        """Test that only the trailing metadata comment is removed."""
+        content = """# Memory Fields Guide
+<!-- MEMORY_FIELDS {"example": true} -->
+Explanation text.
+<!-- MEMORY_FIELDS {"test": "value"} -->"""
         result = parse_memory_file_with_fields(content)
-        assert "<!-- MEMORY_FIELDS" not in result["content"]
-        assert "Before comment" in result["content"]
-        assert "After comment" in result["content"]
+        assert result["content"] == (
+            '# Memory Fields Guide\n<!-- MEMORY_FIELDS {"example": true} -->\nExplanation text.'
+        )
+        assert "example" not in result
         assert result["test"] == "value"
 
     def test_fields_on_same_line(self):
         """Test MEMORY_FIELDS on single line."""
-        content = """<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->
-Content"""
+        content = """Content
+<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->"""
         result = parse_memory_file_with_fields(content)
         assert result["tool_name"] == "test"
         assert result["value"] == 42
