@@ -800,17 +800,23 @@ pub(crate) fn validation_error_copy(kind: ConfigKind, error: &Error) -> String {
         Error::Network(msg) if msg.contains("unhealthy") => {
             "Server is reachable but reported unhealthy status. Check the server logs.".to_string()
         }
-        Error::Network(_) => match kind {
-            ConfigKind::OpenVikingService => {
-                "Cannot reach OpenViking Service. Check your network connection.".to_string()
-            }
-            ConfigKind::Custom => {
-                "Cannot reach the server. Check the URL and your network connection.".to_string()
-            }
-        },
-        Error::Timeout(_) => {
-            "Connection timed out. Increase the request timeout or check the server.".to_string()
+        Error::Network(msg) => {
+            let lead = match kind {
+                ConfigKind::OpenVikingService => {
+                    "Cannot reach OpenViking Service. Check your network connection."
+                }
+                ConfigKind::Custom => {
+                    "Cannot reach the server. Check the URL and your network connection."
+                }
+            };
+            append_connection_diagnostics(crate::i18n::Language::En, lead, Some(msg), msg)
         }
+        Error::Timeout(msg) => append_connection_diagnostics(
+            crate::i18n::Language::En,
+            "Connection timed out. Increase the request timeout or check the server.",
+            None,
+            msg,
+        ),
         error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
             "API key was rejected. Check your API key.".to_string()
         }
@@ -832,13 +838,19 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
         Error::Network(msg) if msg.contains("unhealthy") => {
             "服务器可连接，但健康状态异常。请检查服务器日志。".to_string()
         }
-        Error::Network(_) => match kind {
-            ConfigKind::OpenVikingService => {
-                "无法连接 OpenViking 服务。请检查网络连接。".to_string()
-            }
-            ConfigKind::Custom => "无法连接服务器。请检查 URL 和网络连接。".to_string(),
-        },
-        Error::Timeout(_) => "连接超时。请提高请求超时时间或检查服务器状态。".to_string(),
+        Error::Network(msg) => {
+            let lead = match kind {
+                ConfigKind::OpenVikingService => "无法连接 OpenViking 服务。请检查网络连接。",
+                ConfigKind::Custom => "无法连接服务器。请检查 URL 和网络连接。",
+            };
+            append_connection_diagnostics(crate::i18n::Language::ZhCn, lead, Some(msg), msg)
+        }
+        Error::Timeout(msg) => append_connection_diagnostics(
+            crate::i18n::Language::ZhCn,
+            "连接超时。请提高请求超时时间或检查服务器状态。",
+            None,
+            msg,
+        ),
         error @ Error::Api { .. } if error.code() == "UNAUTHENTICATED" => {
             "API Key 被拒绝。请检查 API Key。".to_string()
         }
@@ -849,6 +861,29 @@ pub(crate) fn validation_error_copy_zh(kind: ConfigKind, error: &Error) -> Strin
             ConfigKind::Custom => "验证失败。请检查服务器 URL，以及是否需要 API Key。".to_string(),
         },
     }
+}
+
+fn append_connection_diagnostics(
+    language: crate::i18n::Language,
+    lead: &str,
+    detail: Option<&str>,
+    raw_for_proxy_hint: &str,
+) -> String {
+    let mut out = lead.to_string();
+    if let Some(raw) = detail {
+        let clean = crate::error::single_line_detail(raw);
+        if !clean.is_empty() {
+            match language {
+                crate::i18n::Language::En => out.push_str(&format!(" Detail: {clean}")),
+                crate::i18n::Language::ZhCn => out.push_str(&format!(" 详情：{clean}")),
+            }
+        }
+    }
+    if let Some(hint) = crate::error::proxy_hint_for_error(language, None, raw_for_proxy_hint) {
+        out.push(' ');
+        out.push_str(&hint);
+    }
+    out
 }
 
 fn write_config_file(path: &Path, config: &Config) -> Result<()> {
@@ -1050,6 +1085,18 @@ mod tests {
         assert_eq!(written["api_key"], "new-key");
         assert_eq!(written["plugin"], plugin_section());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn validation_error_copy_preserves_single_line_network_detail() {
+        let error = super::Error::Network("HTTP request failed:\nconnection refused".to_string());
+        let en = super::validation_error_copy(ConfigKind::Custom, &error);
+        let zh = super::validation_error_copy_zh(ConfigKind::Custom, &error);
+
+        assert!(en.contains("Detail: HTTP request failed: connection refused"));
+        assert!(!en.contains('\n'));
+        assert!(zh.contains("详情：HTTP request failed: connection refused"));
+        assert!(!zh.contains('\n'));
     }
 
     #[test]

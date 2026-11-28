@@ -255,23 +255,26 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
                 ErrorAction::new("ov language en", copy(language, "Use English", "使用英文")),
                 ErrorAction::new("ov language zh-CN", copy(language, "Use Simplified Chinese", "使用简体中文")),
             ]),
-        Error::Timeout(message) => ErrorReport::new(
-            copy(language, "Request Timeout", "请求超时"),
-            copy(
+        Error::Timeout(message) => {
+            let lead = copy(
                 language,
                 "OpenViking did not respond before the configured timeout expired.",
                 "OpenViking 未在配置的超时时间内响应。",
-            ),
-        )
-        .with_command(command)
-        .with_detail(message)
-        .with_actions(vec![
-            ErrorAction::new("ov config", copy(language, "Increase the request timeout", "提高请求超时时间")),
-            ErrorAction::new("ov config show", copy(language, "Show the active config", "查看当前配置")),
-        ]),
-        Error::Network(message) => ErrorReport::new(
-            copy(language, "Connection Error", "连接错误"),
-            format!(
+            );
+            let body = match crate::error::proxy_hint_for_error(language, None, message) {
+                Some(hint) => format!("{lead} {hint}"),
+                None => lead.to_string(),
+            };
+            ErrorReport::new(copy(language, "Request Timeout", "请求超时"), body)
+                .with_command(command)
+                .with_detail(message)
+                .with_actions(vec![
+                    ErrorAction::new("ov config", copy(language, "Increase the request timeout", "提高请求超时时间")),
+                    ErrorAction::new("ov config show", copy(language, "Show the active config", "查看当前配置")),
+                ])
+        }
+        Error::Network(message) => {
+            let mut body = format!(
                 "{} {}",
                 copy(
                     language,
@@ -279,14 +282,19 @@ pub(crate) fn report_for_runtime_error(command: impl Into<String>, error: &Error
                     "无法连接 OpenViking。请先查看详情，再确认服务器是否运行、URL 是否正确。"
                 ),
                 detail_line(language, message),
-            ),
-        )
-        .with_command(command)
-        .with_actions(vec![
-            ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
-            ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
-            ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
-        ]),
+            );
+            if let Some(hint) = crate::error::proxy_hint_for_error(language, None, message) {
+                body.push(' ');
+                body.push_str(&hint);
+            }
+            ErrorReport::new(copy(language, "Connection Error", "连接错误"), body)
+                .with_command(command)
+                .with_actions(vec![
+                    ErrorAction::new("ov config validate", copy(language, "Check the active config", "检查当前配置")),
+                    ErrorAction::new("ov health", copy(language, "Run a quick server health check", "快速检查服务器健康状态")),
+                    ErrorAction::new("ov config switch", copy(language, "Switch to another config", "切换到其他配置")),
+                ])
+        }
         Error::Api {
             message, details, ..
         } if error.code() == "REFRESH_FAILED" => {
