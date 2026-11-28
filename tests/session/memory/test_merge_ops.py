@@ -446,6 +446,19 @@ class TestApplyStrPatch:
         with pytest.raises(PatchParseError, match="matched 2 locations"):
             apply_str_patch(original, patch)
 
+    def test_missing_search_in_one_block_rejects_the_whole_patch(self):
+        """A partially applicable patch must fail instead of returning partial content."""
+        original = "alpha\nbeta\n"
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(search="alpha", replace="ALPHA"),
+                SearchReplaceBlock(search="zzz", replace="Z"),
+            ]
+        )
+
+        with pytest.raises(PatchParseError, match="could not be applied"):
+            apply_str_patch(original, patch)
+
     def test_numbered_multiline_patch_uses_inferred_start_line(self):
         """Tab-prefixed read output should target the numbered range."""
         original = "keep\nsame\nkeep\nsame"
