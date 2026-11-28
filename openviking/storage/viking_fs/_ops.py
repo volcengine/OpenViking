@@ -21,9 +21,7 @@ from openviking.core.namespace import (
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log, short_hash
 from openviking.observability.reporting.facts import emit_file_change, file_exists_before
 from openviking.pyagfs.exceptions import (
-    AGFSClientError,
     AGFSDirectoryNotEmptyError,
-    AGFSHTTPError,
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
@@ -2257,13 +2255,11 @@ class _OpsMixin:
                     await self._async_agfs.read(path, fs_ctx=fs_ctx)
                 )
                 existing = self._decode_bytes(existing_bytes)
-            except FileNotFoundError:
-                pass
-            except AGFSHTTPError as e:
-                if e.status_code != 404:
+            except Exception as exc:
+                # A missing file means "start from empty" — the native binding
+                # signals this as AGFSNotFoundError, HTTP backends as 404.
+                if not is_not_found_error(exc):
                     raise
-            except AGFSClientError:
-                raise
 
             final_text = existing + content
             sanitizer = getattr(self, "_privacy_sanitizer", None)
