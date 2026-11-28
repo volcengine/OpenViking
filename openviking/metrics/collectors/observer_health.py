@@ -78,10 +78,6 @@ class ObserverHealthCollector(StateMetricCollector):
                 label_names=("component", "valid"),
             )
 
-    def collect_error_hook(self, registry, error: Exception) -> None:
-        """Delegate failure handling to the stale hook by re-raising the datasource error."""
-        raise error
-
     def collect_stale_hook(self, registry, error: Exception) -> None:
         """Export stale observer component health values under `valid=0` on refresh failure."""
         for component in self._known_components:
