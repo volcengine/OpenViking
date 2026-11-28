@@ -191,28 +191,29 @@ class HeartbeatService:
             logger.info(f"Heartbeat: checking tasks for {workspace_path}...")
 
             if self.on_heartbeat:
-                try:
-                    logger.debug(
-                        f"Heartbeat: calling on_heartbeat for {workspace_path} with prompt: {HEARTBEAT_PROMPT[:100]}..."
-                    )
-                    for session_key in session_key_list:
+                logger.debug(
+                    f"Heartbeat: calling on_heartbeat for {workspace_path} with prompt: {HEARTBEAT_PROMPT[:100]}..."
+                )
+                for session_key in session_key_list:
+                    try:
                         response = await self.on_heartbeat(
                             HEARTBEAT_PROMPT,
                             session_key,
                             {HEARTBEAT_METADATA_KEY: True},
                         )
-                        response_preview = (response or "")[:200]
-                        logger.debug(
-                            f"Heartbeat: received response from agent: {response_preview}..."
+                    except Exception as e:
+                        logger.exception(
+                            f"Heartbeat execution failed for {workspace_path} ({session_key}): {e}"
                         )
+                        continue
 
-                        if is_heartbeat_noop_response(response):
-                            logger.info(f"Heartbeat: {workspace_path} OK (no action needed)")
-                        else:
-                            logger.info(f"Heartbeat: {workspace_path} completed task")
+                    response_preview = (response or "")[:200]
+                    logger.debug(f"Heartbeat: received response from agent: {response_preview}...")
 
-                except Exception as e:
-                    logger.exception(f"Heartbeat execution failed for {workspace_path}: {e}")
+                    if is_heartbeat_noop_response(response):
+                        logger.info(f"Heartbeat: {workspace_path} OK (no action needed)")
+                    else:
+                        logger.info(f"Heartbeat: {workspace_path} completed task")
 
     async def trigger_now(self, session_key: SessionKey | None = None) -> str | None:
         """Manually trigger a heartbeat."""
