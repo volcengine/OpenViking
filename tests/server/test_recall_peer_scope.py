@@ -43,7 +43,7 @@ async def test_default_scope_searches_other_peers_with_an_open_context(
     seed_ctx = RequestContext(user=service.user, role=Role.ROOT)
     for uri, text in content.items():
         await service.viking_fs.write_file(uri, text, ctx=seed_ctx)
-    read = service.fs.read
+    read_visible = service.fs.read_visible
 
     async def fake_find(**kwargs):
         calls.append(kwargs)
@@ -60,10 +60,10 @@ async def test_default_scope_searches_other_peers_with_an_open_context(
 
     async def observe_read(uri, **kwargs):
         read_calls.append((uri, kwargs["ctx"]))
-        return await read(uri, **kwargs)
+        return await read_visible(uri, **kwargs)
 
     monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", observe_read)
+    monkeypatch.setattr(service.fs, "read_visible", observe_read)
     payload = {
         "query": "peer memory",
         "quotas": {"events": 3, "entities": 0, "preferences": 0, "experiences": 0},

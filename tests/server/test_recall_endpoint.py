@@ -122,7 +122,7 @@ async def test_recall_endpoint_assembles_context_and_signals_deprecation(
         return "OpenViking is the target project."
 
     monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
+    monkeypatch.setattr(service.fs, "read_visible", fake_read)
     response = await client.post(
         "/api/v1/search/recall",
         json={
@@ -163,7 +163,7 @@ async def test_recall_excludes_profile_and_duplicate_hits(
         return "profile" if uri.endswith("profile.md") else "duplicate content"
 
     monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
+    monkeypatch.setattr(service.fs, "read_visible", fake_read)
     response = await client.post(
         "/api/v1/search/recall",
         json={"query": "hello", "quotas": {"events": 3, "entities": 0, "preferences": 0}},

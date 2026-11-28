@@ -152,7 +152,7 @@ async def prefetch_contents(
         uri = content_uri_for(candidate)
         try:
             async with semaphore:
-                raw = await service.fs.read(uri, ctx=candidate.read_ctx)
+                raw = await service.fs.read_visible(uri, ctx=candidate.read_ctx)
         except Exception:
             return uri, ""
         content = _decode(raw)
