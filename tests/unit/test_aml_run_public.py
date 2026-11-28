@@ -86,6 +86,10 @@ class PublicRunnerTests(unittest.IsolatedAsyncioTestCase):
                 for line in Path(summary["units"][0]["retrieval"]).read_text().splitlines()
             ]
             self.assertEqual([row["id"] for row in rows], [case.output["id"] for case in searches])
+            self.assertEqual([row["user_id"] for row in rows], [case.user_id for case in searches])
+            self.assertEqual(rows[0]["history_key"], rows[2]["history_key"])
+            self.assertEqual(rows[0]["retrieved_uris"], ["memory"])
+            self.assertEqual(rows[0]["retrieved_context"], ["event"])
             self.assertEqual(len(started), 2)
 
     async def test_failed_batch_drains_other_workers_before_returning(self):
