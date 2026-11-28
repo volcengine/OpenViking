@@ -5,7 +5,23 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { LarkCli } from '../src/lark-cli.mjs';
+import { LarkCli, larkCliEnv } from '../src/lark-cli.mjs';
+
+test('larkCliEnv strips a host agent workspace lark-cli refuses to run in', () => {
+  const env = larkCliEnv({
+    PATH: '/bin',
+    HERMES_HOME: '/home/me/.hermes',
+    OPENCLAW_HOME: '/home/me/.openclaw',
+    CODEX_HOME: '/home/me/.codex',
+    LARKSUITE_CLI_PROFILE: 'inherited',
+  });
+  assert.equal(env.HERMES_HOME, undefined);
+  assert.equal(env.OPENCLAW_HOME, undefined);
+  assert.equal(env.LARKSUITE_CLI_PROFILE, undefined);
+  assert.equal(env.CODEX_HOME, '/home/me/.codex');
+  assert.equal(env.PATH, '/bin');
+  assert.equal(env.LARKSUITE_CLI_NO_UPDATE_NOTIFIER, '1');
+});
 
 function spawnResult({ code = 0, stdout = '', stderr = '' } = {}) {
   return (_bin, args) => {

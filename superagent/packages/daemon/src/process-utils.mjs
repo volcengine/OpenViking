@@ -7,12 +7,16 @@ import { spawn, normalizeEnvironment } from './platform/index.mjs';
 import path from 'node:path';
 import { agentCliCommands } from './agent-clis.mjs';
 import { applyOpenVikingChildEnv } from './openviking.mjs';
+import { isAgentWorkspaceEnvKey } from './agent-workspace-env.mjs';
 
 export function sanitizeNonArkChildEnv(environment) {
   const safeEnv = { ...environment };
   for (const key of Object.keys(safeEnv)) {
     if (/^(?:ARK|VOLCENGINE)_/i.test(key)
       || /^(?:OV_SUPERAGENT)_VOLC_/i.test(key)
+      // A host agent's workspace makes lark-cli refuse to run; see
+      // agent-workspace-env.mjs.
+      || isAgentWorkspaceEnvKey(key)
       || key === 'SESSION_ID') delete safeEnv[key];
   }
   return safeEnv;
