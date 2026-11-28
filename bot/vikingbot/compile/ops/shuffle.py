@@ -156,7 +156,9 @@ class Shuffle:
 
     def __init__(self, runtime):
         self.r = runtime
-        self.search_cache, self.descriptions = {}, {}
+        self.search_cache = {}
+        self.history_metadata = {}
+        self.history_locks = {}
         self.model_id = ""
 
     async def embeddings(self, texts: list[str], *, expected_model: str | None = None) -> dict:
@@ -209,6 +211,24 @@ class Shuffle:
         if unavailable is not None:
             raise unavailable
         return [vectors[text] for text in texts]
+
+    async def _read_history_metadata(self, read, uri, **options):
+        """Share successful URI reads within this Shuffle; failures leave the key retryable."""
+        key = (read, uri)
+        if key in self.history_metadata:
+            return self.history_metadata[key]
+        async with self.history_locks.setdefault(key, asyncio.Lock()):
+            if key not in self.history_metadata:
+                self.history_metadata[key] = await read(uri, **options)
+            return self.history_metadata[key]
+
+    async def _describe(self, uri, *, abstract):
+        """Use the first successful description, reading the page only if no abstract exists."""
+        description = str(abstract or "")[:800]
+        if not description:
+            description = (await self.r.client.read_raw(uri, limit=16))[:800]
+        self.r.metrics["history_descriptions"] += 1
+        return description
 
     async def candidates(self, text: str, stable_uri=None) -> list[dict]:
         """Recall only inside to; coalesce section/derived hits to visible parent files.
@@ -266,12 +286,14 @@ class Shuffle:
                 continue
             if not relative_uri_path(r.target, uri):
                 raise ValueError(f"Search returned an out-of-scope URI: {uri}")
-            stat = await r.client.stat(uri)
+            stat = await self._read_history_metadata(r.client.stat, uri)
             if stat.get("isDir"):
                 children = (
                     [{"uri": uri + "/SKILL.md", "abstract": entry.get("abstract", "")}]
                     if r.skill_target
-                    else await r.client.list_resources(uri, node_limit=4)
+                    else await self._read_history_metadata(
+                        r.client.list_resources, uri, node_limit=4
+                    )
                 )
             else:
                 children = [{"uri": uri, "abstract": entry.get("abstract", "")}]
@@ -283,13 +305,10 @@ class Shuffle:
                     p.startswith(".") for p in relative_uri_path(r.target, page).split("/")
                 ):
                     continue
-                if page not in self.descriptions:
-                    abstract = str(child.get("abstract") or "")[:800]
-                    self.descriptions[page] = (
-                        abstract or (await r.client.read_raw(page, limit=16))[:800]
-                    )
-                    r.metrics["history_descriptions"] += 1
-                seen[page] = {"uri": page, "description": self.descriptions[page]}
+                description = await self._read_history_metadata(
+                    self._describe, page, abstract=child.get("abstract")
+                )
+                seen[page] = {"uri": page, "description": description}
                 if len(seen) >= 4:
                     break
             if len(seen) >= 4:

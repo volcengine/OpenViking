@@ -620,6 +620,54 @@ async def test_file_collection_rejects_missing_empty_nonmarkdown_and_invalid_utf
     assert pipeline.artifacts == []
 
 
+async def test_shuffle_reuses_shared_history_metadata_across_distinct_queries(pipeline):
+    parent = pipeline.target + "/archive"
+    page = parent + "/rules.md"
+    pipeline.client.find = AsyncMock(return_value={"resources": [{"uri": parent}]})
+
+    async def stat(uri):
+        await asyncio.sleep(0)
+        return {"isDir": True}
+
+    async def read(uri, **kwargs):
+        await asyncio.sleep(0)
+        return "Fictional history."
+
+    pipeline.client.stat = AsyncMock(side_effect=stat)
+    pipeline.client.list_resources.return_value = [{"uri": page}]
+    pipeline.client.read_raw = AsyncMock(side_effect=read)
+    shuffle = Shuffle(pipeline)
+    rows = await asyncio.gather(*(shuffle.candidates(f"Draft {i}") for i in range(4)))
+    assert rows == [[{"uri": page, "description": "Fictional history."}]] * 4
+    assert pipeline.client.find.await_count == 4
+    pipeline.client.stat.assert_awaited_once_with(parent)
+    pipeline.client.list_resources.assert_awaited_once_with(parent, node_limit=4)
+    pipeline.client.read_raw.assert_awaited_once_with(page, limit=16)
+
+
+async def test_cancelled_history_read_leaves_shared_metadata_available_to_next_reader(pipeline):
+    uri = pipeline.target + "/rules.md"
+    started = asyncio.Event()
+
+    async def stat(path):
+        if not started.is_set():
+            started.set()
+            await asyncio.Future()
+        return {"isDir": False}
+
+    pipeline.client.find = AsyncMock(return_value={"resources": [{"uri": uri, "abstract": "Rule"}]})
+    pipeline.client.stat = AsyncMock(side_effect=stat)
+    shuffle = Shuffle(pipeline)
+    first = asyncio.create_task(shuffle.candidates("First draft"))
+    await started.wait()
+    second = asyncio.create_task(shuffle.candidates("Second draft"))
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert await second == await shuffle.candidates("Third draft")
+    assert pipeline.client.stat.await_count == 2
+
+
 async def test_routing_history_rejects_files_outside_to(pipeline):
     pipeline.client.find = AsyncMock(
         return_value={"resources": [{"uri": "viking://resources/other/doc.md"}]}
