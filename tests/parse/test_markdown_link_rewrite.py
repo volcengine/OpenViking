@@ -7,11 +7,13 @@ from unittest.mock import patch
 from urllib.parse import quote
 
 import pytest
+from markdown_it import MarkdownIt
 
 from openviking.parse.output import LocalParseOutputStore
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.markdown import MarkdownParser, _RewriteContext
+from openviking_cli.utils.config.parser_config import ParserConfig
 
 
 @pytest.mark.asyncio
@@ -73,6 +75,55 @@ class TestRewriteRelativeLinks:
             section_subpath=section_subpath,
             rewrite_ctx=rewrite_ctx,
         )
+
+    @pytest.mark.parametrize(
+        "content,expected,section_subpath",
+        [
+            ("[guide](target.md)", "[guide](../target/)", ""),
+            ("[guide](<target.md>)", "[guide](<../target/>)", ""),
+            ("[guide](big.md#intro)", "[guide](../big/Intro.md#intro)", ""),
+            ("[guide](<big.md#intro>)", "[guide](<../big/Intro.md#intro>)", ""),
+            ("[guide](manuals/target.md)", "[guide](../manuals/target/)", ""),
+            ("[guide](<manuals/target.md>)", "[guide](<../manuals/target/>)", ""),
+            ("[guide](<target space.md>)", "[guide](<../target_space/>)", ""),
+            ("[guide](<my docs/target.md>)", "[guide](<../my docs/target/>)", ""),
+            ("[guide](<my docs/notes.txt>)", "[guide](<../my docs/notes.txt>)", ""),
+            ("[guide](<missing.md>)", "[guide](<missing.md>)", ""),
+            ("[guide](<https://example.com/guide>)", "[guide](<https://example.com/guide>)", ""),
+            ("[guide](<#intro>)", "[guide](<#intro>)", ""),
+            ("`[guide](<target.md>)`", "`[guide](<target.md>)`", ""),
+            ("[guide](<target.md?v=1>)", "[guide](<../target/target.md?v=1>)", ""),
+            ("[guide](<../outside.md>)", "[guide](<../outside.md>)", ""),
+            ("[guide](<target.md>)", "[guide](<../../target/>)", "section"),
+            ("~~~\n[guide](<target.md>)\n~~~", "~~~\n[guide](<target.md>)\n~~~", ""),
+        ],
+    )
+    async def test_angle_wrapped_document_destinations(
+        self, tmp_path, content, expected, section_subpath
+    ):
+        kb = tmp_path / "knowledge"
+        kb.mkdir()
+        small = "# Intro\n\nTarget body."
+        for relative in ("target.md", "target space.md", "manuals/target.md", "my docs/target.md"):
+            target = kb / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(small, encoding="utf-8")
+        (kb / "big.md").write_text(
+            "# Intro\n\n" + "A" * 600 + "\n\n# Other\n\n" + "B" * 600, encoding="utf-8"
+        )
+        (kb / "my docs/notes.txt").write_text("Notes.", encoding="utf-8")
+        (tmp_path / "outside.md").write_text("# Outside", encoding="utf-8")
+        parser = MarkdownParser(config=ParserConfig(max_section_chars=900))
+        actual = await self._rewrite(parser, kb, content, section_subpath=section_subpath)
+        assert actual == expected
+        tokens = MarkdownIt("commonmark").parse(actual)
+        links = [
+            child
+            for block in tokens
+            for child in (block.children or [])
+            if child.type == "link_open"
+        ]
+        assert len(links) == (0 if content.startswith(("`", "~~~")) else 1)
 
     async def test_md_target_becomes_directory(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
