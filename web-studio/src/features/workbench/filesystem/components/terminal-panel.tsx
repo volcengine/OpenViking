@@ -2075,6 +2075,8 @@ export function TerminalPanel({
                     setSuggestionsOpen(true)
                   }}
                   onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing || event.keyCode === 229)
+                      return
                     if (!suggestionsOpen || suggestions.length === 0) return
                     if (event.key === 'ArrowDown') {
                       event.preventDefault()
