@@ -1025,11 +1025,7 @@ export async function afterTurnOpenVikingSession({
     for (const msg of extractedMessages) {
       const ovParts = msg.parts.map((part) => {
         if (part.type === "text") {
-          const cleaned = part.text
-            .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-          return { type: "text" as const, text: cleaned };
+          return { type: "text" as const, text: part.text };
         }
         return {
           type: "tool" as const,
