@@ -4,12 +4,14 @@
 Tests for memory ExtractLoop orchestrator.
 """
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, Field
 
+from openviking.session.memory import extract_loop as extract_loop_module
 from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryFile,
@@ -21,7 +23,7 @@ from openviking.session.memory.dataclass import (
 from openviking.session.memory.extract_loop import (
     ExtractLoop,
 )
-from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler, RoleScope
 from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.merge_op import (
     FieldType,
@@ -31,6 +33,192 @@ from openviking.session.memory.merge_op import (
 )
 from openviking.session.memory.page_id_map import PageIdMap
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
+
+
+class _StopAfterPromptSchema(Exception):
+    """Stop after prompt-schema construction, before any LLM call."""
+
+
+class _PromptSchemaProvider:
+    read_file_contents = {}
+
+    def __init__(self, schema, language):
+        self.schema = schema
+        self.language = language
+
+    def get_memory_schemas(self, ctx):
+        del ctx
+        return [self.schema]
+
+    def get_output_language(self):
+        return self.language
+
+    def get_tools(self):
+        return []
+
+    def get_extract_context(self):
+        return SimpleNamespace(page_id_map=PageIdMap())
+
+    def instruction(self):
+        return "Extract memory operations."
+
+    async def prefetch(self):
+        raise _StopAfterPromptSchema
+
+
+class TestPromptSchemaCache:
+    """Compiled prompt-schema models must be reused across commits."""
+
+    @staticmethod
+    def _schema():
+        return MemoryTypeSchema(
+            memory_type="cache_probe",
+            description="Cache probe type in {{ language }}.",
+            fields=[
+                MemoryField(
+                    name="content",
+                    field_type=FieldType.STRING,
+                    description="Free text in {{ language }}.",
+                    merge_op=MergeOp.PATCH,
+                )
+            ],
+            filename_template="cache_probe.md",
+            directory="test://dir",
+            peer_enabled=True,
+        )
+
+    @staticmethod
+    def _config(link_enabled=False, output_format="python"):
+        return SimpleNamespace(
+            memory=SimpleNamespace(
+                link_enabled=link_enabled,
+                extraction_output_format=output_format,
+            ),
+            vlm=SimpleNamespace(max_tokens=None),
+        )
+
+    @staticmethod
+    def _loop(schema, language="zh-CN", peer_ids=None):
+        isolation_handler = MagicMock()
+        isolation_handler.get_read_scope.return_value = RoleScope(
+            user_ids=["user_a"], peer_ids=list(peer_ids or [])
+        )
+        return ExtractLoop(
+            vlm=SimpleNamespace(model="test-model", max_tokens=None),
+            viking_fs=MagicMock(),
+            ctx=MagicMock(),
+            context_provider=_PromptSchemaProvider(schema, language),
+            isolation_handler=isolation_handler,
+        )
+
+    @staticmethod
+    async def _run(loop, config, *, force_miss=False):
+        """Drive run() to prefetch(); ``force_miss`` emulates upstream behaviour."""
+        with (
+            patch(
+                "openviking.session.memory.extract_loop.get_openviking_config",
+                return_value=config,
+            ),
+            patch("openviking_cli.utils.config.get_openviking_config", return_value=config),
+        ):
+            if force_miss:
+                with patch.object(
+                    extract_loop_module._PROMPT_SCHEMA_CACHE, "get", return_value=None
+                ):
+                    with pytest.raises(_StopAfterPromptSchema):
+                        await loop.run()
+                return
+            with pytest.raises(_StopAfterPromptSchema):
+                await loop.run()
+
+    @staticmethod
+    def _artifacts(loop):
+        """Comparable view of the compiled artifacts."""
+        return (
+            json.dumps(loop._operations_model.model_json_schema(), sort_keys=True),
+            loop._output_protocol.render_contract(loop._output_context),
+            json.dumps(loop._tool_schemas, sort_keys=True),
+        )
+
+    @pytest.mark.asyncio
+    async def test_reuses_models_only_for_identical_cache_inputs(self):
+        schema = self._schema()
+        peer_ids = ["web-visitor-alice"]
+        base = self._config()
+
+        first = self._loop(schema)
+        second = self._loop(schema.model_copy(deep=True))
+        other_language = self._loop(schema, language="en")
+        other_schema = self._loop(
+            schema.model_copy(update={"description": "Changed {{ language }}."})
+        )
+        other_peer = self._loop(schema, peer_ids=peer_ids)
+        other_link = self._loop(schema)
+        other_format = self._loop(schema)
+
+        for loop, config in (
+            (first, base),
+            (second, base),
+            (other_language, base),
+            (other_schema, base),
+            (other_peer, base),
+            (other_link, self._config(link_enabled=True)),
+            (other_format, self._config(output_format="json")),
+        ):
+            await self._run(loop, config)
+
+        assert second.schema_model_generator is first.schema_model_generator
+        for other in (other_language, other_schema, other_peer, other_link, other_format):
+            assert other.schema_model_generator is not first.schema_model_generator
+
+        first_model = first.schema_model_generator.create_structured_operations_model()
+        for other in (other_language, other_schema, other_peer, other_link):
+            model = other.schema_model_generator.create_structured_operations_model()
+            assert model.model_json_schema() != first_model.model_json_schema()
+
+        python_contract = first._output_protocol.render_contract(first._output_context)
+        json_contract = other_format._output_protocol.render_contract(other_format._output_context)
+        assert json_contract != python_contract
+
+    @pytest.mark.parametrize(
+        ("link_enabled", "output_format"),
+        [(False, "python"), (True, "python"), (False, "json"), (True, "json")],
+    )
+    @pytest.mark.asyncio
+    async def test_cache_hit_compiles_identical_artifacts(self, link_enabled, output_format):
+        schema = self._schema()
+        config = self._config(link_enabled=link_enabled, output_format=output_format)
+
+        async def capture(force_miss):
+            loop = self._loop(schema)
+            await self._run(loop, config, force_miss=force_miss)
+            return self._artifacts(loop)
+
+        uncached = await capture(force_miss=True)
+        assert await capture(force_miss=False) == uncached
+        assert await capture(force_miss=False) == uncached
+
+    @pytest.mark.asyncio
+    async def test_lru_evicts_oldest_entry_when_full(self):
+        schema = self._schema()
+        config = self._config()
+        extract_loop_module._PROMPT_SCHEMA_CACHE.clear()
+
+        probe = self._loop(schema)
+        await self._run(probe, config)
+
+        # Distinct languages fill the cache, making the probe entry the oldest one.
+        for index in range(extract_loop_module._PROMPT_SCHEMA_CACHE_MAX):
+            await self._run(self._loop(schema, language=f"lang-{index}"), config)
+
+        assert (
+            len(extract_loop_module._PROMPT_SCHEMA_CACHE)
+            == extract_loop_module._PROMPT_SCHEMA_CACHE_MAX
+        )
+
+        again = self._loop(schema)
+        await self._run(again, config)
+        assert again.schema_model_generator is not probe.schema_model_generator
 
 
 class TestPreFetchFileFiltering:
