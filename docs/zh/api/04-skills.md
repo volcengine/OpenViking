@@ -221,7 +221,7 @@ This tool wraps the MCP tool `search-web`. Call this when the user needs functio
   2. **字典（MCP Tool 格式）**：包含 `name`、`description`、`inputSchema` 字段，会自动检测并转换
   3. **字符串（SKILL.md 内容）**：完整的 SKILL.md 内容
   4. **路径（SDK/CLI 自动上传）**：SKILL.md 文件、Skill 目录/集合或 ZIP；单个 Markdown 文件不包含同目录辅助文件
-  5. **Git URL**：仓库或 Skill 子目录；集合中的 `skills` 选择器使用目录名，非 frontmatter 名称。已发现 `SKILL.md` 的目录拥有整个子树，内部嵌套 `SKILL.md` 作为附件保留，不再单独发现
+  5. **Git URL**：仓库或 Skill 子目录；集合中的 `skills` 选择器使用目录名，非 frontmatter 名称。已发现 `SKILL.md` 的目录拥有整个子树，内部嵌套 `SKILL.md` 作为附件保留，不再单独发现。递归发现集合时，不含自身 `SKILL.md` 的嵌套 `.archive`、`.trash`、`_archive`、`_staging` 和 `_staging-*` 目录视为非活动容器并跳过。显式指定的来源根或含自身 `SKILL.md` 的目录仍按普通 Skill 来源处理
 
 本地 `.json` 文件不会自动解码成结构化 Skill。应先解析 JSON 并把对象传入 `data`，或改用带 frontmatter 的 `SKILL.md`。
 
