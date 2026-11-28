@@ -145,11 +145,23 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 }
 ```
 
-许多配置项都有对应的 `OPENVIKING_*` 环境变量，例如 `OPENVIKING_RECALL_LIMIT` 对应 `recallLimit`，`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 对应 `captureAssistantTurns`。`OPENVIKING_BYPASS_SESSION` 也有文件配置项 `plugin.bypassSession`；仅需覆盖当前进程时可使用环境变量。完整共享列表由 `examples/memory-plugin-shared/lib/config-schema.mjs` 定义。用法见插件 README：[Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration)、[Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin)。取列表值的配置项（`bypassSessionPatterns`、`recallQueryFilters`、`captureFilters`）在这里是 JSON 数组，而它们的环境变量对应物是逗号分隔的字符串，所以值里带字面逗号的只能写进数组。
+许多配置项都有对应的 `OPENVIKING_*` 环境变量，例如 `OPENVIKING_RECALL_LIMIT` 对应 `recallLimit`，`OPENVIKING_CAPTURE_ASSISTANT_TURNS` 对应 `captureAssistantTurns`。`OPENVIKING_BYPASS_SESSION` 也有文件配置项 `plugin.bypassSession`；仅需覆盖当前进程时可使用环境变量。完整共享列表由 `examples/agent-hook-plugin/lib/config-schema.mjs` 定义。各集成读取哪些配置项，见[能力参考](../agent-integrations/16-capability-reference.md#settings-and-workspace-files)。取列表值的配置项（`bypassSessionPatterns`、`recallQueryFilters`、`captureFilters`）在这里是 JSON 数组，而它们的环境变量对应物是逗号分隔的字符串，所以值里带字面逗号的只能写进数组。
 
 优先级从高到低：环境变量 → [工作区各层](#工作区配置) → `plugin.<harness>` → `plugin` → `ov.conf` 里遗留的按 harness 分块 → 内置默认值。独立启动的 hook 进程在每次触发时重新读文件；常驻插件何时重载取决于宿主，不确定时重启 Agent。环境变量改动也需要重启，因为 hook 继承的是 Agent 进程的环境。
 
 采用共享配置加载器的记忆插件会读取这一段；各宿主支持的字段和默认值见对应的 [集成文档](../agent-integrations/01-overview.md)。`ov-memory-doctor` 会打印它解析到的结果，并对不认识的键给出告警和最接近的正确键名。
+
+### 提交配置
+
+基于共享加载器的记忆插件在宿主压缩上下文前和会话结束时提交。两者之间由服务端提交：会话第一次写入后，插件按下列配置为该会话设置一次自动提交策略。
+
+| 配置项 | 环境变量 | 默认值 | 作用 |
+|---|---|---|---|
+| `commitTokenThreshold` | `OPENVIKING_COMMIT_TOKEN_THRESHOLD` | `100000` | 会话待提交 token 达到该值时由服务端提交 |
+| `commitIdleSeconds` | `OPENVIKING_COMMIT_IDLE_SECONDS` | `1800` | 会话空闲这么久后由服务端提交；`0` 表示不按空闲提交，小于 `300` 的值按 `300` 计。需要服务端开启 `memory.session_auto_commit.enabled` |
+| `autoCommitOnCompact` | `OPENVIKING_AUTO_COMMIT_ON_COMPACT` | `true` | 宿主压缩上下文前提交 |
+
+按阈值和按空闲提交需要 OpenViking 服务端 0.4.13 或更高版本；服务端更旧时，会话只在压缩前和会话结束时提交。这些插件不再读取 `commitTurnThreshold` 和 `commitKeepRecentCount`（OpenClaw 保留自己的 `commitKeepRecentCount`）。所有插件的 `recallCompress` 默认都是 `off`，包括 Claude Code 和 Codex；需要召回摘要时设为 `auto`。
 
 ## 工作区配置
 
@@ -191,7 +203,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
   "version": 1,
   "peer": { "source": "git" },
   "recall": { "peer_scope": "actor", "max_items": 20 },
-  "capture": { "commit_token_threshold": 20000 },
+  "capture": { "commit_token_threshold": 100000 },
   "labels": { "team": "search" }
 }
 ```
@@ -206,7 +218,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 | `recall.max_items` | integer，`1`–`100` | Recall 结果条数上限 |
 | `recall.score_threshold` | number，`0`–`1` | Recall 结果的最低分数 |
 | `capture.enabled` | boolean | 是否启用 Capture |
-| `capture.commit_token_threshold` | integer，`1000`–`1000000` | 累计多少 token 后提交一次 Capture |
+| `capture.commit_token_threshold` | integer，`1000`–`1000000` | 服务端提交会话时的待提交 token 数 |
 | `bypass.session_patterns` | glob 列表 | 会话 id 或工作目录命中时跳过 Recall 与 Capture |
 | `usage.view` / `usage.output` | string | Codex OV-Usage 来源摘要：`summary` / `expanded` / `off`，以及 `auto` / `terminal` / `desktop` |
 | `labels` | object | 给人看的自由元数据，插件不读取 |
@@ -255,7 +267,7 @@ peer 是用户空间下的一段路径前缀——`viking://user/<you>/peers/<pe
 | `{dir}` | 工作区根目录的目录名：仓库根，或放着 `.openviking/config.json` 的那个目录 | 该目录不是工作区 |
 | `{harness}` | 当前 agent 的名字（`claude-code`、`codebuddy`、`codex`、`dsh`、`opencode`、`pi`、`cursor`、`trae`、`trae-cn`、`zcode`、`qoder`、`antigravity`） | 从不为空——但 MCP proxy 不参与推导，所以只走 proxy 的读路径解析不出它 |
 
-在 `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` 目录下、`origin` 为 `git@github.com:volcengine/OpenViking.git` 时，peer 是 `github.com-volcengine-openviking`——无论从哪个子目录、哪个 worktree、哪台机器、哪份 clone 得到的都是同一个值。因此同一仓库的所有 clone 共享一个 peer，而 fork 的 `origin` 不同，默认就是独立的 peer。推导过程直接读取仓库文件而不调用 `git`，因此 `PATH` 中没有 `git` 时同样可用；URL 会先归一化，使同一仓库的 ssh 与 https 写法收敛到同一个值，URL 中内嵌的 token 也不会进入 peer id。
+在 `/Users/x/Dev/OpenViking/examples/agent-hook-plugin` 目录下、`origin` 为 `git@github.com:volcengine/OpenViking.git` 时，peer 是 `github.com-volcengine-openviking`——无论从哪个子目录、哪个 worktree、哪台机器、哪份 clone 得到的都是同一个值。因此同一仓库的所有 clone 共享一个 peer，而 fork 的 `origin` 不同，默认就是独立的 peer。推导过程直接读取仓库文件而不调用 `git`，因此 `PATH` 中没有 `git` 时同样可用；URL 会先归一化，使同一仓库的 ssh 与 https 写法收敛到同一个值，URL 中内嵌的 token 也不会进入 peer id。
 
 #### 按场景选择
 

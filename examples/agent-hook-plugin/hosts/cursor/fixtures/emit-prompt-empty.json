@@ -1,0 +1,10 @@
+{
+  "what": "beforeSubmitPrompt always continues",
+  "emit": {
+    "event": "beforeSubmitPrompt",
+    "output": {}
+  },
+  "expect": {
+    "continue": true
+  }
+}

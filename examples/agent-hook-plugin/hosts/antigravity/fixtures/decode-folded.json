@@ -1,0 +1,94 @@
+{
+  "what": "results pair by position in step_index order; an unbalanced set leaves the calls unanswered; call_mcp_tool is named after the MCP tool; a result still being written holds back its planner step",
+  "decode": {
+    "transcript": "folded.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Check the build"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "ag-1-0",
+          "tool_name": "read_file",
+          "tool_status": "running",
+          "tool_input": {
+            "Path": "/src/read_file"
+          }
+        }
+      ],
+      "turn_id": "1"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Checking the build."
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-0",
+          "tool_name": "run_command",
+          "tool_status": "running",
+          "tool_input": {
+            "Path": "/src/run_command"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-1",
+          "tool_name": "mcp__openviking__read",
+          "tool_status": "running",
+          "tool_input": {
+            "uri": "viking://resources/a.md"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-2",
+          "tool_name": "view_file",
+          "tool_status": "running",
+          "tool_input": {
+            "Path": "/src/view_file"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-1",
+          "tool_name": "mcp__openviking__read",
+          "tool_status": "completed",
+          "tool_output": "retry budget: 3"
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-2",
+          "tool_name": "view_file",
+          "tool_status": "error",
+          "tool_output": "missing argument"
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "And the tests?"
+        }
+      ],
+      "turn_id": "9"
+    }
+  ]
+}

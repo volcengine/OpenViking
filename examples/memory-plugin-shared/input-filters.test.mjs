@@ -5,7 +5,7 @@ import {
   compileInputFilters,
   describeInputFilters,
   parseInputFilterRule,
-} from "./lib/input-filters.mjs"
+} from "../agent-hook-plugin/lib/input-filters.mjs"
 
 function compile(rules) {
   const compiled = compileInputFilters(rules)

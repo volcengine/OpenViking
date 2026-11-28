@@ -1,0 +1,10 @@
+{
+  "what": "other lifecycle hooks print nothing",
+  "emit": {
+    "event": "session-start",
+    "output": {
+      "context": "profile"
+    }
+  },
+  "expect": null
+}

@@ -1,0 +1,16 @@
+{
+  "what": "a second Stop for the same turn sends nothing",
+  "decode": {
+    "payload": {
+      "last_assistant_message": "the retry budget is three attempts"
+    },
+    "cursor": {
+      "capturedHashes": [
+        "008ecc63794bd66d8daac70d707bbee9349dbf7ce14718f5dca8984da148d04f",
+        "19a5d28aee38d41ea0cb25e81e325d531f4e4eb98ca3908a352e99ad86c56c38"
+      ],
+      "lastTurnKey": 1
+    }
+  },
+  "messages": []
+}

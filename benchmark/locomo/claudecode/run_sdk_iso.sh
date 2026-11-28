@@ -12,7 +12,7 @@
 #   ANTHROPIC_AUTH_TOKEN   - or ANTHROPIC_API_KEY
 #   ANTHROPIC_BASE_URL     - e.g. https://ark.cn-beijing.volces.com/api/compatible
 #   ANTHROPIC_MODEL        - e.g. doubao-seed-2-0-code-preview-260215
-#   OPENVIKING_PLUGIN_DIR  - path to claude-code-memory-plugin (for hooks)
+#   OPENVIKING_PLUGIN_DIR  - path to agent-hook-plugin (for hooks)
 #   OPENVIKING_CLI_CONFIG_FILE (optional) - ovcli.conf override, e.g. ovcli-local.conf
 #
 # OpenViking server must be running at 127.0.0.1:1933.
@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-: "${OPENVIKING_PLUGIN_DIR:?set to claude-code-memory-plugin dir}"
+: "${OPENVIKING_PLUGIN_DIR:?set to agent-hook-plugin dir}"
 export LOCOMO_BENCHMARK_DIR="$SCRIPT_DIR"
 
 INPUT="${LOCOMO_INPUT:-$SCRIPT_DIR/.tmp/locomo10.json}"

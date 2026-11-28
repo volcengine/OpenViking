@@ -1,0 +1,4 @@
+{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-outer","name":"exec","input":"await tools.mcp__openviking_memory__read(...)"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-outer","output":"nested call completed"}}
+{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"code-mode-nested:7:call-outer:exec-read","invocation":{"server":"openviking-memory","tool":"read","arguments":{"uris":["viking://user/test/memories/experiences/refund.md"]}},"result":{"Ok":{"content":[{"type":"text","text":"{\"uri\":\"viking://user/test/memories/experiences/refund.md\",\"content\":\"refund policy\"}"}]}}}}
+{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"failed-read","invocation":{"server":"openviking-memory","tool":"read","arguments":{"uris":["viking://user/test/memories/experiences/refund.md"]}},"result":{"Err":"resource not found"}}}

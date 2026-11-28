@@ -1,0 +1,10 @@
+{
+  "what": "the baggage's codebuddy.session_id names the session over the conversation id",
+  "mcp": {
+    "meta": {
+      "baggage": "other=1,codebuddy.session_id=parent%20id;p=1",
+      "workbuddy.ai/conversationId": "sub"
+    }
+  },
+  "expect": "cb-parent-id"
+}

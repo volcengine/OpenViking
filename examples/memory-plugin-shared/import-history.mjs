@@ -62,7 +62,6 @@ const BATCH_LIMIT = 100;
 // Code, Qoder CLI, Antigravity) take the host's id through safePart (lib/agent-hook-runtime.mjs);
 // OpenCode and pi use it as is (deriveHarnessSessionId in lib/session-model.mjs).
 const hookLiveId = (prefix) => (id) => `${prefix}${String(id || "unknown").replace(/[^A-Za-z0-9._-]/g, "-")}`;
-const codexLiveId = (id) => `cx-${String(id || "unknown").replace(/[^A-Za-z0-9._-]/g, "_")}`;
 
 /** Copy of deriveDshSessionId in dsh-memory-plugin/session-id.mjs. */
 function dshLiveId(id) {
@@ -88,14 +87,14 @@ function openclawLiveId(id) {
 // cursor, opencode, openclaw, hermes), so the two importers skip each other's
 // sessions. `native` hosts are read from disk; the rest only with --input.
 const HARNESSES = {
-  claude_code: { label: "Claude Code", native: true, liveId: (id) => `cc-${id}` },
-  codex: { label: "Codex", native: true, liveId: codexLiveId },
+  claude_code: { label: "Claude Code", native: true, liveId: hookLiveId("cc-") },
+  codex: { label: "Codex", native: true, liveId: hookLiveId("cx-") },
   cursor: { label: "Cursor", liveId: hookLiveId("cu-") },
   trae: { label: "TRAE", liveId: hookLiveId("tr-") },
   trae_cn: { label: "TRAE CN", liveId: hookLiveId("trcn-") },
   // The installer sets TRAE CLI up as the Codex plugin run by traecli, so its
   // live sessions are Codex's (cx-). No ingest source reads its history.
-  trae_cli: { label: "TRAE CLI", liveId: codexLiveId },
+  trae_cli: { label: "TRAE CLI", liveId: hookLiveId("cx-") },
   zcode: { label: "ZCode", liveId: hookLiveId("zc-") },
   kimicode: { label: "Kimi Code", liveId: hookLiveId("kc-") },
   codebuddy: { label: "CodeBuddy Code", liveId: hookLiveId("cb-") },
@@ -1077,7 +1076,7 @@ export function sessionId(harness, nativeId) {
 }
 
 export function liveSessionId(harness, liveId) {
-  return (HARNESSES[harness]?.liveId || codexLiveId)(liveId);
+  return (HARNESSES[harness]?.liveId || hookLiveId("cx-"))(liveId);
 }
 
 const NO_DERIVED_PEER = Object.freeze({ peerId: "", origin: "not derived" });

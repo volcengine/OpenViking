@@ -1,0 +1,12 @@
+{
+  "what": "PostCompact reports a compaction",
+  "read": {
+    "event": "post-compact",
+    "payload": {
+      "session_id": "s"
+    }
+  },
+  "expect": {
+    "resumed": "compact"
+  }
+}

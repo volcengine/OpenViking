@@ -5,13 +5,15 @@
 - 面向 memory、resources 和 code context 的 OpenViking MCP 工具
 - 长期记忆、session 同步、生命周期边界 commit、自动 recall
 
-这是仓库中唯一继续维护的 OpenCode 插件示例。这个插件不再安装 `skills/openviking/SKILL.md`，也不要求 agent 使用 `ov` 命令。模型工具由 Claude Code 和 Codex 记忆插件同款的 stdio MCP proxy 提供。
+这是仓库中唯一继续维护的 OpenCode 插件示例。这个插件不要求 agent 使用 `ov` 命令。模型工具由与其他 OpenViking 记忆插件相同的 stdio MCP proxy 提供。
+
+使用指南：[OpenCode](../../docs/zh/agent-integrations/10-opencode.md)。共同行为（capture 与 commit、recall、会话开场上下文、离线重试、子 agent、压缩）见[能力参考](../../docs/zh/agent-integrations/16-capability-reference.md)。不支持 OpenCode 1.x：插件只会在日志里写一行说明，然后什么都不做。
 
 ## 前置条件
 
 需要先准备：
 
-- OpenCode 1.15.7+ 或 OpenCode 2.0.15+
+- OpenCode 2.0.15+
 - OpenViking HTTP Server
 - Node.js 18+
 - 如果服务端启用了认证，需要可用的 OpenViking API Key
@@ -48,7 +50,7 @@ curl -fsSL https://openviking.ai/install | bash
 }
 ```
 
-这份 `plugin` 配置同时兼容 v1 和 v2；v2 会在加载时规范化为原生的 `plugins`，无需手工迁移配置。
+OpenCode v2 会在加载时规范化为原生的 `plugins`，无需手工迁移配置。
 
 ## 安装方式三：源码安装
 
@@ -78,6 +80,7 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ├── openviking.js
 └── openviking/
     ├── index.mjs
+    ├── host.mjs
     ├── package.json
     ├── lib/
     └── servers/
@@ -89,72 +92,39 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
-这个 wrapper 只用于上面这种源码安装目录结构。npm 包安装会通过 `package.json` 直接加载 `index.mjs`。
-源码安装请使用 `.js` wrapper；OpenCode 的本地插件扫描器会发现 JavaScript/TypeScript 插件文件。
+这个 wrapper 只用于上面这种源码安装目录结构。npm 包安装会通过 `package.json` 直接加载 `index.mjs`。源码安装请使用 `.js` wrapper；OpenCode 的本地插件扫描器会发现 JavaScript/TypeScript 插件文件。
 
 如果你使用 npm 包方式安装，也可以将 `examples/opencode-plugin` 作为一个普通 OpenCode 插件包使用。
 
 ## 配置
 
-行为旋钮写在共享的客户端配置文件里：
-
-```bash
-~/.openviking/ovcli.conf
-```
-
-示例配置：
+设置写在共享的客户端配置文件 `~/.openviking/ovcli.conf` 里，可以放在共享的 `plugin` 段，或放在 `plugin.opencode` 覆盖段（对 OpenCode 优先生效）：
 
 ```json
 {
   "url": "http://127.0.0.1:1933",
   "api_key": "your-api-key-here",
   "plugin": {
-    "recallLimit": 6,
     "opencode": {
       "enabled": true,
       "mcpEnabled": true,
       "timeoutMs": 30000,
       "repoContext": true,
-      "repoContextCacheTtlMs": 60000,
-      "autoRecall": true,
-      "scoreThreshold": 0.35,
-      "recallMaxContentChars": 500,
-      "recallPreferAbstract": true,
-      "recallTokenBudget": 2000,
-      "minQueryLength": 3,
-      "commitTokenThreshold": 20000,
-      "profileTokenBudget": 10000,
-      "skillCatalog": true,
-      "skillCatalogTokenBudget": 1200,
-      "resumeContextBudget": 32000
+      "repoContextCacheTtlMs": 60000
     }
   }
 }
 ```
 
-`plugin` 里的键对所有 harness 生效；`plugin.opencode` 里的键只对本插件生效，并覆盖前者。解析顺序是 `OPENVIKING_*` 环境变量 → 工作区的 `.openviking/config.json`、`.openviking/config.local.json` 和本机 registry 条目 → `plugin.opencode` → `plugin` → 内置默认值。每个旋钮的类型、默认值、取值范围、环境变量名和兼容的旧拼写都声明在 [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs)。
+`repoContext` 会把已索引的 `viking://resources/` 仓库注入 system prompt；`dataDir` 用来修改运行时文件目录。其他所有设置、解析顺序、身份 header 和 peer 见[客户端配置](../../docs/zh/configuration/02-client.md)。
 
-`recallLimit` 是遗留的配额缩放输入，不是最终结果上限。显式设置为
-1 到 5 时，有效总配额仍为 6，因为六个 coding 分类会各保留一个检索槽位。
-
-每个 session 的第一条消息会带上一个隐藏的 `<openviking-context source="session-start">` 块，里面有你的 `profile.md`、`preferences/` 和 `entities/` 记忆索引，以及 `<available-skills>` skill 清单：先列你自己的 skill，再列 `viking://agent/skills` 下账号共享的 skill；共享 skill 与你自己的 skill 同名时不再列出。`profileTokenBudget` 只管 profile 和记忆索引，skill 清单有独立的预算 `skillCatalogTokenBudget`（默认 `1200`，环境变量 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）。放不下描述时只列 skill 名，名字也列不全时末尾注明 `... +N more`；连一个名字都放不下时，只写一行 skill 总数。设置 `skillCatalog: false`（`OPENVIKING_SKILL_CATALOG=0`）或把预算设为 `0` 即可关闭 skill 清单；没有 skill，或服务端没有 `GET /api/v1/skills` 接口时，这一块会直接省略。
-
-推荐通过环境变量提供 API Key，而不是写入配置文件：
+推荐通过环境变量提供 API Key，而不是写进配置文件：
 
 ```bash
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-API key 会从环境变量或 `~/.openviking/ovcli.conf` 读取，并由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送。`account` 和 `user` 是 trusted mode
-身份头，会作为 `X-OpenViking-Account`、`X-OpenViking-User` 发送；`api_key`
-模式的服务端从 key 里取身份，插件在那里不发这两个头。
-`peerId` 会作为 `X-OpenViking-Actor-Peer` 用于数据面的 memory/resource 请求；捕获 session message 时仍写入 body `peer_id`。需要 peer 维度路由时请显式配置。
-
-`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER`、
-`OPENVIKING_PEER_ID`
-优先级高于 `ovcli.conf` 里的同名配置。
-
-高级场景可以用 `OPENVIKING_CLI_CONFIG_FILE` 指向其他路径的 `ovcli.conf`。
+`OPENVIKING_API_KEY`、`OPENVIKING_ACCOUNT`、`OPENVIKING_USER` 和 `OPENVIKING_PEER_ID` 优先于 `ovcli.conf` 中对应的值。高级场景可以用 `OPENVIKING_CLI_CONFIG_FILE` 指向其他路径的 `ovcli.conf`。
 
 ### 仅 Hooks 模式
 
@@ -168,8 +138,7 @@ API key 会从环境变量或 `~/.openviking/ovcli.conf` 读取，并由 hooks �
 }
 ```
 
-repository context、自动 recall、消息 capture 和生命周期 commit 会继续工作，也不会添加或覆盖
-OpenCode 的 `mcp.openviking` 配置。
+repository context、自动 recall、消息 capture 和生命周期 commit 会继续工作，也不会添加或覆盖 OpenCode 的 `mcp.openviking` 配置。
 
 ## 验证
 
@@ -203,34 +172,8 @@ curl http://localhost:1933/health
 
 ## 可用 MCP 工具
 
-插件会通过 OpenCode config 注册 OpenViking stdio MCP proxy。服务端实际返回的 `tools/list` 是最终工具清单；当前 OpenViking server 暴露：
+插件会通过 OpenCode config 注册 OpenViking stdio MCP proxy。服务端实际返回的 `tools/list` 是最终工具清单；OpenCode 中的工具名带 `openviking_` 前缀。
 
-- `openviking_search`：跨 memories/resources/skills 的深度语义检索；使用 `mode="context"` 获取面向当前任务、可直接注入的平衡上下文
-- `openviking_find`：快速语义检索
-- `openviking_remember`：存储重要事实或决策，供记忆提取
-- `openviking_read`：读取一个或多个 `viking://` 文件
-- `openviking_download`：获取一次性 URL，用 `curl` 下载文件原始字节
-- `openviking_list`：列出 `viking://` 目录
-- `openviking_tree`：展示 `viking://` 目录树
-- `openviking_grep`：精确文本或正则搜索
-- `openviking_glob`：glob 文件匹配
-- `openviking_write`：创建、覆盖或追加 `viking://` 文件
-- `openviking_edit`：对 `viking://` 文件做精确字符串替换
-- `openviking_add_resource`：添加 URL、本地文件、sitemap 或 feed
-- `openviking_add_skill`：用完整的 `SKILL.md` 文本（`data`）创建或替换 skill，或从 Git URL、本地 `SKILL.md`、skill 目录或 `.zip`（`path`）安装；传 `target_uri="viking://agent/skills"` 则共享给整个账号
-- `openviking_forget`：在用户明确确认后删除 `viking://` URI
-- `openviking_list_watches` / `openviking_cancel_watch`：查看或取消资源 watch
-- `openviking_health`：检查 OpenViking server 健康状态
-
-使用建议：
-
-- 概念性问题用 `openviking_search`
-- 精确符号、函数名、类名、报错字符串用 `openviking_grep`
-- 枚举文件用 `openviking_glob`
-- 读取内容用 `openviking_read`
-- 探索目录结构用 `openviking_list`
-- 照 `<available-skills>` 里的某个 skill 做事之前，先用 `openviking_read` 读它的 `SKILL.md`；创建、安装或共享 skill 用 `openviking_add_skill`
-- 删除前必须先获得用户明确确认，再调用 `openviking_forget`
 - 如果 agent 误用 OpenCode 本地 `read`、`glob`、`grep` 工具访问 `viking://` URI，插件会阻止这次本地文件系统调用，并提示改用 MCP 工具。
 - `bash` 命令里带 `viking://` URI 时照常执行，插件会在输出末尾附一段提示，建议改用 MCP 工具；URI 本来就是命令参数时，agent 可以忽略这段提示。
 

@@ -1,0 +1,8 @@
+{
+  "what": "a write event prints an empty object",
+  "emit": {
+    "event": "stop",
+    "output": {}
+  },
+  "expect": {}
+}

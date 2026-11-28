@@ -1,0 +1,23 @@
+{
+  "what": "a content-part prompt is joined and cleaned of injected context",
+  "read": {
+    "event": "user-prompt-submit",
+    "payload": {
+      "session_id": "s",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "hello"
+        },
+        {
+          "type": "text",
+          "text": "<openviking-context>old</openviking-context>world"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "prompt": "hello\n world",
+    "transcript": "s"
+  }
+}

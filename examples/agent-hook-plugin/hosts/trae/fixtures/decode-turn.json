@@ -1,0 +1,41 @@
+{
+  "what": "the prompt note and the Stop answer make one turn",
+  "decode": {
+    "notes": [
+      {
+        "prompt": "remember this",
+        "at": 1
+      }
+    ],
+    "payload": {
+      "last_assistant_message": "the retry budget is three attempts"
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "remember this"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "the retry budget is three attempts"
+        }
+      ]
+    }
+  ],
+  "cursor": {
+    "capturedHashes": [
+      "008ecc63794bd66d8daac70d707bbee9349dbf7ce14718f5dca8984da148d04f",
+      "19a5d28aee38d41ea0cb25e81e325d531f4e4eb98ca3908a352e99ad86c56c38"
+    ],
+    "lastTurnKey": 1
+  }
+}

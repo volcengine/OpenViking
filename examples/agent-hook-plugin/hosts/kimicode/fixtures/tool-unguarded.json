@@ -1,0 +1,12 @@
+{
+  "what": "a tool outside Read/Glob/Grep is left alone",
+  "tool": {
+    "payload": {
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "cat viking://~/memories/profile.md"
+      }
+    }
+  },
+  "expect": null
+}

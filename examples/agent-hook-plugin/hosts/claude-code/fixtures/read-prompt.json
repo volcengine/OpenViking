@@ -1,0 +1,16 @@
+{
+  "what": "UserPromptSubmit hands over the trimmed prompt and the transcript",
+  "read": {
+    "event": "UserPromptSubmit",
+    "payload": {
+      "session_id": "5f0c1e2a-7b3d-4c9e-8a10-2d4b6c8e0f12",
+      "transcript_path": "/t.jsonl",
+      "prompt": "  hello there \n"
+    }
+  },
+  "expect": {
+    "prompt": "hello there",
+    "transcript": "/t.jsonl",
+    "resumed": ""
+  }
+}

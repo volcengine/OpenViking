@@ -1,0 +1,16 @@
+{
+  "what": "PostCompact context is named PostCompact",
+  "emit": {
+    "event": "post-compact",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "decision": "approve",
+    "hookSpecificOutput": {
+      "hookEventName": "PostCompact",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

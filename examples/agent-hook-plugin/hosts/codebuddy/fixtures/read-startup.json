@@ -1,0 +1,14 @@
+{
+  "what": "SessionStart(startup) reaches the model",
+  "read": {
+    "event": "session-start",
+    "payload": {
+      "session_id": "s",
+      "source": "startup"
+    }
+  },
+  "expect": {
+    "resumed": "",
+    "defer": false
+  }
+}

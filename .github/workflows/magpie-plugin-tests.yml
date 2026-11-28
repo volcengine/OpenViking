@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "examples/magpie-memory-plugin/**"
+      - "examples/agent-hook-plugin/lib/**"
       - "examples/memory-plugin-shared/lib/**"
       - ".github/workflows/magpie-plugin-tests.yml"
   push:
     branches: [main]
     paths:
       - "examples/magpie-memory-plugin/**"
+      - "examples/agent-hook-plugin/lib/**"
       - "examples/memory-plugin-shared/lib/**"
       - ".github/workflows/magpie-plugin-tests.yml"
 

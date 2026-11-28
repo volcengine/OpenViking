@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
 
-import { createOpenVikingMcpProxy } from "./lib/mcp-proxy-core.mjs";
+import { createOpenVikingMcpProxy } from "../agent-hook-plugin/lib/mcp-proxy-core.mjs";
 import { readRequestBody } from "./testing/support.mjs";
 
 function jsonRpc(id, result = {}) {

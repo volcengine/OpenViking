@@ -1,343 +1,139 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { apply } from "./index.mjs";
 
-test("session filtering skips subagents without changing main-session recall", async () => {
+const INPUT = { endpoint: "http://127.0.0.1:1933", workspacePeer: false };
+const message = text => ({ role: "user", content: [{ type: "text", text }], source: { kind: "user" } });
+const effectCtx = () => {
+  const disposers = [];
+  return { disposers, effect(execute) { disposers.push(execute()); return async () => {}; } };
+};
+
+function setup(t, input = {}) {
+  const root = mkdtempSync(join(tmpdir(), "dsh-plugin-"));
+  const saved = { ...process.env };
+  for (const key of Object.keys(process.env)) if (key.startsWith("OPENVIKING_")) delete process.env[key];
+  Object.assign(process.env, {
+    OPENVIKING_CONFIG_FILE: join(root, "ov.conf"),
+    OPENVIKING_CLI_CONFIG_FILE: join(root, "ovcli.conf"),
+    OPENVIKING_HOME: join(root, "home"),
+    OPENVIKING_STATE_DIR: join(root, "state"),
+    OPENVIKING_HOOK_STATE_DIR: join(root, "hook-state"),
+    OPENVIKING_PENDING_DIR: join(root, "pending"),
+  });
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    requests.push({ method: init.method || "GET", path: pathname, body: init.body ? JSON.parse(init.body) : undefined });
+    const result = pathname === "/api/v1/content/read" ? "User likes blue." : pathname.startsWith("/api/v1/fs/ls") ? [] : {};
+    return new Response(JSON.stringify({ status: "ok", result }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    process.env = saved;
+    rmSync(root, { recursive: true, force: true });
+  });
   const handlers = new Map();
-  let memoryRuntime;
-  const ctx = {
-    logger: { debug() {} },
-    provide(name, value) {
-      if (name === "openvikingMemory") memoryRuntime = value;
-    },
-    effect(execute) {
-      execute();
-      return async () => {};
-    },
+  const warnings = [];
+  const plugin = effectCtx();
+  apply({
+    logger: { debug() {}, warn: line => warnings.push(line) },
+    ...plugin,
     tools: { register() {} },
     plugin() {},
-    on(name, handler) {
-      handlers.set(name, handler);
-    },
-  };
-  apply(ctx, {
-    endpoint: "http://127.0.0.1:1933",
-    workspacePeer: false,
-    skipSubagentSessions: true,
-  });
-
-  const agent = {
-    session: { id: "dsh-final-batch", header: { cwd: "/workspace" } },
-    ctx: {
-      effect(execute) {
-        execute();
-        return async () => {};
-      },
-    },
-  };
-  const created = handlers.get("agent/created");
-  assert.equal(typeof created, "function");
-
-  const preStep = handlers.get("agent/pre-step");
-  const initial = [message("initial input")];
-  const downstream = [message("downstream replacement")];
-  const seen = [];
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init) => {
-    const path = new URL(url).pathname;
-    if (path === "/health") return response({});
-    if (path === "/api/v1/sessions") return response({});
-    if (path === "/api/v1/search/search") {
-      seen.push(JSON.parse(init.body).query);
-      return response({ rendered: "" });
-    }
-    if (path === "/api/v1/fs/ls") return response([]);
-    return response({}, 404);
-  };
-
-  try {
-    await preStep({
-      agent,
-      messages: initial,
-      signal: new AbortController().signal,
-    }, async () => ({ kind: "enter", messages: downstream }));
-
-    const child = {
-      status: "idle",
-      session: {
-        id: "dsh-derived-child",
-        header: { cwd: "/workspace", origin: "subagent" },
-      },
-      inject() {
-        assert.fail("subagent profile must not be injected");
-      },
-      ctx: {
-        effect() {
-          assert.fail("subagent teardown commit must not be registered");
-        },
-      },
-    };
-    assert.equal(await created({ agent: child, source: "startup" }), undefined);
-    assert.equal(await handlers.get("agent/session-start")({ agent: child }), false);
-    const childMessages = [message("derived worker input")];
-    const childDecision = await preStep({
-      agent: child,
-      messages: childMessages,
-      signal: new AbortController().signal,
-    }, async () => ({ kind: "enter", messages: childMessages }));
-    handlers.get("session/event")(child.session, {
-      type: "user/message",
-      data: message("derived exploration chatter"),
-    });
-    handlers.get("session/event")(child.session, { type: "turn/end", data: {} });
-    await handlers.get("session/flush")(child.session);
-
-    assert.deepEqual(childDecision.messages, childMessages);
-    assert.equal(memoryRuntime.states.has(child.session.id), false);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-
-  assert.deepEqual(seen, ["downstream replacement"]);
-});
-
-function mountPlugin(tools = { register() {} }, sessions) {
-  const handlers = new Map();
-  let runtime;
-  const ctx = {
-    logger: { debug() {} },
-    provide(name, value) {
-      if (name === "openvikingMemory") runtime = value;
-    },
-    effect(execute) {
-      execute();
-      return async () => {};
-    },
-    tools,
-    sessions,
-    plugin() {},
-    on(name, handler) {
-      handlers.set(name, handler);
-    },
-  };
-  apply(ctx, { endpoint: "http://127.0.0.1:1933", workspacePeer: false });
-  runtime.stopDrainer();
-  // Replace only the network-bound part; initialize/profileMessage stay real so
-  // the single-flight and delivered-once guarantees are the plugin's own.
-  const calls = { initialize: 0 };
-  runtime.initializeState = async state => {
-    calls.initialize += 1;
-    state.profileBlock = "<openviking-context source=\"profile\">p</openviking-context>";
-    state.ready = true;
-    return state;
-  };
-  return { handlers, runtime, calls };
+    on: (name, handler) => handlers.set(name, handler),
+  }, { ...INPUT, ...input });
+  return { handlers, requests, warnings, plugin };
 }
 
-function startupAgent(id = "dsh-startup") {
-  const agent = {
-    status: "idle",
-    session: { id, header: { cwd: "/workspace" } },
-    inbox: { nextTurn: [], nextStep: [] },
-    injected: [],
-    effects: [],
-    inject(message) {
-      this.injected.push(message);
-      this.inbox.nextStep.push(message);
-    },
-    ctx: {
-      effect(execute, label) {
-        agent.effects.push(label);
-        return async () => {};
-      },
-    },
-  };
-  return agent;
+function agentFor(id, header = {}) {
+  const injected = [];
+  return { status: "idle", injected, inject: m => injected.push(m), session: { id, header: { cwd: tmpdir(), ...header } }, ctx: effectCtx() };
 }
 
-async function withQuietFetch(run) {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => response({ rendered: "" });
-  try {
-    return await run();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}
+test("a session runs through the flow: profile at startup, recall per prompt, ordered capture, commits", async t => {
+  const { handlers, requests } = setup(t);
+  const agent = agentFor("s1");
+  assert.equal(await handlers.get("agent/created")({ agent, source: "startup" }), undefined);
+  assert.equal(agent.injected.length, 1);
+  assert.equal(agent.injected[0].source.form, "instructions");
+  assert.match(agent.injected[0].content[0].text, /User likes blue\./);
+  assert.ok(!requests.some(r => r.path === "/health" || (r.method === "POST" && r.path === "/api/v1/sessions")));
 
-test("agent/created (dsh 0.1.7+) runs startup once and pre-step does not re-inject the profile", async () => {
-  const { handlers, calls } = mountPlugin();
-  const agent = startupAgent();
-  await withQuietFetch(async () => {
-    const result = await handlers.get("agent/created")({
-      agent,
-      source: "startup",
-      signal: new AbortController().signal,
-    });
-    // Anything but undefined would bail DSH's serial agent/created dispatch.
-    assert.equal(result, undefined);
-    assert.equal(calls.initialize, 1);
-    assert.equal(agent.injected.length, 1);
-    assert.match(agent.injected[0].content[0].text, /source="profile"/);
-    assert.deepEqual(agent.effects, ["openvikingMemory.disposeSession()"]);
+  const batch = [message("what colour do we deploy with?")];
+  const decision = await handlers.get("agent/pre-step")({ agent, signal: new AbortController().signal }, async () => ({ kind: "enter", messages: batch, startsRequestSeries: true }));
+  assert.equal(decision.startsRequestSeries, true);
+  const search = requests.find(r => r.path.startsWith("/api/v1/search/"));
+  assert.equal(search.body.query, "what colour do we deploy with?");
 
-    // A stray session-start on the same agent must not repeat startup.
-    await handlers.get("agent/session-start")({ agent, source: "startup" });
-    const input = [message("first prompt")];
-    const decision = await handlers.get("agent/pre-step")({
-      agent,
-      messages: input,
-      signal: new AbortController().signal,
-    }, async () => ({ kind: "enter", messages: input }));
+  const onEvent = handlers.get("session/event");
+  onEvent(agent.session, { type: "user/message", data: message("first") });
+  onEvent(agent.session, { type: "assistant/message", data: { message: { role: "assistant", content: [{ type: "text", text: "second" }] } } });
+  onEvent(agent.session, { type: "turn/end", data: {} });
+  onEvent(agent.session, { type: "compaction/start", data: {} });
+  await handlers.get("session/flush")(agent.session);
+  const writes = requests.filter(r => r.method === "POST" && r.path.startsWith("/api/v1/sessions/dsh-s1/"));
+  const texts = writes.filter(r => r.path.endsWith("/messages/batch")).flatMap(r => r.body.messages.map(m => m.parts[0].text));
+  assert.deepEqual(texts, ["first", "second"]);
+  assert.equal(writes.filter(r => r.path.endsWith("/commit")).length, 1);
 
-    assert.equal(calls.initialize, 1);
-    assert.equal(agent.injected.length, 1);
-    assert.deepEqual(agent.effects, ["openvikingMemory.disposeSession()"]);
-    assert.equal(
-      decision.messages.some(m => /source="profile"/.test(m.content?.[0]?.text || "")),
-      false,
-    );
-  });
+  onEvent(agent.session, { type: "user/message", data: message("third") });
+  await Promise.all(agent.ctx.disposers.map(dispose => dispose()));
+  assert.equal(requests.filter(r => r.path === "/api/v1/sessions/dsh-s1/commit").length, 2);
 });
 
-test("agent/pre-step keeps the downstream decision's other fields when it appends", async () => {
-  const { handlers } = mountPlugin();
-  const agent = startupAgent("dsh-goal-round");
-  await withQuietFetch(async () => {
-    const input = [message("goal round prompt")];
-    // goal-round-driver marks the entry that opens a request series.
-    const decision = await handlers.get("agent/pre-step")({
-      agent,
-      messages: input,
-      signal: new AbortController().signal,
-    }, async () => ({ kind: "enter", messages: input, startsRequestSeries: true }));
-
-    assert.equal(decision.kind, "enter");
-    assert.equal(decision.startsRequestSeries, true);
-    assert.equal(decision.messages[0], input[0]);
-    assert.ok(decision.messages.length > input.length, "the profile block was appended");
-  });
+test("an older DSH gets one unsupported line and nothing else", async t => {
+  const { handlers, requests, warnings } = setup(t);
+  const agent = agentFor("old");
+  await handlers.get("agent/created")({ agent });
+  await handlers.get("agent/created")({ agent: agentFor("old2") });
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /not supported/);
+  handlers.get("session/event")(agent.session, { type: "user/message", data: message("hello") });
+  const decision = await handlers.get("agent/pre-step")({ agent, signal: new AbortController().signal }, async () => ({ kind: "enter", messages: [message("hello there")] }));
+  assert.equal(decision.messages.length, 1);
+  await handlers.get("session/flush")(agent.session);
+  assert.deepEqual(requests, []);
+  assert.equal(handlers.has("agent/session-start"), false);
 });
 
-test("dsh 0.1.x: source-less agent/created defers startup to agent/session-start", async () => {
-  const { handlers, calls } = mountPlugin();
-  const agent = startupAgent("dsh-legacy");
-  await withQuietFetch(async () => {
-    assert.equal(await handlers.get("agent/created")({ agent }), undefined);
-    assert.equal(calls.initialize, 0);
-    assert.deepEqual(agent.effects, []);
-
-    assert.equal(
-      await handlers.get("agent/session-start")({ agent, source: "startup" }),
-      true,
-    );
-    assert.equal(calls.initialize, 1);
-    assert.equal(agent.injected.length, 1);
-    assert.deepEqual(agent.effects, ["openvikingMemory.disposeSession()"]);
-  });
-});
-
-test("agent/created returns on abort and never rejects on startup failure", async () => {
-  const { handlers, runtime } = mountPlugin();
-  let release;
-  runtime.initializeState = () => new Promise(resolve => {
-    release = resolve;
-  });
-  const controller = new AbortController();
-  const agent = startupAgent("dsh-aborted");
-  const pending = handlers.get("agent/created")({
-    agent,
-    source: "startup",
-    signal: controller.signal,
-  });
-  controller.abort();
-  assert.equal(await pending, undefined);
-  release({ ready: false });
-  assert.deepEqual(agent.injected, []);
-
-  runtime.initializeState = async () => {
-    throw new Error("boom");
-  };
-  const failing = startupAgent("dsh-failing");
-  assert.equal(
-    await handlers.get("agent/created")({ agent: failing, source: "startup" }),
-    undefined,
-  );
-  assert.deepEqual(failing.injected, []);
-});
-
-test("the session-history note comes on the next step after a compaction or a resume", async () => {
-  const { handlers } = mountPlugin();
-  const stepNotes = async agent => {
-    const input = [message("next prompt")];
-    const decision = await handlers.get("agent/pre-step")({
-      agent,
-      messages: input,
-      signal: new AbortController().signal,
-    }, async () => ({ kind: "enter", messages: input }));
-    return decision.messages.map(m => m.content?.[0]?.text || "").filter(t => t.includes('source="session-history"'));
-  };
-  const compacted = startupAgent("compacted");
-  const resumed = startupAgent("resumed");
-  await withQuietFetch(async () => {
-    assert.deepEqual(await stepNotes(compacted), []);
-    handlers.get("session/event")(compacted.session, { type: "compaction/end", data: { turn: 1 } });
-    const notes = await stepNotes(compacted);
-    assert.equal(notes.length, 1);
-    assert.match(notes[0], /as dsh-compacted, including what the compaction summary replaced/);
-    assert.deepEqual(await stepNotes(compacted), []);
-
-    await handlers.get("agent/created")({ agent: resumed, source: "resume" });
-    assert.match((await stepNotes(resumed))[0], /as dsh-resumed, including anything an earlier compaction summarized/);
-  });
+test("skipSubagentSessions leaves subagents alone", async t => {
+  const { handlers, requests } = setup(t, { skipSubagentSessions: true });
+  const child = agentFor("child", { origin: "subagent" });
+  await handlers.get("agent/created")({ agent: child, source: "startup" });
+  handlers.get("session/event")(child.session, { type: "user/message", data: message("chatter") });
+  await handlers.get("session/flush")(child.session);
+  assert.deepEqual(child.injected, []);
+  assert.deepEqual(requests, []);
 });
 
 test("a session_history call without a session gets the caller's id and its parent chain", async () => {
+  const handlers = new Map();
   const calls = [];
-  const tools = { register() {}, get: () => ({ execute: async args => (calls.push(args), "hit") }) };
-  const sessions = new Map([
-    ["fork", { header: { parentSession: "main", isSeeded: true } }],
-    ["main", { header: { isSeeded: false } }],
-  ]);
-  const { handlers } = mountPlugin(tools, sessions);
-  const agent = { session: { id: "sub", header: { parentSession: "fork", isSeeded: true, origin: "subagent" } } };
+  apply({
+    logger: {},
+    effect: () => async () => {},
+    tools: { register() {}, get: () => ({ execute: async args => (calls.push(args), "hit") }) },
+    sessions: new Map([["fork", { header: { parentSession: "main", isSeeded: true } }], ["main", { header: {} }]]),
+    plugin() {},
+    on: (name, handler) => handlers.set(name, handler),
+  }, INPUT);
+  const agent = { session: { id: "sub", header: { parentSession: "fork", isSeeded: true } } };
   const call = (args, next) => handlers.get("tools/execute")({ name: "mcp__openviking__session_history", arguments: args, agent }, next);
   const result = await call(Object.freeze({ action: "overview" }), async () => assert.fail("a call without session must be filled"));
   assert.deepEqual(calls, [{ action: "overview", session: "dsh-sub,dsh-fork,dsh-main" }]);
   assert.equal(result.value, "hit");
   assert.equal(await call({ session: "dsh-other" }, async () => "untouched"), "untouched");
-  assert.equal(calls.length, 1);
 });
 
-function message(text) {
-  return {
-    role: "user",
-    content: [{ type: "text", text }],
-    source: { kind: "user" },
-  };
-}
-
-function response(result, status = 200) {
-  return new Response(JSON.stringify({
-    status: status < 400 ? "ok" : "error",
-    ...(status < 400 ? { result } : { error: { code: "NOT_FOUND" } }),
-  }), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 test("mcpEnabled false mounts neither the MCP tools nor the skills", () => {
-  const mounted = (input) => {
+  const mounted = input => {
     let count = 0;
-    apply({
-      logger: { debug() {} },
-      provide() {},
-      effect: (execute) => { execute(); return async () => {}; },
-      tools: { register() {} },
-      plugin() { count += 1; },
-      on() {},
-    }, { endpoint: "http://127.0.0.1:1933", workspacePeer: false, ...input });
+    apply({ logger: {}, effect: () => async () => {}, tools: { register() {} }, plugin() { count += 1; }, on() {} }, { ...INPUT, ...input });
     return count;
   };
   assert.equal(mounted({}), 2);

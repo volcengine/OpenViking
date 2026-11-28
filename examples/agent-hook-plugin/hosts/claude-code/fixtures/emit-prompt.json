@@ -1,0 +1,16 @@
+{
+  "what": "UserPromptSubmit context is approved with hookSpecificOutput",
+  "emit": {
+    "event": "UserPromptSubmit",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "decision": "approve",
+    "hookSpecificOutput": {
+      "hookEventName": "UserPromptSubmit",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

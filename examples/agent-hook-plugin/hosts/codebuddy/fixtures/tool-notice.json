@@ -1,0 +1,18 @@
+{
+  "what": "a shell command carrying a viking:// URI is not denied",
+  "tool": {
+    "payload": {
+      "session_id": "s",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "cat viking://user/x"
+      }
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "additionalContext": "[OpenViking memory plugin] URI guard: this shell command contains the viking:// URI viking://user/x.\nviking:// URIs are OpenViking virtual paths, not local files, so cat, ls, grep and other file commands cannot open them.\nIf you meant to read or search OpenViking content, use OpenViking MCP read or search instead.\nExample: read(uri=\"viking://user/x\")\nIf the URI is intentional data (an ov CLI argument, an HTTP payload, a search pattern), ignore this notice."
+    }
+  }
+}

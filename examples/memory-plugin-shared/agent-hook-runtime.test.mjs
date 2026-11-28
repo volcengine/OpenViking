@@ -5,8 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { filterCaptureTurns } from "./lib/capture-utils.mjs";
-import { listPending } from "./lib/pending-queue.mjs";
+import { filterCaptureTurns } from "../agent-hook-plugin/lib/capture-utils.mjs";
+import { listPending } from "../agent-hook-plugin/lib/pending-queue.mjs";
 import { expectExit, runHookScript, withMockOpenViking, withPendingDir, writeJson } from "./testing/support.mjs";
 
 import {
@@ -17,7 +17,7 @@ import {
   resolveNativeSessionId,
   runHookStage,
   withAgentHookLock,
-} from "./lib/agent-hook-runtime.mjs";
+} from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 
 test("disabled Claude Code and Codex hooks make no requests or session writes", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "ov-disabled-hooks-"));
@@ -27,16 +27,17 @@ test("disabled Claude Code and Codex hooks make no requests or session writes", 
     const transcript = join(home, "transcript.jsonl");
     writeFileSync(transcript, JSON.stringify({ payload: { message: { role: "user", content: "remember disabled hooks" } } }));
     await withMockOpenViking((_req, res) => writeJson(res, { status: "ok", result: {} }), async (baseUrl, requests) => {
-      for (const plugin of ["claude-code-memory-plugin", "codex-memory-plugin"]) {
-        const root = new URL(`../${plugin}/`, import.meta.url);
-        const manifest = JSON.parse(readFileSync(new URL("hooks/hooks.json", root), "utf-8"));
+      const root = new URL("../agent-hook-plugin/", import.meta.url);
+      for (const [plugin, hooks] of [["claude-code", "hooks/hooks.json"], ["codex", "hosts/codex/hooks.json"]]) {
+        const manifest = JSON.parse(readFileSync(new URL(hooks, root), "utf-8"));
         for (const [event, entries] of Object.entries(manifest.hooks)) {
           if (event === "PreToolUse") continue; // URI guard has no memory I/O.
-          const script = entries[0].hooks[0].command.split("scripts/")[1].replaceAll('"', '');
+          const [script, ...argv] = entries[0].hooks[0].command.split("_ROOT}/")[1].replaceAll('"', '').split(" ");
           await t.test(`${plugin} ${event}`, async () => {
             requests.length = 0;
             const before = readdirSync(home, { recursive: true }).sort();
-            const result = expectExit(await runHookScript(fileURLToPath(new URL(`scripts/${script}`, root)), {
+            const result = expectExit(await runHookScript(fileURLToPath(new URL(script, root)), {
+              argv,
               cwd: home,
               input: { session_id: "disabled", agent_id: "child", source: "startup", cwd: home, prompt: "remember disabled hooks", transcript_path: transcript },
               env: {
@@ -362,6 +363,20 @@ async function stageRun({ raw = "{}", cfg = {}, input = {}, ...rest } = {}, run 
   }, run);
   return { seen, value };
 }
+
+test("an install with no config file and no server in the environment is not configured", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-unconfigured-"));
+  const env = { OPENVIKING_CLI_CONFIG_FILE: join(dir, "ovcli.conf"), OPENVIKING_CONFIG_FILE: join(dir, "ov.conf") };
+  try {
+    assert.equal(loadAgentHookConfig("cursor", dir, { env }).configured, false);
+    assert.equal(loadAgentHookConfig("cursor", dir, { env: { ...env, OPENVIKING_URL: "http://127.0.0.1:1" } }).configured, true);
+    assert.equal(loadAgentHookConfig("cursor", dir, { env: { ...env, OPENVIKING_MEMORY_ENABLED: "1" } }).configured, true);
+    writeFileSync(env.OPENVIKING_CLI_CONFIG_FILE, JSON.stringify({ url: "http://127.0.0.1:1" }));
+    assert.equal(loadAgentHookConfig("cursor", dir, { env }).configured, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("the hook stage reloads the config for the payload's directory", async () => {
   const stages = [];

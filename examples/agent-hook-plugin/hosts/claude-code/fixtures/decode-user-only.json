@@ -1,0 +1,20 @@
+{
+  "what": "captureAssistantTurns off sends only what the user wrote",
+  "decode": {
+    "transcript": "tools.jsonl",
+    "cfg": {
+      "captureAssistantTurns": false
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Read notes.txt and tell me what it says."
+        }
+      ]
+    }
+  ]
+}

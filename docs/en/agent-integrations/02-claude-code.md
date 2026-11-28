@@ -2,11 +2,11 @@
 
 Give [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content without requiring the model to make any tool calls.
 
-Source: [examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin) | [Blog: motivation & demo](https://blog.openviking.ai/post/openviking-coding-agent/)
+Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) (Claude Code files under [hosts/claude-code](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin/hosts/claude-code)) | [Blog: motivation & demo](https://blog.openviking.ai/post/openviking-coding-agent/)
 
 ## Install
 
-Claude Code and Codex share one installer. It asks which harnesses to install and for your OpenViking credentials; every step is idempotent—re-running it is entirely safe.
+The installer asks which harnesses to install and for your OpenViking credentials; re-running it is safe.
 
 For a managed connection, select **OpenViking Managed Service**, then:
 
@@ -20,35 +20,23 @@ curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-> **Plugin updates**: on Claude Code 2.1.224 or later, the installer registers a marketplace served by the OpenViking documentation site with auto-update turned on, so new plugin versions download in the background and load after a restart. Older Claude Code gets a local directory marketplace, which cannot auto-update — re-run the installer to update. (Codex installs from a git repository on the same site and keeps remote updates.)
-
-No shell wrapper is needed anymore: the plugin ships a stdio MCP proxy that reads `~/.openviking/ovcli.conf` (or `OPENVIKING_*` env vars) at runtime, same as the hooks.
-
-After a session has been captured and processed, start a new conversation and ask about a specific fact from it to check cross-session recall.
+> **Plugin updates**: on Claude Code 2.1.224 or later, the installer registers a marketplace served by the OpenViking documentation site with auto-update turned on, so new plugin versions download in the background and load after a restart. Older Claude Code gets a local directory marketplace, which cannot auto-update — re-run the installer to update.
 
 <details>
 <summary><b>Manual setup</b></summary>
 
-If you prefer to set it up manually:
+1. **Configure the connection** — write `~/.openviking/ovcli.conf` (`url`, `api_key`, optional `account`/`user`), or run the bundled wizard `node <plugin-dir>/hosts/claude-code/setup.mjs` after installing. For a local server without authentication (`http://127.0.0.1:1933`), skip this step.
 
-1. **Configure the connection** — write `~/.openviking/ovcli.conf` (`url`, `api_key`, optional `account`/`user`), or run the bundled wizard `node <plugin-dir>/scripts/setup.mjs` after installing.
-
-2. **Install the plugin** from the remote marketplace (no clone needed):
+2. **Install the plugin** from the remote marketplace:
 
    ```bash
    claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
    claude plugin install openviking-memory@openviking
    ```
 
-   Or, for development, register a local checkout: `claude plugin marketplace add "<repo>/examples"` then install the same plugin id.
-
 3. **Start Claude Code** and run `/mcp` to verify that the OpenViking entry is connected.
 
-> Don't have `ovcli.conf` yet? See the [Deployment Guide → CLI](../guides/03-deployment.md#cli).
->
-> Using pure local mode (`http://127.0.0.1:1933`, no authentication)? Skip step 1—the plugin automatically defaults to the local setup.
->
-> Running Claude Code < 2.0? The installer skips it and asks you to upgrade. To wire it up by hand with `claude mcp add` and a hooks merge, see the [Legacy mode section in the plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#legacy-mode-claude-code--20).
+The installer skips Claude Code older than 2.0 and asks you to upgrade.
 
 </details>
 
@@ -58,77 +46,26 @@ Once installed, start a new Claude Code session and ask it to follow https://doc
 
 Launch `claude`, then:
 
-- `/plugins` → Verify that **openviking-memory** is listed under "Installed", with the **openviking** MCP connected below it.
-- `/mcp` → Ensure the OpenViking entry displays your server URL along with valid authentication.
-- `/openviking-memory:ov` → View server health, identity, recall/injection statistics, and toggle states.
+- `/plugins` → **openviking-memory** is listed under "Installed", with the **openviking** MCP connected below it.
+- `/mcp` → the OpenViking entry shows your server URL with valid authentication.
+- `/openviking-memory:ov` → server, identity, last injection and recall, and toggles.
 
-If the plugin does not seem to activate, set `OPENVIKING_DEBUG=1` and check the logs at `~/.openviking/logs/cc-hooks.log`.
+If the plugin does not seem to activate, set `OPENVIKING_DEBUG=1` and check `~/.openviking/logs/cc-hooks.log`.
 
-## How it works
+## What is different on Claude Code
 
-The plugin hooks into the Claude Code lifecycle:
+Claude Code has every event the plugin uses: session start, prompt, turn end, before compaction, session end, subagent stop and tool calls. Capture, commits, recall and the offline queue work as described in the [Capability Reference](./16-capability-reference.md).
 
-- **Before every prompt** — searches OpenViking and injects relevant memories
-- **After each response** — captures new conversation turns
-- **On session start** — injects your profile, memory index, and skill catalog
-- **Before compaction and on session end** — commits pending messages
-- **For each subagent** — assigns an isolated memory session
-- **Before a native file tool touches a `viking://` path** — blocks the call and names the OpenViking MCP tool to use instead; a `Write` or `Edit` on a skill path is pointed to `add_skill`
-
-Capture runs in a detached worker and does not block the conversation turn. PreCompact and SessionEnd wait for the session commit, within their hook timeouts.
-
-The skill catalog is an `<available-skills>` block that lists the skills stored in OpenViking: your own under `viking://~/skills` first, then the ones shared with your account under `viking://agent/skills`, each with a short description. Before following a listed skill, Claude reads its `SKILL.md` with the OpenViking `read` tool. The catalog has its own token budget: when the descriptions do not fit, it lists names only, and when not even one name fits, it shrinks to a one-line count. The bundled `openviking-skills` skill tells Claude how to find and use OpenViking skills, create, install, and share them with the `add_skill` MCP tool, delete them, and move local skills such as `~/.claude/skills` into OpenViking when you ask.
-
-Tool calls and results are captured as dedicated `tool` parts, and `tool_output` is reported verbatim. Truncation is the server's job: output larger than `tool_output_externalization.threshold_chars` (default `20000`) is written to the session's tool-result store, and the part keeps a synopsis stub plus `tool_output_ref`, so the original stays readable through [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result).
-
-<details>
-<summary><b>Configuration</b></summary>
-
-Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built-in defaults (`http://127.0.0.1:1933`, no authentication).
-
-| Env Var | Default | Description |
-|---------|---------|-------------|
-| `OPENVIKING_AUTO_RECALL` | `true` | Auto-recall on every user prompt |
-| `OPENVIKING_RECALL_LIMIT` | `10` | Legacy width override converted to per-category coding quotas |
-| `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Inline token budget for the final raw-find fallback |
-| `OPENVIKING_AUTO_CAPTURE` | `true` | Auto-capture after each turn |
-| `OPENVIKING_SKILL_CATALOG` | `true` | Inject the `<available-skills>` catalog at session start |
-| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | Token budget for `<available-skills>`, separate from the profile budget; `0` turns the catalog off |
-| `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | Byte cap on the whole SessionStart context, kept under Claude Code's 10,000-character limit so the block stays inline instead of being saved to a file; on resume or compact the session archive takes up to half. `0` removes the cap |
-| `OPENVIKING_BYPASS_SESSION` | `false` | Skip all hooks for this session |
-| `OPENVIKING_BYPASS_SESSION_PATTERNS` | `""` | CSV glob patterns to auto-bypass |
-| `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV of sed-style regex rules applied to the prompt before it becomes a query ([grammar and examples](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#input-filters)) |
-| `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV of sed-style regex rules applied to every captured turn (same grammar) |
-| `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
-| `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
-| `OPENVIKING_SEAL_SECRETS` | `false` | Seal secrets out of what the model sees (`sealSecrets`; needs OpenViking server 0.5.7 or newer) |
-| `OPENVIKING_ENROLL_TOOL_SECRETS` | `false` | With `sealSecrets` on, also store new secrets found in tool output (`enrollToolSecrets`) |
-
-Most of these knobs can also live in `ovcli.conf` under `plugin` — see [Plugin Settings](../configuration/02-client.md#plugin-settings). The two filter knobs are better written there, as JSON arrays, because the environment form is split on commas.
-
-Sealing secrets is described in [Seal secrets](#seal-secrets).
-
-If recall latency matters most, see [Low-latency recall](./01-overview.md#low-latency-recall) for the environment-variable and `ovcli.conf` settings that disable query expansion and result compression.
-
-With a user/admin key, the server derives identity from the key. Set `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` only for trusted mode, using values supplied by your administrator. The complete list of environment variables is available in the [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration).
-
-</details>
-
-## Workspace peer
-
-Memories are filed under a peer derived from the repository you are working in, so one project keeps one memory across clones, worktrees, and subdirectories. The default `peer.source: "git"` uses the repository's normalized `origin` URL — with `origin git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — falling back to the repository root path; outside a repository no peer is sent at all, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. A fork has its own `origin`, so it stays a separate peer.
-
-Change it with `OPENVIKING_PEER_SOURCE`, with `plugin.peerSource` in `ovcli.conf`, or with `peer.source` in the workspace's `.openviking/config.json` (a `"version": 1` file the team can commit): `"cwd"` restores the previous behavior — the working directory with every non-alphanumeric character replaced by `-` — `"none"` sends no peer, and a template such as `"team-{dir}"` builds your own. To [give a directory that is not a repository its own memory](../configuration/02-client.md#give-a-directory-its-own-peer), create `.openviking/config.json` in it containing `{"version": 1, "peer": {"id": "my-project"}}`. Memories written under the earlier cwd-derived peer are still recalled, so nothing needs migrating. The layer precedence and the full workspace-file schema are in [Client Configuration → Workspace Configuration](../configuration/02-client.md#workspace-configuration).
-
-## Statusline
-
-The plugin renders an OpenViking status indicator beneath your Claude Code input box, allowing you to check connection health, recall count, capture progress, and session state at a glance. See [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/STATUSLINE.md) for a complete glossary of segments and personalization recipes.
+- **Subagents:** each subagent is captured into its own session, `cc-<id>__subagent-<agent_id>`, when it stops. See [Subagents](./16-capability-reference.md#subagents).
+- **Status command:** `/openviking-memory:ov` shows the plugin's status.
+- **Statusline:** an OpenViking indicator beneath the input box shows connection, recall, capture and session state. See [STATUSLINE.md](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/claude-code/STATUSLINE.md).
+- **Source cards** and **seal secrets**, below.
 
 ## Source cards
 
 Under each answer, the plugin adds a one-line card listing the OpenViking sources that answer drew on: what auto-recall added to the prompt, and what Claude searched for and read on its own. For example: `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`. Expand a card with its button, or expand and collapse every card with `/openviking-usage expand` and `/openviking-usage collapse`. Cards are collapsed by default.
 
-The cards need Claude Code 2.1.286 or newer with plugin hooks modules enabled. On older versions, or with modules off, no cards are shown, and recall, capture and the other hooks work as before. See [Source cards](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#source-cards) in the plugin README.
+The cards need Claude Code 2.1.286 or newer with plugin hooks modules enabled. On older versions, or with modules off, no cards are shown, and recall, capture and the other hooks work as before.
 
 ## Seal secrets {#seal-secrets}
 
@@ -139,28 +76,27 @@ With `sealSecrets` on, the plugin replaces the secrets your OpenViking server kn
 | `sealSecrets` | `OPENVIKING_SEAL_SECRETS` | `false` | Turns sealing on |
 | `enrollToolSecrets` | `OPENVIKING_ENROLL_TOOL_SECRETS` | `false` | Also stores new secrets found in tool output |
 
-Set them in `ovcli.conf` (see the plugin README) or in the environment; a changed setting takes effect in a new session. Sealing runs in the plugin's hooks module, so it needs what [Source cards](#source-cards) need; where the module is not loaded, nothing is sealed.
+Set them in `ovcli.conf` or in the environment; a changed setting takes effect in a new session. Sealing runs in the plugin's hooks module, so it needs what [Source cards](#source-cards) need; where the module is not loaded, nothing is sealed.
 
 - **Sealed:** your prompt, tool results, and the files, reminders and hook context Claude Code attaches. New secrets are stored from your prompt, and from tool results only with `enrollToolSecrets`. A reference Claude writes in a tool call becomes the real value before the tool runs. The local transcript stores prompts and tool results with references; for attached files and reminders it keeps Claude Code's own record, with the original text.
-- **When sealing cannot be done** (a server older than 0.5.7, a failed `/health`, seal or resolve call), it stops: your prompt is not sent, a tool result is withheld, and a tool call whose references cannot be resolved does not run. The message says why. Upgrade the server or restore the connection, or turn `sealSecrets` off.
+- **When sealing cannot be done** (a server older than 0.5.7, or the server's version, seal or resolve call cannot be read), it stops: your prompt is not sent, a tool result is withheld, and a tool call whose references cannot be resolved does not run. The message says why. Upgrade the server or restore the connection, or turn `sealSecrets` off.
 - **Not covered:** the system prompt, slash-command arguments, skill bodies, and history written before sealing was turned on.
 
-Details: [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#seal-secrets).
+## Workspace peer
+
+Memories are filed under a peer derived from the repository you work in; see [Workspace peer](../configuration/02-client.md#workspace-peer). To give a directory that is not a repository its own memory, create `.openviking/config.json` in it containing `{"version": 1, "peer": {"id": "my-project"}}`.
 
 ## Troubleshooting
 
 | Issue | Cause | Solution |
 |---------|-------|-----|
 | Plugin is not activating | Missing `ov.conf` or `ovcli.conf` | Run the [installer](#install), or set `OPENVIKING_MEMORY_ENABLED=1` along with the URL/API_KEY environment variables |
-| Hooks fire but recall is empty | Server is not running or the URL is incorrect | Check server health: `curl "$(jq -r '.url' ~/.openviking/ovcli.conf)/health"` |
-| MCP tools hit `127.0.0.1` instead of the remote server | `~/.openviking/ovcli.conf` has no `url` (the proxy falls back to the local default) | Fix `ovcli.conf` (or run `node <plugin-dir>/scripts/setup.mjs`), then restart Claude Code |
-| MCP tool calls fail with an auth error | The active ovcli config has no valid `api_key` for an authenticated server | Update the `api_key` in `ovcli.conf`; the stdio proxy re-reads it after auth failures |
-| Remote auth 401 / 403 | Invalid credentials or insufficient permission | Check the active user/admin key and resource access. Only trusted mode requires administrator-supplied account/user headers; these headers cannot change a user key’s identity. |
+| MCP tools hit `127.0.0.1` instead of the remote server | `~/.openviking/ovcli.conf` has no `url` | Fix `ovcli.conf`, then restart Claude Code |
+| Remote auth 401 / 403 | Invalid credentials or insufficient permission | Check the active key in `ovcli.conf`; the MCP proxy re-reads it after auth failures |
 
 ## See also
 
-- [Capability Reference](./16-capability-reference.md)
-- [Blog: OpenViking in Claude Code / Codex](https://blog.openviking.ai/post/openviking-coding-agent/) — Motivation, architecture overview, and demo
-- [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md) — Full environment variable tables, hook details, and architecture diagrams
-- [MCP Clients](./06-mcp-clients.md) — Information on MCP tool parameters and other clients
-- [Deployment Guide → CLI](../guides/03-deployment.md#cli) — `ovcli.conf` setup instructions
+- [Capability Reference](./16-capability-reference.md) — capture, commits, recall, offline retries and settings shared by every host
+- [Plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/claude-code/README.md)
+- [Plugin Settings](../configuration/02-client.md#plugin-settings)
+- [MCP Clients](./06-mcp-clients.md)

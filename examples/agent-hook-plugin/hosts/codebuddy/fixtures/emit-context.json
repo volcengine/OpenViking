@@ -1,0 +1,16 @@
+{
+  "what": "an injection answers the Claude Code envelope with decision approve",
+  "emit": {
+    "event": "session-start",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "decision": "approve",
+    "hookSpecificOutput": {
+      "hookEventName": "SessionStart",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

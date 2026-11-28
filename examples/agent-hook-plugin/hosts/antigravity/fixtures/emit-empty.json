@@ -1,0 +1,8 @@
+{
+  "what": "an event with nothing to say answers an empty object",
+  "emit": {
+    "event": "stop",
+    "output": {}
+  },
+  "expect": {}
+}

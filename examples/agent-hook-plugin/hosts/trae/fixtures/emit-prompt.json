@@ -1,0 +1,16 @@
+{
+  "what": "an injection carries decision approve and hookSpecificOutput",
+  "emit": {
+    "event": "user-prompt-submit",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "decision": "approve",
+    "hookSpecificOutput": {
+      "hookEventName": "UserPromptSubmit",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

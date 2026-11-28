@@ -1,0 +1,9 @@
+{"type":"turn_context","payload":{"turn_id":"turn-1"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Find the calendar tool and run pwd"}]}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}","call_id":"c1","id":"i1"}}
+{"type":"response_item","payload":{"type":"function_call_output","output":"project root","call_id":"c1","id":"o1"}}
+{"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","status":"completed","input":"cat note.md","call_id":"c2","id":"i2"}}
+{"type":"response_item","payload":{"type":"custom_tool_call_output","output":"skill contents","call_id":"c2","id":"o2"}}
+{"type":"response_item","payload":{"type":"tool_search_call","status":"completed","arguments":{"query":"calendar tools","limit":3},"call_id":"c3","id":"i3"}}
+{"type":"response_item","payload":{"type":"tool_search_output","status":"completed","tools":[{"name":"calendar.search"}],"call_id":"c3","id":"o3"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}

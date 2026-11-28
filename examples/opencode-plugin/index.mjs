@@ -1,112 +1,24 @@
 import { dirname } from "path"
 import { fileURLToPath } from "url"
-import { createOpenVikingRuntime } from "./lib/plugin-runtime.mjs"
+import { loadConfig, resolveDataDir } from "./lib/config.mjs"
 import { startV2Plugin } from "./lib/v2-plugin.mjs"
-import { injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "./lib/mcp-config.mjs"
-import { fillHistorySession } from "./lib/session-history.mjs"
-import { keepNewestStartContext } from "./lib/session-inject.mjs"
-import { isRecallEnabled } from "./lib/shared/recall-core.mjs"
-import { log } from "./lib/utils.mjs"
+import { initLogger, log } from "./lib/utils.mjs"
 
 const pluginRoot = dirname(fileURLToPath(import.meta.url))
 
-export async function OpenVikingPlugin({ client, directory } = {}) {
-  const runtime = createOpenVikingRuntime({ client, directory, pluginRoot })
-  if (!runtime) return {}
-  await runtime.ready
-  return v1Hooks(runtime)
-}
-
-function v1Hooks(runtime) {
-  const {
-    config,
-    sessionManager,
-    repoContext,
-    recall,
-    sessionInject,
-    vikingUriGuard,
-    vikingUriNotice,
-  } = runtime
-
-  return {
-    config: async (opencodeConfig) => {
-      const injected = injectOpenVikingMcpConfig(opencodeConfig, pluginRoot, config.mcp.enabled)
-      if (injected) injectOpenVikingSkillPaths(opencodeConfig, pluginRoot)
-      const hookOnly = !config.mcp.enabled
-      log(
-        injected || hookOnly ? "INFO" : "WARN",
-        "mcp",
-        injected ? "Registered OpenViking MCP server" :
-          hookOnly ? "Skipped bundled MCP registration in hook-only mode" :
-            "OpenViking MCP server was not registered",
-      )
-    },
-
-    event: async ({ event }) => {
-      await sessionManager.handleEvent(event)
-      if (event?.type === "session.created") {
-        await repoContext.refreshRepos({ force: true })
-      }
-    },
-
-    "tool.execute.before": async (input, output) => {
-      fillHistorySession(sessionManager, { tool: input?.tool, sessionID: input?.sessionID, args: output?.args })
-      await vikingUriGuard(input, output)
-    },
-    "tool.execute.after": vikingUriNotice,
-
-    "experimental.chat.messages.transform": async (_input, output) => {
-      keepNewestStartContext((output.messages || []).map((message) => message.parts))
-    },
-
-    "experimental.chat.system.transform": (_input, output) => {
-      const prompt = repoContext.getRepoSystemPrompt()
-      if (prompt) output.system.push(prompt)
-    },
-
-    "chat.message": async (input, output) => {
-      try {
-        // opencode awaits this hook before persisting/broadcasting the user
-        // message, so serial awaits here stack remote latency onto message
-        // display (#5148). Session inject and recall are independent after
-        // entry; overlap them the way the dsh plugin does (#4643).
-        if (!isRecallEnabled(config)) {
-          await sessionInject.injectSessionContext(input, output)
-          return
-        }
-        await Promise.all([
-          sessionInject.injectSessionContext(input, output),
-          recall.injectRelevantMemories(input, output),
-        ])
-      } catch (error) {
-        log("WARN", "recall", "Auto recall failed", { error: error?.message ?? String(error) })
-      }
-    },
-
-    "experimental.session.compacting": async (input) => {
-      log("INFO", "compaction", "OpenCode session compacting", {
-        opencode_session: input.sessionID,
-      })
-      await sessionManager.flushSession(input.sessionID, {
-        commit: true,
-        reason: "experimental.session.compacting",
-      })
-    },
-
-    dispose: async () => {
-      await sessionManager.flushAll({ commit: true })
-      log("INFO", "plugin", "OpenViking plugin disposed")
-    },
-  }
+// OpenCode 1.x loads the plugin through `server()` or this named export.
+export async function OpenVikingPlugin({ directory } = {}) {
+  try {
+    initLogger(resolveDataDir(pluginRoot, loadConfig(pluginRoot, directory)))
+  } catch {}
+  log("WARN", "plugin", "OpenCode 1.x is no longer supported by this version of the OpenViking plugin; it does nothing. Upgrade to OpenCode 2.")
+  return {}
 }
 
 const OpenVikingV2Plugin = {
   id: "openviking",
   async setup(ctx) {
-    const directory = ctx?.location?.project?.directory || ctx?.location?.directory
-    const runtime = createOpenVikingRuntime({ directory, pluginRoot })
-    if (!runtime) return
-    return startV2Plugin(ctx, runtime, { pluginRoot })
+    return startV2Plugin(ctx, { pluginRoot })
   },
   async server(input) {
     return OpenVikingPlugin(input)

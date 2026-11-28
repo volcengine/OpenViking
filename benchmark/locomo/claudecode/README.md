@@ -34,17 +34,17 @@ All four use the same QA / judge / stats pipeline (`eval.py` → `judge.py` →
      wants it running inside a tmux session so the runner can restart it
      across snapshots — set `OPENVIKING_SERVER_TMUX=<session>` (default
      `ovserver`).
-   - Point at your clone of [`claude-code-memory-plugin`][plugin]:
+   - Point at your clone of [`agent-hook-plugin`][plugin]:
      ```bash
-     export OPENVIKING_PLUGIN_DIR=$HOME/Dev/OpenViking/examples/claude-code-memory-plugin
+     export OPENVIKING_PLUGIN_DIR=$HOME/Dev/OpenViking/examples/agent-hook-plugin
      ```
      This is referenced from `config/ov-hooks.json` and from
-     `scripts/auto-capture.mjs`.
+     `scripts/capture.mjs`.
    - Optional: `export OPENVIKING_CLI_CONFIG_FILE=$HOME/.openviking/ovcli-local.conf`
      to pin the local OV target and avoid leaking prod URLs from the
      user-shell's `claude` wrapper.
 
-[plugin]: https://github.com/OpenViking/openviking/tree/main/examples/claude-code-memory-plugin
+[plugin]: https://github.com/OpenViking/openviking/tree/main/examples/agent-hook-plugin
 
 ## Running
 
@@ -81,7 +81,7 @@ and saved to `.tmp/result-<mode>/summary.txt`. Per-question CSVs land in
   `--input-format stream-json` mode and streams the messages one at a time
   through stdin. The plugin's Stop hook auto-captures per turn; SessionEnd
   fires once per LoCoMo session (one commit per session). The benchmark's
-  `scripts/auto-capture.mjs` shim extracts the LoCoMo per-message timestamp
+  `scripts/capture.mjs` hook extracts the LoCoMo per-message timestamp
   so OV event archive dates line up with conv chronology.
 - `eval.py` — drives QA. Per-question `claude -p`; reads `MEMORY.md` for
   Prompted mode, talks to OV via auto-recall hook + MCP for the OV modes.
@@ -110,7 +110,7 @@ benchmark/locomo/claudecode/
 │   ├── ov-qa.conf                 # auto-capture off, auto-recall on
 │   └── sys-prompts/               # optional system prompts (unused in default flows)
 ├── scripts/
-│   └── auto-capture.mjs           # LoCoMo-aware Stop-hook (per-message created_at)
+│   └── capture.mjs                # LoCoMo-aware capture hook (per-message created_at)
 └── .tmp/                          # gitignored; data, snapshots, results
     ├── locomo10.json              # ← drop dataset here
     ├── legacy/                    # historical scripts/configs/reports kept aside

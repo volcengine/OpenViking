@@ -1,0 +1,14 @@
+{
+  "what": "a completion without a tool_use_id is skipped",
+  "read": {
+    "event": "postToolUse",
+    "payload": {
+      "conversation_id": "c1",
+      "tool_use_id": "",
+      "tool_name": "Shell"
+    }
+  },
+  "expect": {
+    "skip": "missing_tool_identity"
+  }
+}

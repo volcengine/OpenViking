@@ -12,9 +12,9 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import test from "node:test";
 
-import { WORKSPACE_PEER_HINT } from "./lib/doctor-core.mjs";
-import { resolveWorkspaceIdentity } from "./lib/workspace-identity.mjs";
-import { PEER_SOURCE_PRESETS } from "./lib/workspace-peer.mjs";
+import { WORKSPACE_PEER_HINT } from "../agent-hook-plugin/lib/doctor-core.mjs";
+import { resolveWorkspaceIdentity } from "../agent-hook-plugin/lib/workspace-identity.mjs";
+import { PEER_SOURCE_PRESETS } from "../agent-hook-plugin/lib/workspace-peer.mjs";
 import { ROOT } from "./sync.mjs";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".vitepress", "design"]);
@@ -37,10 +37,7 @@ function walk(dir, match, out = []) {
   return out;
 }
 
-const REFERENCES = [
-  "examples/claude-code-memory-plugin/skills/ov-memory-doctor/reference.md",
-  "examples/codex-memory-plugin/skills/ov-memory-doctor/reference.md",
-];
+const REFERENCES = ["examples/skills/ov-memory-doctor/reference.md"];
 
 test("every surface that teaches the peer file quotes the same snippet", () => {
   const carriers = [
@@ -67,7 +64,7 @@ test("no document still promises the working directory, or a command that does n
     join(ROOT, "examples/workspace-config.example.json"),
     // The shared library ships to eight plugins; a comment naming a command
     // that does not exist travels just as far as a document does.
-    ...walk(join(ROOT, "examples", "memory-plugin-shared", "lib"), (p) => p.endsWith(".mjs")),
+    ...walk(join(ROOT, "examples", "agent-hook-plugin", "lib"), (p) => p.endsWith(".mjs")),
   ];
   assert.ok(files.length > 20, "the sweep found suspiciously few files");
 

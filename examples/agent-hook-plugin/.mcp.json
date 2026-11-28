@@ -1,0 +1,11 @@
+{
+  "openviking": {
+    "command": "node",
+    "args": [
+      "${CLAUDE_PLUGIN_ROOT}/servers/mcp-proxy.mjs"
+    ],
+    "env": {
+      "OPENVIKING_HOOK_SOURCE": "claude-code"
+    }
+  }
+}

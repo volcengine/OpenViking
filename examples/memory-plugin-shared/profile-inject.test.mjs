@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildProfileBlock, estimateTokens, isRepeatInjection, truncateToBytes } from "./lib/profile-inject.mjs";
+import { buildProfileBlock, estimateTokens, isRepeatInjection, truncateToBytes } from "../agent-hook-plugin/lib/profile-inject.mjs";
 
 const CATALOG = { skillCatalog: true, skillCatalogTokenBudget: 1200 };
 

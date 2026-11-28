@@ -1,0 +1,15 @@
+{
+  "what": "the prompt is the payload string, trimmed",
+  "read": {
+    "event": "user-prompt-submit",
+    "payload": {
+      "prompt": "  trimmed  ",
+      "transcript_path": "/x/t.jsonl"
+    }
+  },
+  "expect": {
+    "prompt": "trimmed",
+    "transcript": "/x/t.jsonl",
+    "resumed": ""
+  }
+}

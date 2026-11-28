@@ -1,0 +1,41 @@
+{
+  "what": "an MCP completion becomes a note naming the OpenViking tool, placed after the transcript's current turns",
+  "read": {
+    "event": "afterMCPExecution",
+    "payload": {
+      "conversation_id": "c1",
+      "transcript_path": "t.jsonl",
+      "tool_use_id": "read-1",
+      "tool_name": "read",
+      "mcp_server_name": "project-x-openviking",
+      "tool_input": "{\"uris\":\"viking://~/memories/x.md\"}",
+      "result_json": "{\"content\":[{\"type\":\"text\",\"text\":\"body\"}],\"isError\":false}"
+    },
+    "transcript": "tools.jsonl"
+  },
+  "expect": {
+    "note": {
+      "afterTurn": 3,
+      "tool": {
+        "type": "tool_result",
+        "tool_use_id": "read-1",
+        "name": "mcp__openviking__read",
+        "state": {
+          "input": {
+            "uris": "viking://~/memories/x.md"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "body"
+              }
+            ],
+            "isError": false
+          }
+        },
+        "is_error": false
+      }
+    }
+  }
+}

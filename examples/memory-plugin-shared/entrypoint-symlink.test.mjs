@@ -68,8 +68,6 @@ test("jsonc-edit runs its CLI through a symlinked directory", () => {
 for (const pluginDir of [
   "agent-plugins",
   "examples/agent-hook-plugin",
-  "examples/claude-code-memory-plugin",
-  "examples/codex-memory-plugin",
   "examples/dsh-memory-plugin",
   "examples/opencode-plugin",
 ]) {
@@ -88,24 +86,13 @@ test("sync runs through a symlinked directory", () => {
   withTemp((tmp) => {
     const tree = join(tmp, "tree");
     const shared = join(tree, "examples/memory-plugin-shared");
-    mkdirSync(join(shared, "lib"), { recursive: true });
+    mkdirSync(shared, { recursive: true });
+    mkdirSync(join(tree, "examples/agent-hook-plugin/lib"), { recursive: true });
     copyFileSync(join(ROOT, "examples/memory-plugin-shared/sync.mjs"), join(shared, "sync.mjs"));
     for (const { skill } of SKILL_TARGETS) mkdirSync(join(tree, "examples/skills", skill), { recursive: true });
     const result = runThroughLink(tmp, tree, "examples/memory-plugin-shared/sync.mjs");
     assert.equal(result.status, 0, output(result));
-    assert.ok(existsSync(join(shared, "lib/MANIFEST")), output(result));
-  });
-});
-
-test("the pi experiment's credentials CLI runs through a symlinked directory", () => {
-  withTemp((tmp) => {
-    const result = runThroughLink(
-      tmp,
-      join(ROOT, "examples/pi-experimental-context-management/shared"),
-      "credentials.mjs",
-    );
-    assert.equal(result.status, 2, output(result));
-    assert.match(result.stderr, /usage: ov-credentials\.mjs/u);
+    assert.match(result.stdout, /synced /, output(result));
   });
 });
 

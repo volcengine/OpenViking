@@ -3,15 +3,12 @@ import { afterEach, test } from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPluginConfig } from "./lib/plugin-config.mjs";
-import { buildProxyConnection } from "./lib/credentials.mjs";
-import { createOvHttp } from "./lib/ov-http.mjs";
+import { buildPluginConfig } from "../agent-hook-plugin/lib/plugin-config.mjs";
+import { buildProxyConnection } from "../agent-hook-plugin/lib/credentials.mjs";
+import { createOvHttp } from "../agent-hook-plugin/lib/ov-http.mjs";
 import { withMockOpenViking, writeJson } from "./testing/support.mjs";
 
-import { makeAgentFetchJSON } from "./lib/agent-hook-runtime.mjs";
-import { makeFetchJSON as ccMakeFetchJSON } from "../claude-code-memory-plugin/scripts/lib/ov-session.mjs";
-import { makeFetchJSON as codexMakeFetchJSON } from "../codex-memory-plugin/scripts/ov-session.mjs";
-import { OpenVikingClient } from "../dsh-memory-plugin/client.mjs";
+import { makeAgentFetchJSON } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 import { fetchJSON as opencodeFetchJSON } from "../opencode-plugin/lib/utils.mjs";
 import { OVClient } from "../pi-coding-agent-extension/client.ts";
 
@@ -60,24 +57,12 @@ const API_KEY_ONLY = {
 
 const STACKS = [
   {
-    name: "claude-code session helper",
-    send: (cfg) => ccMakeFetchJSON(cfg)("/health", {}, { actorPeerId: cfg.peerId }),
-  },
-  {
-    name: "codex session helper",
-    send: (cfg) => codexMakeFetchJSON(cfg, { getActorPeerId: () => cfg.peerId }).fetchJSONRes("/health"),
-  },
-  {
     name: "thin agent hook runtime",
     send: (cfg) => makeAgentFetchJSON(cfg, process.cwd()).fetchJSON("/health"),
   },
   {
     name: "opencode client",
     send: (cfg) => opencodeFetchJSON(cfg, "/health", {}, { actorPeerId: cfg.peerId }),
-  },
-  {
-    name: "dsh client",
-    send: (cfg) => new OpenVikingClient(cfg).fetchJSON("/health"),
   },
   {
     name: "pi client",

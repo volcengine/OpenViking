@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { resolveConnection } from "./lib/credentials.mjs";
+import { resolveConnection } from "../agent-hook-plugin/lib/credentials.mjs";
 
 const installer = fileURLToPath(new URL("./install.sh", import.meta.url));
 const installerSource = readFileSync(installer, "utf8");
@@ -1237,7 +1237,7 @@ json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' 
     runtimeEnv.OPENVIKING_CONFIG_FILE = path;
     runtimeEnv.OPENVIKING_CLI_CONFIG_FILE = file;
     const runtime = spawnSync(process.execPath, ["--input-type=module", "--eval", `
-import { resolveConnection } from ${JSON.stringify(new URL("./lib/credentials.mjs", import.meta.url).href)};
+import { resolveConnection } from ${JSON.stringify(new URL("../agent-hook-plugin/lib/credentials.mjs", import.meta.url).href)};
 const connection = resolveConnection("agent-plugins", { rootKeyFallback: true });
 console.log(JSON.stringify({ baseUrl: connection.baseUrl, hasExpectedKey: connection.apiKey === "legacy-root-key" }));
 `], { env: runtimeEnv, encoding: "utf8", timeout: 10_000 });

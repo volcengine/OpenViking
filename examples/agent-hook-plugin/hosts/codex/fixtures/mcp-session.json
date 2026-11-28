@@ -1,0 +1,9 @@
+{
+  "what": "an MCP call's _meta.sessionId names the session",
+  "mcp": {
+    "meta": {
+      "sessionId": " 0193af-1 "
+    }
+  },
+  "expect": "cx-0193af-1"
+}

@@ -86,7 +86,7 @@ jobs:
           bash .github/scripts/reproducible-zip.sh "/tmp/memory-plugin-marketplace-${RELEASE_TAG}.zip" /tmp memory-plugin-marketplace
           # Claude Code (>= 2.1.224) installs and auto-updates from a URL
           # marketplace whose entry downloads this zip of the plugin alone.
-          bash .github/scripts/reproducible-zip.sh "/tmp/openviking-memory-claude-${RELEASE_TAG}.zip" "${STAGE}" claude-code-memory-plugin
+          bash .github/scripts/reproducible-zip.sh "/tmp/openviking-memory-claude-${RELEASE_TAG}.zip" "${STAGE}" agent-hook-plugin
           bash .github/scripts/generate-claude-marketplace-json.sh \
             "https://ovrelease.tos-cn-beijing.volces.com/releases/${RELEASE_TAG}/openviking-memory-claude.zip" \
             "/tmp/openviking-memory-claude-${RELEASE_TAG}.zip" "${STAGE}" /tmp/claude-marketplace.json
@@ -174,10 +174,10 @@ jobs:
           CLAUDE_PLUGIN_ZIP="/tmp/openviking-memory-claude-${RELEASE_TAG}.zip"
           SHARED_INSTALL="/tmp/memory-plugin-shared-install.sh"
           SHARED_BOOTSTRAP="examples/memory-plugin-shared/bootstrap.sh"
-          CLAUDE_INSTALL="examples/claude-code-memory-plugin/setup-helper/install.sh"
-          CODEX_INSTALL="examples/codex-memory-plugin/setup-helper/install.sh"
-          CLAUDE_TOS_INSTALL="examples/claude-code-memory-plugin/setup-helper/tos-install.sh"
-          CODEX_TOS_INSTALL="examples/codex-memory-plugin/setup-helper/tos-install.sh"
+          CLAUDE_INSTALL="examples/agent-hook-plugin/hosts/claude-code/setup-helper/install.sh"
+          CODEX_INSTALL="examples/agent-hook-plugin/hosts/codex/setup-helper/install.sh"
+          CLAUDE_TOS_INSTALL="examples/agent-hook-plugin/hosts/claude-code/setup-helper/tos-install.sh"
+          CODEX_TOS_INSTALL="examples/agent-hook-plugin/hosts/codex/setup-helper/tos-install.sh"
 
           # Versioned, immutable copies
           upload "${SOURCE_ZIP}" "releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "${ZIP_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"

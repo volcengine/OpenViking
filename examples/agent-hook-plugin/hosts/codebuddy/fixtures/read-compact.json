@@ -1,0 +1,14 @@
+{
+  "what": "SessionStart(compact) is a resumption whose answer does not reach the model",
+  "read": {
+    "event": "session-start",
+    "payload": {
+      "session_id": "s",
+      "source": "compact"
+    }
+  },
+  "expect": {
+    "resumed": "compact",
+    "defer": true
+  }
+}

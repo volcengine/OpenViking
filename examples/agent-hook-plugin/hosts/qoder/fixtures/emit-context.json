@@ -1,0 +1,15 @@
+{
+  "what": "an injection carries hookSpecificOutput without a decision",
+  "emit": {
+    "event": "user-prompt-submit",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "UserPromptSubmit",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

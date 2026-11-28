@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OPENVIKING_PLUGIN_KIND } from "./capture.mjs";
+import { OPENVIKING_PLUGIN_KIND } from "./decode.mjs";
 import { guardVikingUri, noticeVikingUri } from "./uri-guard.mjs";
 
 test("uri guard blocks every DSH filesystem tool that accepts paths", async () => {

@@ -1,0 +1,141 @@
+{
+  "what": "a session stored with the old top-level cursor resumes past it",
+  "decode": {
+    "transcript": "tools.jsonl",
+    "cursor": {
+      "lastTurnId": "0",
+      "capturedTurnIds": [
+        "0:user"
+      ]
+    }
+  },
+  "cursor": {
+    "lastTurnId": "19",
+    "capturedTurnIds": [
+      "0:user",
+      "4:assistant",
+      "19:assistant"
+    ]
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "I'll run these in order."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_gel7bmogur8v92luo66ya5ha",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "ls",
+            "description": "List files in current folder"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_gel7bmogur8v92luo66ya5ha",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "Stdout: hello.txt\n\nStderr: (empty)\nExit Code: 0\nSignal: (none)"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_e7iov7jnew19vw8tnk1umbdz",
+          "tool_name": "Read",
+          "tool_status": "running",
+          "tool_input": {
+            "file_path": "/home/dev/scratch/probe-ws/hello.txt"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_e7iov7jnew19vw8tnk1umbdz",
+          "tool_name": "Read",
+          "tool_status": "completed",
+          "tool_output": "1→hello from the probe\n<system-reminder data-role=\"tool-hint\">Read lines 1-1 of 1 (21 bytes).</system-reminder>"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_awdod3pj33eghm1ualati120",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "cat missing-file.txt",
+            "description": "Attempt to read a missing file"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_awdod3pj33eghm1ualati120",
+          "tool_name": "Bash",
+          "tool_status": "error",
+          "tool_output": "Stdout: (empty)\nStderr: cat: missing-file.txt: No such file or directory\n\nExit Code: 1\nSignal: (none)"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_qx66hu8reayd7fll5bf1ya7h",
+          "tool_name": "ToolSearch",
+          "tool_status": "running",
+          "tool_input": {
+            "tool_names": [
+              "mcp__probe__echo",
+              "mcp__probe__fail"
+            ]
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_qx66hu8reayd7fll5bf1ya7h",
+          "tool_name": "ToolSearch",
+          "tool_status": "completed",
+          "tool_output": "Found 2 tool(s). Use DeferExecuteTool to invoke them.\n\n## mcp__probe__echo\nEcho the given text back.\n\nParameters:\n```json\n{\n  \"type\": \"object\",\n  \"required\": [\n    \"text\"\n  ],\n  \"properties\": {\n    \"text\": {\n      \"type\": \"string\"\n    }\n  },\n  \"additionalProperties\": true\n}\n```\n\n## mcp__probe__fail\nAlways fails with an error.\n\nParameters:\n```json\n{\n  \"type\": \"object\",\n  \"required\": [],\n  \"properties\": {},\n  \"additionalProperties\": true\n}\n```"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_8ac0m03c7qf8vz5ixe0mzuci",
+          "tool_name": "mcp__probe__echo",
+          "tool_status": "running",
+          "tool_input": {
+            "text": "ping"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_8ac0m03c7qf8vz5ixe0mzuci",
+          "tool_name": "mcp__probe__echo",
+          "tool_status": "completed",
+          "tool_output": "echo: ping"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_z9s87q5ogmk4pubb1qrbny5b",
+          "tool_name": "mcp__probe__fail",
+          "tool_status": "running",
+          "tool_input": {}
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_z9s87q5ogmk4pubb1qrbny5b",
+          "tool_name": "mcp__probe__fail",
+          "tool_status": "error",
+          "tool_output": "probe failure"
+        }
+      ],
+      "turn_id": "4"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "All five steps completed in order: `ls` showed hello.txt, Read returned its contents, `cat missing-file.txt` failed as expected, probe `echo` returned \"ping\", and probe `fail` errored as expected."
+        }
+      ],
+      "turn_id": "19"
+    }
+  ]
+}

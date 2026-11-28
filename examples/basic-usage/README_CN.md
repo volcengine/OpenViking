@@ -238,7 +238,7 @@ memories = client.find(
 - [配置指南](../../docs/zh/guides/01-configuration.md)：先确认当前配置模型，再过渡到共享部署。
 - [快速开始：服务端模式](../../docs/zh/getting-started/03-quickstart-server.md)：正确启动 `openviking-server`。
 - [MCP 集成指南](../../docs/zh/guides/06-mcp-integration.md)：接入 Claude Code、Cursor、Claude Desktop、OpenClaw 等 MCP 宿主。
-- [Claude Code 记忆插件](../claude-code-memory-plugin/README.md)：在 Claude Code 中使用 OpenViking 长期记忆。
+- [Claude Code 记忆插件](../agent-hook-plugin/hosts/claude-code/README.md)：在 Claude Code 中使用 OpenViking 长期记忆。
 - [OpenCode 插件](../opencode-plugin/INSTALL-ZH.md)：在 OpenCode 中使用 OpenViking 仓库上下文与记忆工具。
 - [OpenClaw 插件](../openclaw-plugin/README_CN.md)：与 OpenClaw 集成。
 

@@ -1,0 +1,10 @@
+{
+  "what": "a write event prints {} whatever it carries",
+  "emit": {
+    "event": "Stop",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {}
+}

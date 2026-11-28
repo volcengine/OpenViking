@@ -1,0 +1,20 @@
+{
+  "name": "openviking-memory",
+  "version": "1.0.0",
+  "description": "Long-term semantic memory for Claude Code, powered by OpenViking. Auto-recall relevant memories at session start and capture important information during conversations.",
+  "author": {
+    "name": "OpenViking",
+    "url": "https://github.com/volcengine/OpenViking"
+  },
+  "repository": "https://github.com/volcengine/OpenViking",
+  "license": "Apache-2.0",
+  "keywords": [
+    "memory",
+    "openviking",
+    "semantic-search",
+    "long-term-memory",
+    "context-engine"
+  ],
+  "mcpServers": "./.mcp.json",
+  "types": "./mods/usage/types.d.ts"
+}

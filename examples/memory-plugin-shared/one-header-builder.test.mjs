@@ -16,10 +16,10 @@
 
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import test from "node:test";
 
-import { ASSEMBLED_ROOTS, ROOT, SHARED_DIR, TARGETS } from "./sync.mjs";
+import { ROOT, SHARED_DIR, TARGETS } from "./sync.mjs";
 
 const PEER_HEADER = "X-OpenViking-Actor-Peer";
 const BUILDER = join(SHARED_DIR, "ov-http.mjs");
@@ -27,7 +27,7 @@ const OPENCLAW = join(ROOT, "examples", "openclaw-plugin");
 
 // Whoever the sync ships to is who this covers, so a new harness is guarded
 // the day it is added rather than the day someone remembers this file.
-const ROOTS = [...TARGETS.map((target) => target.root), ...ASSEMBLED_ROOTS, SHARED_DIR]
+const ROOTS = [...TARGETS.map((target) => target.root), dirname(SHARED_DIR)]
   .filter((root) => root !== OPENCLAW);
 
 const SOURCE_EXTENSIONS = [".mjs", ".js", ".cjs", ".ts", ".mts"];

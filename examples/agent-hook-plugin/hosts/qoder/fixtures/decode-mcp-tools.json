@@ -1,0 +1,198 @@
+{
+  "what": "an mcp_call is unwrapped to the tool it names, and an error result says so",
+  "decode": {
+    "transcript": "mcp-tools.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Do these steps in order, one tool call each: 1) run the shell command ls in this folder; 2) read the file hello.txt with the Read tool; 3) run the shell command: cat missing-file.txt (it will fail, that is expected); 4) call the MCP tool echo from the probe server with text 'ping'; 5) call the MCP tool fail from the probe server. Then reply with one short sentence summarizing."
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "I'll run these steps in order. Starting with the `ls` command."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_3wi866ud6r4lc15wp3g62xaa",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "ls",
+            "description": "List files in current directory"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_3wi866ud6r4lc15wp3g62xaa",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "hello.txt"
+        }
+      ],
+      "turn_id": "11"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call_00_9m0t7niply5nbdmfzyjjlm75",
+          "tool_name": "Read",
+          "tool_status": "running",
+          "tool_input": {
+            "file_path": "/home/dev/scratch/probe-ws/hello.txt"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_9m0t7niply5nbdmfzyjjlm75",
+          "tool_name": "Read",
+          "tool_status": "completed",
+          "tool_output": "1\thello from the probe\n2"
+        }
+      ],
+      "turn_id": "17"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call_00_xfesaog3jv0nt4ntthm3slea",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "cat missing-file.txt",
+            "description": "Attempt to read a missing file"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_xfesaog3jv0nt4ntthm3slea",
+          "tool_name": "Bash",
+          "tool_status": "error",
+          "tool_output": "Exit code 1\ncat: missing-file.txt: No such file or directory"
+        }
+      ],
+      "turn_id": "22"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Now fetching the `echo` tool schema before calling it."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_ralshtkkrnlho6onrekx8fee",
+          "tool_name": "mcp_get",
+          "tool_status": "running",
+          "tool_input": {
+            "toolName": "mcp__probe__echo"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_ralshtkkrnlho6onrekx8fee",
+          "tool_name": "mcp_get",
+          "tool_status": "completed",
+          "tool_output": "{\"name\":\"mcp__probe__echo\",\"description\":\"Echo the given text back.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]},\"serverName\":\"probe\",\"originalName\":\"echo\"}"
+        }
+      ],
+      "turn_id": "27"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Step 4: calling the `echo` MCP tool."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_jsrb2qij9chgilgwnnswbi6x",
+          "tool_name": "mcp__probe__echo",
+          "tool_status": "running",
+          "tool_input": {
+            "text": "ping"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_jsrb2qij9chgilgwnnswbi6x",
+          "tool_name": "mcp__probe__echo",
+          "tool_status": "completed",
+          "tool_output": "echo: ping"
+        }
+      ],
+      "turn_id": "32"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Now fetching the `fail` tool schema, then I'll call it."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_l1dxhxia2ygrid2gntimfdye",
+          "tool_name": "mcp_get",
+          "tool_status": "running",
+          "tool_input": {
+            "toolName": "mcp__probe__fail"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_l1dxhxia2ygrid2gntimfdye",
+          "tool_name": "mcp_get",
+          "tool_status": "completed",
+          "tool_output": "{\"name\":\"mcp__probe__fail\",\"description\":\"Always fails with an error.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}},\"serverName\":\"probe\",\"originalName\":\"fail\"}"
+        }
+      ],
+      "turn_id": "38"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call_00_ny27cluhxhswagu79dc8zt0a",
+          "tool_name": "mcp__probe__fail",
+          "tool_status": "running",
+          "tool_input": {}
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_ny27cluhxhswagu79dc8zt0a",
+          "tool_name": "mcp__probe__fail",
+          "tool_status": "error",
+          "tool_output": "probe failure"
+        }
+      ],
+      "turn_id": "43"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "All five steps completed: `ls` showed hello.txt, the Read succeeded (hello from the probe), `cat missing-file.txt` failed as expected, MCP `echo` returned \"ping\", and MCP `fail` returned its expected \"probe failure\" error."
+        }
+      ],
+      "turn_id": "48"
+    }
+  ]
+}

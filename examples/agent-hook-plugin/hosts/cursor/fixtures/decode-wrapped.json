@@ -1,0 +1,68 @@
+{
+  "what": "the user's words lose the timestamp and user_query wrapper; identical turns at different positions are both kept",
+  "decode": {
+    "transcript": "wrapped.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "fix the build"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "<user_query>quoted</user_query> done"
+        }
+      ],
+      "turn_id": "1"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "turn_id": "3"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "ok then"
+        }
+      ],
+      "turn_id": "4"
+    }
+  ],
+  "cursor": {
+    "lastTurnId": "4",
+    "capturedTurnIds": [
+      "81a916713eeb9e4cea696113a82c9a0cc641201f54357ebb1a340b3f4b25ab68",
+      "985e066bbb6df4dca2cd6243238ecf7572ed8c22aca0cb0baae896728342e939",
+      "e7e49b40044bf229fcb274e5894f482dd113dace85266b56dfcc8be48bd3a6f4",
+      "f26d800ac9533461f7e7c79fd269cc9f419976459108e2face5522f9b7a8eda4",
+      "9bfe963f95a9c379888a52985986218f9b5cd0bff4b6028e6d787532e17cbb7c"
+    ]
+  }
+}

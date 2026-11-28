@@ -1,0 +1,50 @@
+{
+  "what": "a user request is unwrapped, a planner's call is paired with the result after it, and the result header is stripped",
+  "decode": {
+    "transcript": "first-turn.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "What is the retry budget?"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "ag-2-0",
+          "tool_name": "run_command",
+          "tool_status": "running",
+          "tool_input": {
+            "CommandLine": "grep -c retry app.toml"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-0",
+          "tool_name": "run_command",
+          "tool_status": "completed",
+          "tool_output": "3"
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "The retry budget is three attempts."
+        }
+      ],
+      "turn_id": "4"
+    }
+  ]
+}

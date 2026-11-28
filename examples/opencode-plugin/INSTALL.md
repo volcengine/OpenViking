@@ -5,13 +5,15 @@ This plugin adds one unified OpenViking plugin for OpenCode:
 - OpenViking MCP tools for memory, resources, and code context
 - Long-term memory, session synchronization, lifecycle commit, and automatic recall
 
-This is the only OpenCode plugin example maintained in this repository. It does not install `skills/openviking/SKILL.md`, and it does not require the agent to use the `ov` command. Model tools are provided by the same stdio MCP proxy used by the Claude Code and Codex memory plugins.
+This is the only OpenCode plugin example maintained in this repository. It does not require the agent to use the `ov` command. Model tools are provided by the same stdio MCP proxy used by the other OpenViking memory plugins.
+
+User guide: [OpenCode](../../docs/en/agent-integrations/10-opencode.md). Shared behaviour (capture and commits, recall, session-start context, offline retries, subagents, compaction): [capability reference](../../docs/en/agent-integrations/16-capability-reference.md). OpenCode 1.x is not supported: the plugin writes one line saying so to its log and does nothing.
 
 ## Prerequisites
 
 Prepare the following first:
 
-- OpenCode 1.15.7+ or OpenCode 2.0.15+
+- OpenCode 2.0.15+
 - OpenViking HTTP Server
 - Node.js 18+
 - A valid OpenViking API key if authentication is enabled on the server
@@ -48,7 +50,7 @@ To enable it through OpenCode's package plugin mechanism instead:
 }
 ```
 
-This `plugin` entry works on both v1 and v2. OpenCode v2 normalizes it to the native `plugins` form at load time, so no manual config migration is required.
+OpenCode v2 normalizes it to the native `plugins` form at load time, so no manual config migration is required.
 
 ## Installation Method 3: Source Install
 
@@ -78,6 +80,7 @@ After installation, the layout should look like this:
 ├── openviking.js
 └── openviking/
     ├── index.mjs
+    ├── host.mjs
     ├── package.json
     ├── lib/
     └── servers/
@@ -89,56 +92,31 @@ The top-level `openviking.js` forwards the first-level `.js` entry that OpenCode
 export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 ```
 
-This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`.
-Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
+This wrapper is only for source installs with the directory layout shown above. npm package installs load `index.mjs` directly through `package.json`. Use the `.js` wrapper for source installs; OpenCode's local plugin scanner discovers JavaScript/TypeScript plugin files.
 
 If you install through an npm package, you can also use `examples/opencode-plugin` as a normal OpenCode plugin package.
 
 ## Configuration
 
-Behaviour knobs live in the shared client configuration file:
-
-```bash
-~/.openviking/ovcli.conf
-```
-
-Example configuration:
+Settings live in the shared client configuration file `~/.openviking/ovcli.conf`, in the shared `plugin` section or in the `plugin.opencode` override (which wins for OpenCode):
 
 ```json
 {
   "url": "http://127.0.0.1:1933",
   "api_key": "your-api-key-here",
   "plugin": {
-    "recallLimit": 6,
     "opencode": {
       "enabled": true,
       "mcpEnabled": true,
       "timeoutMs": 30000,
       "repoContext": true,
-      "repoContextCacheTtlMs": 60000,
-      "autoRecall": true,
-      "scoreThreshold": 0.35,
-      "recallMaxContentChars": 500,
-      "recallPreferAbstract": true,
-      "recallTokenBudget": 2000,
-      "minQueryLength": 3,
-      "commitTokenThreshold": 20000,
-      "profileTokenBudget": 10000,
-      "skillCatalog": true,
-      "skillCatalogTokenBudget": 1200,
-      "resumeContextBudget": 32000
+      "repoContextCacheTtlMs": 60000
     }
   }
 }
 ```
 
-Keys in `plugin` apply to every harness; keys in `plugin.opencode` apply to this one and override them. Resolution is `OPENVIKING_*` environment variables → the workspace's `.openviking/config.json`, `.openviking/config.local.json` and machine registry entry → `plugin.opencode` → `plugin` → built-in defaults. Every knob, with its type, default, range, environment variable and accepted older spellings, is declared in [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs).
-
-`recallLimit` is a legacy quota-scaling input, not a final result cap.
-Explicit values from 1 through 5 produce an effective total quota of 6 because
-each coding category keeps one retrieval slot.
-
-The first message of each session carries a hidden `<openviking-context source="session-start">` block with your `profile.md`, the `preferences/` and `entities/` memory indexes, and an `<available-skills>` catalog: your own skills first, then the account-shared ones under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours. `profileTokenBudget` covers the profile and memory indexes; the catalog has its own budget, `skillCatalogTokenBudget` (default `1200`, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`). When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. `skillCatalog: false` (`OPENVIKING_SKILL_CATALOG=0`) or a budget of `0` turns the catalog off; with no skills, or on a server without `GET /api/v1/skills`, it is left out.
+`repoContext` injects indexed `viking://resources/` repositories into the system prompt; `dataDir` moves the runtime files. Every other setting, the resolution order, identity headers and peers are described in [client configuration](../../docs/en/configuration/02-client.md).
 
 It is recommended to provide the API key through an environment variable instead of writing it into the configuration file:
 
@@ -146,16 +124,11 @@ It is recommended to provide the API key through an environment variable instead
 export OPENVIKING_API_KEY="your-api-key-here"
 ```
 
-API keys are resolved from environment variables or `~/.openviking/ovcli.conf` and sent as `Authorization: Bearer ...` by both hooks and the MCP proxy. `account` and `user` are trusted-mode identity headers sent as `X-OpenViking-Account` and `X-OpenViking-User`; an `api_key` server reads both out of the key, so the plugin withholds them there. `peerId` is sent as `X-OpenViking-Actor-Peer` on data-plane memory/resource requests; captured session messages store it as body `peer_id`.
-
-`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `ovcli.conf`.
-
-For advanced setups, use `OPENVIKING_CLI_CONFIG_FILE` to point to an `ovcli.conf` at another path.
+`OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER`, and `OPENVIKING_PEER_ID` take precedence over the corresponding values in `ovcli.conf`. For advanced setups, use `OPENVIKING_CLI_CONFIG_FILE` to point to an `ovcli.conf` at another path.
 
 ### Hook-only mode
 
-If another MCP server already exposes OpenViking, set the bundled MCP registration to `false` while
-keeping this plugin's lifecycle hooks active:
+If another MCP server already exposes OpenViking, set the bundled MCP registration to `false` while keeping this plugin's lifecycle hooks active:
 
 ```json
 {
@@ -165,8 +138,7 @@ keeping this plugin's lifecycle hooks active:
 }
 ```
 
-Repository context, automatic recall, message capture, and lifecycle commits remain enabled. This
-does not add or overwrite OpenCode's `mcp.openviking` entry.
+Repository context, automatic recall, message capture, and lifecycle commits remain enabled. This does not add or overwrite OpenCode's `mcp.openviking` entry.
 
 ## Verify
 
@@ -200,34 +172,8 @@ curl http://localhost:1933/health
 
 ## Available MCP Tools
 
-The plugin registers OpenViking's stdio MCP proxy through OpenCode config. The server's real `tools/list` response is the source of truth; current OpenViking servers expose:
+The plugin registers OpenViking's stdio MCP proxy through OpenCode config. The server's real `tools/list` response is the source of truth; OpenCode namespaces the tools as `openviking_*`.
 
-- `openviking_search`: deep semantic retrieval across memories, resources, and skills; use `mode="context"` for balanced, injection-ready context.
-- `openviking_find`: fast semantic retrieval.
-- `openviking_remember`: store important facts or decisions for memory extraction.
-- `openviking_read`: read one or more `viking://` files.
-- `openviking_download`: get a one-time URL for fetching a file's original bytes with `curl`.
-- `openviking_list`: list a `viking://` directory.
-- `openviking_tree`: show a `viking://` directory tree.
-- `openviking_grep`: exact text or regex search.
-- `openviking_glob`: glob file matching.
-- `openviking_write`: create, overwrite, or append to a `viking://` file.
-- `openviking_edit`: exact string replacement in a `viking://` file.
-- `openviking_add_resource`: add a URL, local file, sitemap, or feed.
-- `openviking_add_skill`: create or replace a skill from its full `SKILL.md` text (`data`), or install one from a Git URL or a local `SKILL.md`, skill directory, or `.zip` (`path`); `target_uri="viking://agent/skills"` shares it with the account.
-- `openviking_forget`: delete a `viking://` URI after explicit user confirmation.
-- `openviking_list_watches` / `openviking_cancel_watch`: inspect or cancel resource watches.
-- `openviking_health`: check OpenViking server health.
-
-Usage guidance:
-
-- Use `openviking_search` for conceptual questions.
-- Use `openviking_grep` for exact symbols, function names, class names, or error strings.
-- Use `openviking_glob` to enumerate files.
-- Use `openviking_read` to read content.
-- Use `openviking_list` to explore directory structure.
-- Before following a skill from `<available-skills>`, read its `SKILL.md` with `openviking_read`; create, install, or share a skill with `openviking_add_skill`.
-- Before deleting anything, obtain explicit user confirmation first; then call `openviking_forget`.
 - If an agent tries to use OpenCode's local `read`, `glob`, or `grep` tools on a `viking://` URI, the plugin blocks that call and points it to the MCP tools.
 - A `bash` command that contains a `viking://` URI still runs; the plugin appends a notice pointing to the MCP tools to its output, which the agent can ignore when the URI is intentional.
 

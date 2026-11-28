@@ -1,0 +1,29 @@
+{
+  "what": "a subagent's message names its author; its activity is a tool result",
+  "decode": {
+    "transcript": "subagent.jsonl"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "[agent-message reviewer -> main]\nFound a pairing bug."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "subagent-activity:subagent-event-1",
+          "tool_name": "sub_agent_activity",
+          "tool_status": "completed",
+          "tool_output": "{\"agent_thread_id\":\"thread-1\",\"agent_path\":\"reviewer\",\"kind\":\"started\",\"occurred_at_ms\":1234}"
+        }
+      ]
+    }
+  ]
+}

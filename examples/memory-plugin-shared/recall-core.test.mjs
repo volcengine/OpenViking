@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveKnobs } from "./lib/config-schema.mjs";
+import { resolveKnobs } from "../agent-hook-plugin/lib/config-schema.mjs";
 import {
   buildContextSearchBody,
   buildRecallEndpointBody,
@@ -13,7 +13,7 @@ import {
   estimateTokens,
   postRecall,
   readPeerScopeDowngrade,
-} from "./lib/recall-core.mjs";
+} from "../agent-hook-plugin/lib/recall-core.mjs";
 
 async function tempPath(name) {
   const dir = await mkdtemp(join(tmpdir(), "ov-recall-"));

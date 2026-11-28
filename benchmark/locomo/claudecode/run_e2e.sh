@@ -6,7 +6,7 @@
 #   - Each LoCoMo session is fed turn-by-turn into one `claude -p`
 #     subprocess (stream-json input). Plugin's auto-capture (Stop hook) and
 #     session-end (SessionEnd hook) push memories into OpenViking. The
-#     benchmark's auto-capture wrapper adds per-message `created_at` so
+#     benchmark's capture hook adds per-message `created_at` so
 #     event archive dates line up with conv timestamps.
 #   - After ingest, snapshot HOME + OV data.
 #   - QA loops over conv-* in series; before each conv we restore the OV
@@ -17,7 +17,7 @@
 #   ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY
 #   ANTHROPIC_BASE_URL
 #   ANTHROPIC_MODEL
-#   OPENVIKING_PLUGIN_DIR           - path to claude-code-memory-plugin
+#   OPENVIKING_PLUGIN_DIR           - path to agent-hook-plugin
 #   OPENVIKING_DATA_DIR             - default: ~/.openviking/data
 #   OPENVIKING_SERVER_TMUX          - tmux session name running openviking-server
 #                                     (default "ovserver"); used to Ctrl-C/restart
@@ -27,7 +27,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-: "${OPENVIKING_PLUGIN_DIR:?set to claude-code-memory-plugin dir}"
+: "${OPENVIKING_PLUGIN_DIR:?set to agent-hook-plugin dir}"
 export LOCOMO_BENCHMARK_DIR="$SCRIPT_DIR"
 
 OV_DATA_DIR="${OPENVIKING_DATA_DIR:-$HOME/.openviking/data}"

@@ -1,0 +1,12 @@
+{
+  "what": "sessionStart injects additional_context",
+  "emit": {
+    "event": "sessionStart",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "additional_context": "BLOCK"
+  }
+}

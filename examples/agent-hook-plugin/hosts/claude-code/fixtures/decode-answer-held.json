@@ -1,0 +1,27 @@
+{
+  "what": "a final answer the transcript already holds is not sent twice",
+  "decode": {
+    "transcript": "tools.jsonl",
+    "cursor": {
+      "capturedTurnCount": 5
+    },
+    "payload": {
+      "hook_event_name": "Stop",
+      "last_assistant_message": "The notes say: buy milk, call bob."
+    }
+  },
+  "cursor": {
+    "capturedTurnCount": 6
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "The notes say: buy milk, call bob."
+        }
+      ]
+    }
+  ]
+}

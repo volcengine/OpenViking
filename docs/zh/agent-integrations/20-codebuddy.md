@@ -26,11 +26,9 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## 安装内容
 
-安装器在 `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/` 下组装自包含插件（共享 hook 运行时与适配器同目录），将其注册为名为 `openviking` 的本地 marketplace，并通过 CodeBuddy CLI 完成安装。插件包含：
+安装器在 `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/` 下组装自包含插件，将其注册为名为 `openviking` 的本地 marketplace，并通过 CodeBuddy CLI 完成安装。插件包含生命周期 Hook、以 stdio 代理形式提供的 OpenViking MCP 服务（含 `search`、`read`、`remember`、`add_skill` 等工具），以及 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 五个 skill。
 
-- 生命周期 Hook：加载画像、提问时召回、捕获对话、提交 session，以及 `viking://` URI 保护。
-- 以 stdio 代理形式提供的 OpenViking MCP 服务，含 `search`、`read`、`remember`、`add_skill` 等工具。
-- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 五个 skill。
+hook 与 MCP 从 `~/.openviking/ovcli.conf` 读取同一份凭据。`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.codebuddy` 下（见[插件配置](../configuration/02-client.md#插件配置)）。会话在 OpenViking 中记为 `cb-<session id>`。
 
 ## 验证
 
@@ -38,21 +36,18 @@ curl -fsSL https://openviking.ai/install | bash
 2. 新建一个交互式会话，确认 `openviking` MCP 服务已连接。
 3. 告诉 CodeBuddy 一条测试偏好并正常结束会话。记忆抽取完成后，在同一工作区新建会话询问它。
 
-## 工作原理
+## 宿主特有的行为
 
-- **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
-- **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。宿主自动生成的续写轮次会被跳过，因此宿主自己产生的轮次不会触发检索。
-- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
-- **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
-- 压缩或恢复之后，下一次 **UserPromptSubmit** 还会追加一段简短说明，给出会话的 OpenViking id 以及用来查回之前确切细节的 `session_history` MCP 工具。Agent 没传该工具的 `session` 参数时，MCP 代理从调用中补上。
+CodeBuddy 注册 `SessionStart`、`UserPromptSubmit`、`Stop`、`PreCompact`、`SessionEnd`，以及作用于 `Read|Write|Edit|Glob|Grep` 的 `PreToolUse` URI 保护。捕获、提交、召回、离线队列等共享行为见[能力参考](./16-capability-reference.md)。
 
-hook 与 MCP 从 `~/.openviking/ovcli.conf` 读取同一份凭据，不会在服务端、账号或用户上各说各话。`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.codebuddy` 下（见[插件配置](../configuration/02-client.md#插件配置)）。会话在 OpenViking 中记为 `cb-<session id>`。
+- `SessionEnd` **只在交互式 TUI 触发**。headless 会话（`-p`、`--input-format stream-json`）在每次 `Stop` 捕获，但没有会话结束时的提交。
+- CodeBuddy Code 2.185.0 之前 `UserPromptSubmit` 只在 TUI 触发；从 2.185.0 起 headless `-p` 运行同样会触发。没有它就没有召回。
+- 宿主自动生成的续写轮次不当作提问，不会触发召回。
+- `SessionStart` 注入的上下文在压缩或 `--resume` 之后会丢失，因此画像和会话历史说明随下一次 `UserPromptSubmit` 送达。
+- URI 保护不检查 Shell 命令：该宿主的 `PreToolUse` 只能拒绝，因此只匹配文件工具。
+- 不采集子代理。
 
-### 宿主决定的行为
-
-`SessionEnd` **只在交互式 TUI 触发**，因此 headless 会话（`-p`、`--input-format stream-json`）只在 `Stop` 捕获，不发收尾提交。CodeBuddy Code 2.185.0 之前 `UserPromptSubmit` 也只在 TUI 触发；从 2.185.0 起 headless `-p` 运行同样会触发。`SessionStart` 不带 `cwd`，且同一会话内可能投递两次，因此该 hook 是幂等的，并以进程工作目录兜底。hook 超时会被杀，但其子进程不会，这正是提交能在 hook 进程返回后由分离的 worker 完成的原因。
-
-暂不支持子代理采集：宿主会触发 `SubagentStart`/`SubagentStop`，但共享 dispatcher 还没有子代理阶段。经过实测的宿主契约与 transcript 格式记录在 [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md)。
+经过实测的宿主契约与 transcript 格式记录在 [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md)。
 
 ## 升级与卸载
 

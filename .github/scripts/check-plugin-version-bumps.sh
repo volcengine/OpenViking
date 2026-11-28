@@ -21,8 +21,8 @@ cd "$ROOT"
 
 # <plugin directory>:<manifest holding the version>
 PLUGINS=(
-  "examples/claude-code-memory-plugin:examples/claude-code-memory-plugin/.claude-plugin/plugin.json"
-  "examples/codex-memory-plugin:examples/codex-memory-plugin/.codex-plugin/plugin.json"
+  "examples/agent-hook-plugin:examples/agent-hook-plugin/.claude-plugin/plugin.json"
+  "examples/agent-hook-plugin:examples/agent-hook-plugin/.codex-plugin/plugin.json"
   "examples/agent-hook-plugin:examples/agent-hook-plugin/plugin.json"
   "examples/opencode-plugin:examples/opencode-plugin/package.json"
   "examples/dsh-memory-plugin:examples/dsh-memory-plugin/package.json"
@@ -30,11 +30,10 @@ PLUGINS=(
   "examples/magpie-memory-plugin:examples/magpie-memory-plugin/package.json"
 )
 
-# A change to the shared library reaches every plugin, and it no longer reaches
-# them through a vendored copy inside their directory: the config-driven hook
-# hosts have the runtime assembled at install time, and the packaged plugins
+# A change to the shared library reaches every plugin, and it does not reach
+# them through a vendored copy inside their directory: the packaged plugins
 # build their copies at pack time. So the library counts as a change to all.
-SHARED_LIB="examples/memory-plugin-shared/lib"
+SHARED_LIB=("examples/agent-hook-plugin/lib" "examples/memory-plugin-shared/lib")
 
 read_version() { # read_version <ref-or-empty> <path>
   local ref="$1" path="$2" json
@@ -58,6 +57,8 @@ process.stdin.on("end", () => {
 # CodeBuddy and Qoder resolve an installed plugin by the manifest version, so
 # keep them aligned with the integration and root manifests.
 PAIRED=(
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/.claude-plugin/plugin.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/.codex-plugin/plugin.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/cursor/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/trae/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/zcode/openviking.integration.json"
@@ -85,7 +86,7 @@ for entry in "${PLUGINS[@]}"; do
   manifest="${entry#*:}"
 
   # Test-only edits do not change the distributed plugin runtime.
-  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "$dir" "$SHARED_LIB" \
+  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "$dir" "${SHARED_LIB[@]}" \
     ':(exclude)**/*.test.mjs' ':(exclude)**/tests/**' | grep -v '/node_modules/' || true)"
   [ -n "$changed" ] || continue
 

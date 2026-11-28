@@ -1,0 +1,40 @@
+{
+  "what": "a last line still being written holds back its step",
+  "decode": {
+    "transcript": "partial.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "What is the retry budget?"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "ag-2-0",
+          "tool_name": "run_command",
+          "tool_status": "running",
+          "tool_input": {
+            "CommandLine": "grep -c retry app.toml"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-0",
+          "tool_name": "run_command",
+          "tool_status": "completed",
+          "tool_output": "3"
+        }
+      ],
+      "turn_id": "2"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "what": "without the rollout file the Stop payload and the noted prompt are the turn",
+  "decode": {
+    "notes": [
+      {
+        "prompt": "what is the retry budget?",
+        "at": 1
+      }
+    ],
+    "payload": {
+      "responseText": "Three attempts."
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "what is the retry budget?"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Three attempts."
+        }
+      ]
+    }
+  ]
+}

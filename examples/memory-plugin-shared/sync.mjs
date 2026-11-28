@@ -2,11 +2,11 @@
 
 import { realpathSync } from "node:fs";
 import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
+import { dirname, join, posix, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
+export const SHARED_DIR = join(ROOT, "examples", "agent-hook-plugin", "lib");
 
 // What a plugin ships equals what it imports, and neither side is written down.
 // Hand-kept lists were the drift: a group named after one harness got spread
@@ -27,16 +27,6 @@ export const TARGETS = [
     root: join(ROOT, "examples", "magpie-memory-plugin"),
     dir: join(ROOT, "examples", "magpie-memory-plugin", "shared"),
     committed: false,
-  },
-  {
-    root: join(ROOT, "examples", "claude-code-memory-plugin"),
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"),
-    committed: true,
-  },
-  {
-    root: join(ROOT, "examples", "codex-memory-plugin"),
-    dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"),
-    committed: true,
   },
   {
     root: join(ROOT, "agent-plugins"),
@@ -67,14 +57,7 @@ export const TARGETS = [
   },
 ];
 
-// cursor, trae, trae-cn and zcode vendor no runtime: the installer copies the
-// canonical runtime to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`
-// and they import it by the relative path that resolves both there and here.
-export const ASSEMBLED_ROOTS = [
-  join(ROOT, "examples", "agent-hook-plugin"),
-];
-
-export const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
+export const GENERATED_HEADER = "// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.\n";
 
 // A data file a module reads beside itself (`new URL("./x.json",
 // import.meta.url)`) is part of that module's closure like an import, but its
@@ -89,206 +72,21 @@ export const DATA_TARGETS = [
 ];
 
 // Skills are copied verbatim — a generated-from banner ahead of the `---`
-// frontmatter would break every skill loader.
-//
-// One entry per copy, the shape TARGETS uses, so the same assertions reach both
-// kinds of generated file. `committed` is true for every skill copy: .gitignore
-// covers the vendored shared/ directories only, and each host installs a skill
-// by copying its path out of this repository, so a copy git does not hold ships
-// nothing. Being a skill under examples/skills is not what ships it — an entry
-// here is.
+// frontmatter would break every skill loader. `committed` means what it means
+// for TARGETS. agent-plugins keeps its own hook-free openviking-memory, and
+// OpenClaw its own operator skill in that one's place.
 export const SKILLS_DIR = join(ROOT, "examples", "skills");
-export const SKILL_TARGETS = [
-  // openviking-memory is not shipped to openclaw-plugin: its REST tool surface
-  // has its own operator skill (openviking-context-database) with different
-  // tool names. Nor to agent-plugins, whose copy of this one skill is a
-  // deliberately different hook-free variant.
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
-    committed: true,
-  },
-  // The harnesses that bundle skills. agent-plugins has no hooks, so no
-  // session-start catalog: there the skill is the only way the model learns
-  // that the skills in OpenViking exist.
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "agent-plugins", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
-    committed: true,
-  },
-  // The harnesses that ship the experience workflow today. Where capture sends
-  // no tool parts (agent-plugins, Cursor; dsh with captureToolResults off),
-  // the copy only retrieves and applies Experience, and its reads feed no
-  // trajectory back to the server.
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "agent-plugins", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "openclaw-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
-    committed: true,
-  },
-  // MCP hosts discover rule_search dynamically. OpenClaw exposes ov_rule_search
-  // through its REST client. Ship the workflow wherever the host bundles skills.
-  ...[
-    ["examples", "claude-code-memory-plugin", "skills"],
-    ["examples", "codex-memory-plugin", "skills"],
-    ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
-    ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
-    ["examples", "agent-hook-plugin", "hosts", "qoder", "skills"],
-    ["examples", "dsh-memory-plugin", "skills"],
-    ["examples", "pi-coding-agent-extension", "skills"],
-    ["examples", "opencode-plugin", "skills"],
-    ["examples", "openclaw-plugin", "skills"],
-    ["agent-plugins", "skills"],
-  ].map((path) => ({
-    skill: "openviking-rule-search",
-    dir: join(ROOT, ...path),
-    committed: true,
-  })),
-  // TRAE and ZCode read these from the user's skills directory, Kimi Code and
-  // Antigravity from the plugin itself.
-  ...["trae", "zcode", "kimicode", "antigravity"].flatMap((host) => [
-    "openviking-memory",
-    "openviking-skills",
-    "ov-experience-memory",
-    "openviking-rule-search",
-  ].map((skill) => ({
-    skill,
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", host, "skills"),
-    committed: true,
-  }))),
-  // Claude Code and Codex each document a doctor of their own under this name;
-  // every other harness shares this one.
-  ...[
-    ...["cursor", "trae", "zcode", "kimicode", "codebuddy", "qoder", "antigravity"]
-      .map((host) => ["agent-hook-plugin", "hosts", host, "skills"]),
-    ["opencode-plugin", "skills"],
-    ["pi-coding-agent-extension", "skills"],
-    ["dsh-memory-plugin", "skills"],
-  ].map((path) => ({
-    skill: "ov-memory-doctor",
-    dir: join(ROOT, "examples", ...path),
-    committed: true,
-  })),
+const HOOK_HOST_SKILLS = ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search", "ov-memory-doctor"];
+const SKILL_DIRS = [
+  { dir: "examples/agent-hook-plugin/skills", skills: HOOK_HOST_SKILLS, committed: true },
+  { dir: "examples/opencode-plugin/skills", skills: HOOK_HOST_SKILLS, committed: false },
+  { dir: "examples/dsh-memory-plugin/skills", skills: HOOK_HOST_SKILLS, committed: false },
+  { dir: "examples/pi-coding-agent-extension/skills", skills: HOOK_HOST_SKILLS, committed: false },
+  { dir: "examples/openclaw-plugin/skills", skills: ["ov-experience-memory", "openviking-rule-search"], committed: true },
+  { dir: "agent-plugins/skills", skills: ["openviking-skills", "ov-experience-memory", "openviking-rule-search"], committed: true },
 ];
+export const SKILL_TARGETS = SKILL_DIRS.flatMap(({ dir, skills, committed }) =>
+  skills.map((skill) => ({ skill, dir: join(ROOT, ...dir.split("/")), committed })));
 
 const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".ts", ".mts"]);
 const SKIPPED_DIRS = new Set(["node_modules", ".git", "dist", "coverage"]);
@@ -340,8 +138,7 @@ async function exists(path) {
  * The shared modules a target's own code imports directly.
  *
  * Everything under `root` except the vendored directory itself is the target's
- * own code — including re-export shims like claude-code's `scripts/lib/`, which
- * are the only importer of several modules.
+ * own code — including re-export shims, which may be the only importer of a module.
  */
 export async function directSharedImports({ root, dir }) {
   const seeds = new Set();
@@ -349,7 +146,8 @@ export async function directSharedImports({ root, dir }) {
   for (const file of await sourceFilesUnder(root, dir)) {
     const source = await readFile(file, "utf-8");
     for (const spec of importSpecifiers(source)) {
-      if (!spec.startsWith(".")) continue;
+      // A declaration named in a JSDoc type import travels with its module.
+      if (!spec.startsWith(".") || spec.endsWith(".d.mts")) continue;
       const resolved = resolvePath(dirname(file), spec);
       if (!resolved.startsWith(dir + sep)) continue;
       const name = resolved.slice(dir.length + 1);
@@ -381,29 +179,13 @@ export async function sharedClosure(seeds) {
     if (source === null) continue;
     generated.add(name);
     for (const spec of importSpecifiers(source)) {
-      if (spec.startsWith("./")) pending.push(spec.slice(2));
+      if (!spec.startsWith(".")) continue;
+      // Relative to the module, which may sit in a subdirectory of lib/.
+      const imported = posix.normalize(posix.join(posix.dirname(name), spec));
+      if (!imported.startsWith("..")) pending.push(imported);
     }
   }
   return [...generated].sort();
-}
-
-// The installer reads this file instead of computing the closure itself: it
-// runs against a marketplace archive, a flat layout where this generator finds
-// no plugin sources and would silently resolve an empty list.
-export const MANIFEST_PATH = join(SHARED_DIR, "MANIFEST");
-
-/** The closure the installer has to assemble for the harnesses that vendor nothing. */
-export async function assembledClosure() {
-  const seeds = new Set();
-  for (const root of ASSEMBLED_ROOTS) {
-    const { seeds: found, missing } = await directSharedImports({ root, dir: SHARED_DIR });
-    if (missing.length) {
-      const detail = missing.map((m) => `${m.name} (imported by ${m.importer})`).join(", ");
-      throw new Error(`the assembled runtime is missing: ${detail}`);
-    }
-    for (const seed of found) seeds.add(seed);
-  }
-  return sharedClosure([...seeds]);
 }
 
 /**
@@ -451,12 +233,19 @@ export async function resolveTargets() {
  * whether this one imports from TypeScript.
  */
 async function copySharedFile(file, targetDir, typed) {
-  await mkdir(targetDir, { recursive: true });
+  await mkdir(dirname(join(targetDir, file)), { recursive: true });
   const data = file.endsWith(DATA_EXTENSION);
   const names = typed && !data ? [file, `${file.slice(0, -4)}.d.mts`] : [file];
   for (const name of names) {
     const body = await readFile(join(SHARED_DIR, name), "utf-8").catch(() => null);
     if (body === null) continue;
+    // A declaration that has no module of its own travels with the one that imports it.
+    if (name.endsWith(".d.mts")) {
+      for (const spec of importSpecifiers(body)) {
+        const imported = posix.normalize(posix.join(posix.dirname(name), spec));
+        if (spec.startsWith(".") && spec.endsWith(".d.mts") && !names.includes(imported)) names.push(imported);
+      }
+    }
     // Written through a rename so a reader never sees half a module: the
     // marketplace staging script runs this generator, and it can run while a
     // test is byte-comparing the copies.
@@ -465,12 +254,6 @@ async function copySharedFile(file, targetDir, typed) {
     await writeFile(staging, data ? body : `${GENERATED_HEADER}${body}`, "utf-8");
     await rename(staging, target);
   }
-}
-
-async function writeManifest(files) {
-  const staging = `${MANIFEST_PATH}.${process.pid}.tmp`;
-  await writeFile(staging, files.map((file) => `${file}\n`).join(""), "utf-8");
-  await rename(staging, MANIFEST_PATH);
 }
 
 async function copySkill(skill, targetDir) {
@@ -490,7 +273,11 @@ async function copySkill(skill, targetDir) {
 /** Vendored copies the target no longer imports; the sync would never touch them again. */
 async function staleCopies(target, keep) {
   const stale = [];
-  for (const name of (await readdir(target.dir).catch(() => [])).sort()) {
+  const entries = await readdir(target.dir, { recursive: true, withFileTypes: true }).catch(() => []);
+  const names = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(target.dir, join(entry.parentPath, entry.name)).split(sep).join("/"));
+  for (const name of names.sort()) {
     if (name.endsWith(DATA_EXTENSION)) {
       // No banner to tell a copy by: one named after a lib/ data file is ours.
       if (!keep.includes(name) && (await exists(join(SHARED_DIR, name)))) stale.push(name);
@@ -498,6 +285,8 @@ async function staleCopies(target, keep) {
     }
     const module = name.endsWith(".d.mts") ? `${name.slice(0, -6)}.mjs` : name;
     if (!module.endsWith(".mjs") || keep.includes(module)) continue;
+    // A declaration with no module of its own came with the one that imports it.
+    if (name.endsWith(".d.mts") && !(await exists(join(SHARED_DIR, module)))) continue;
     const body = await readFile(join(target.dir, name), "utf-8");
     if (body.startsWith(GENERATED_HEADER)) stale.push(name);
   }
@@ -517,10 +306,8 @@ async function main() {
     }
   }
 
-  const assembled = await assembledClosure();
-  await writeManifest(assembled);
-  process.stdout.write(`wrote ${relative(ROOT, MANIFEST_PATH)}\n`);
-  for (const file of assembled) claimed.add(file);
+  const { seeds } = await directSharedImports({ root: dirname(SHARED_DIR), dir: SHARED_DIR });
+  for (const file of await sharedClosure(seeds)) claimed.add(file);
 
   const unclaimed = (await readdir(SHARED_DIR))
     .filter((file) => file.endsWith(".mjs") && !claimed.has(file))

@@ -1,0 +1,80 @@
+{
+  "what": "host blocks, quoted turns and host-authored records stay out; tool use after a user message is the assistant's; in_progress results are skipped",
+  "decode": {
+    "transcript": "markup.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "wrapped ask"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "c1",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "ls"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "c1",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "a.txt"
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "one file"
+        }
+      ],
+      "turn_id": "5"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "new ask"
+        }
+      ],
+      "turn_id": "6"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "bare ask"
+        }
+      ],
+      "turn_id": "7"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "the longer candidate"
+        }
+      ],
+      "turn_id": "8"
+    }
+  ]
+}

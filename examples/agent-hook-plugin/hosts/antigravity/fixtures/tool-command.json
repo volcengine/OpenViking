@@ -1,0 +1,14 @@
+{
+  "what": "a command line that mentions a URI gets no decision",
+  "tool": {
+    "payload": {
+      "toolCall": {
+        "name": "run_command",
+        "args": {
+          "CommandLine": "echo viking://user/default/memories/profile.md"
+        }
+      }
+    }
+  },
+  "expect": null
+}

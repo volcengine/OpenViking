@@ -80,6 +80,7 @@ jobs:
             examples/*/servers/*.test.mjs \
             examples/*/tests/*.test.mjs \
             examples/*-plugin/*.test.mjs \
+            examples/*/hosts/*/*.test.mjs \
             examples/memory-plugin-shared/*.test.mjs \
             agent-plugins/*.test.mjs \
             | grep -vFxf <(printf '%s\n' $INSTALLER_TESTS))
@@ -94,10 +95,10 @@ jobs:
         run: |
           bash -n .github/scripts/stage-memory-plugin-marketplace.sh
           bash -n examples/memory-plugin-shared/install.sh
-          bash -n examples/claude-code-memory-plugin/setup-helper/install.sh
-          bash -n examples/claude-code-memory-plugin/setup-helper/tos-install.sh
-          bash -n examples/codex-memory-plugin/setup-helper/install.sh
-          bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
+          bash -n examples/agent-hook-plugin/hosts/claude-code/setup-helper/install.sh
+          bash -n examples/agent-hook-plugin/hosts/claude-code/setup-helper/tos-install.sh
+          bash -n examples/agent-hook-plugin/hosts/codex/setup-helper/install.sh
+          bash -n examples/agent-hook-plugin/hosts/codex/setup-helper/tos-install.sh
 
   openclaw-tests:
     needs: check-deps

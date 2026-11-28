@@ -1,0 +1,70 @@
+{
+  "what": "failed steps are skipped, quoted envelopes are kept, an in-flight planner step stops the read",
+  "decode": {
+    "transcript": "statuses.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "What is the retry budget?"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "ag-2-0",
+          "tool_name": "run_command",
+          "tool_status": "running",
+          "tool_input": {
+            "CommandLine": "grep -c retry app.toml"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "ag-2-0",
+          "tool_name": "run_command",
+          "tool_status": "completed",
+          "tool_output": "3"
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "The retry budget is three attempts."
+        }
+      ],
+      "turn_id": "4"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "How is my prompt wrapped?"
+        }
+      ],
+      "turn_id": "6"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "The transcript wraps your prompt like this:\n<USER_REQUEST>your prompt</USER_REQUEST>\nKeep metadata separate."
+        }
+      ],
+      "turn_id": "11"
+    }
+  ]
+}

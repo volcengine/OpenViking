@@ -148,11 +148,23 @@ Settings for memory plugins live under `plugin`. Keys directly under it provide 
 }
 ```
 
-Many settings have a corresponding `OPENVIKING_*` environment variable: `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. `OPENVIKING_BYPASS_SESSION` also has a file setting, `plugin.bypassSession`; use the environment variable for a process-specific override. The full shared list is defined in `examples/memory-plugin-shared/lib/config-schema.mjs`. For usage, see the plugin READMEs: [Claude Code](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#configuration) and [Codex](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#tuning-the-plugin). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
+Many settings have a corresponding `OPENVIKING_*` environment variable: `OPENVIKING_RECALL_LIMIT` is `recallLimit`, `OPENVIKING_CAPTURE_ASSISTANT_TURNS` is `captureAssistantTurns`. `OPENVIKING_BYPASS_SESSION` also has a file setting, `plugin.bypassSession`; use the environment variable for a process-specific override. The full shared list is defined in `examples/agent-hook-plugin/lib/config-schema.mjs`. Which integrations read which settings is in the [capability reference](../agent-integrations/16-capability-reference.md#settings-and-workspace-files). List-valued knobs — `bypassSessionPatterns`, `recallQueryFilters`, `captureFilters` — are JSON arrays here, while their environment counterparts are comma-separated strings, so a value containing a literal comma can only be written in the array.
 
 Resolution order, highest first: environment variables → the [workspace layers](#workspace-configuration) → `plugin.<harness>` → `plugin` → the legacy per-harness block in `ov.conf` → built-in defaults. Separately launched hook processes reread the file on each invocation. Reload behavior for persistent plugins depends on the host; restart the agent when uncertain. Environment changes also require a restart because hooks inherit the agent’s environment.
 
 Memory plugins using the shared configuration loader read this section. See the corresponding [integration guide](../agent-integrations/01-overview.md) for supported fields and defaults. `ov-memory-doctor` prints what it resolved and warns about keys it does not recognise, naming the closest real one.
+
+### Commit Settings
+
+The memory plugins built on the shared loader commit before a host compaction and at session end. In between, the server commits: after a session's first write, the plugin gives the session an auto-commit policy built from these settings.
+
+| Setting | Environment variable | Default | Effect |
+|---|---|---|---|
+| `commitTokenThreshold` | `OPENVIKING_COMMIT_TOKEN_THRESHOLD` | `100000` | The server commits once the session holds this many pending tokens |
+| `commitIdleSeconds` | `OPENVIKING_COMMIT_IDLE_SECONDS` | `1800` | The server commits a session idle this long; `0` for none, and values under `300` count as `300`. Needs `memory.session_auto_commit.enabled` on the server |
+| `autoCommitOnCompact` | `OPENVIKING_AUTO_COMMIT_ON_COMPACT` | `true` | Commit before a host compaction |
+
+Threshold and idle commits need OpenViking server 0.4.13 or later; on an older server the session is committed only at a compaction or a session end. `commitTurnThreshold` and `commitKeepRecentCount` are no longer read by these plugins (OpenClaw keeps its own `commitKeepRecentCount`). `recallCompress` defaults to `off` for every plugin, Claude Code and Codex included; set it to `auto` for a recall digest.
 
 ## Workspace Configuration
 
@@ -194,7 +206,7 @@ No command writes the registry file. Create it by hand at the path `ov-memory-do
   "version": 1,
   "peer": { "source": "git" },
   "recall": { "peer_scope": "actor", "max_items": 20 },
-  "capture": { "commit_token_threshold": 20000 },
+  "capture": { "commit_token_threshold": 100000 },
   "labels": { "team": "search" }
 }
 ```
@@ -209,7 +221,7 @@ No command writes the registry file. Create it by hand at the path `ov-memory-do
 | `recall.max_items` | integer, `1`–`100` | Maximum recalled items |
 | `recall.score_threshold` | number, `0`–`1` | Minimum score for a recalled item |
 | `capture.enabled` | boolean | Whether the session is captured |
-| `capture.commit_token_threshold` | integer, `1000`–`1000000` | Tokens accumulated before a capture commits |
+| `capture.commit_token_threshold` | integer, `1000`–`1000000` | Pending tokens at which the server commits the session |
 | `bypass.session_patterns` | list of globs | A session whose id or working directory matches skips recall and capture |
 | `usage.view` / `usage.output` | string | Codex OV-Usage footer: `summary` / `expanded` / `off`, and `auto` / `terminal` / `desktop` |
 | `labels` | object | Free-form metadata for humans; not read by the plugins |
@@ -258,7 +270,7 @@ The other ways to set it, highest precedence first:
 | `{dir}` | The workspace root's directory name: the repository root, or the directory holding `.openviking/config.json` | The directory is not a workspace |
 | `{harness}` | The name of the agent running (`claude-code`, `codebuddy`, `codex`, `dsh`, `opencode`, `pi`, `cursor`, `trae`, `trae-cn`, `zcode`, `qoder`, `antigravity`) | Never — but the MCP proxy takes no part in derivation, so a read path that goes only through it cannot resolve it |
 
-In `/Users/x/Dev/OpenViking/examples/codex-memory-plugin` with `origin` `git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — the same value from any subdirectory, worktree, machine, or clone. Every clone of one repository therefore shares one peer, while a fork has a different `origin` and stays separate. The derivation reads the repository's files directly instead of running `git`, so it also works where `git` is missing from `PATH`, and the URL is normalized so that the ssh and https spellings of one repository agree and a token embedded in the URL never reaches the peer id.
+In `/Users/x/Dev/OpenViking/examples/agent-hook-plugin` with `origin` `git@github.com:volcengine/OpenViking.git`, the peer is `github.com-volcengine-openviking` — the same value from any subdirectory, worktree, machine, or clone. Every clone of one repository therefore shares one peer, while a fork has a different `origin` and stays separate. The derivation reads the repository's files directly instead of running `git`, so it also works where `git` is missing from `PATH`, and the URL is normalized so that the ssh and https spellings of one repository agree and a token embedded in the URL never reaches the peer id.
 
 #### By Situation
 

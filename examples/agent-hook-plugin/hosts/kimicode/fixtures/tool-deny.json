@@ -1,0 +1,17 @@
+{
+  "what": "a guarded file tool at a viking:// URI gets Kimi's permissionDecision deny",
+  "tool": {
+    "payload": {
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "viking://~/memories/profile.md"
+      }
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "viking:// URIs are OpenViking virtual paths, not local filesystem paths.\nUse OpenViking MCP read instead.\nExample: read(uri=\"viking://~/memories/profile.md\")"
+    }
+  }
+}

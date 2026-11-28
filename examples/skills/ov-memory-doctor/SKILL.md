@@ -1,25 +1,27 @@
 ---
 name: ov-memory-doctor
 description: >
-  Diagnose and fix the OpenViking memory integration on this machine: the install (hooks, MCP server, skills), the client configuration (ovcli.conf / ov.conf / OPENVIKING_* env) and the connection to the OpenViking server (reachability, 401/403, /mcp). Use whenever memory "isn't working": no <openviking-context> block, empty recall, captures not landing, missing or failing MCP memory tools, 401/403, right after installing or updating the integration or switching servers/keys, or when the user asks for its status. Triggers: "memory not working", "check OpenViking", "plugin status", "记忆没生效", "插件状态", "连不上 OpenViking", "recall 为空", "401".
+  Diagnose and fix the OpenViking memory integration on this machine: the install (plugin enablement, hooks, MCP server, skills), the client configuration (ovcli.conf / ov.conf / OPENVIKING_* env) and the connection to the OpenViking server (reachability, 401/403, /mcp). Use whenever memory "isn't working": no <openviking-context> block, empty recall, captures not landing, missing or failing MCP memory tools, 401/403, an offline statusline, right after installing or updating the integration or switching servers/keys, or when the user asks for its status. Triggers: "memory not working", "check OpenViking", "plugin status", "记忆没生效", "插件状态", "连不上 OpenViking", "recall 为空", "401".
+allowed-tools: Bash(node *ov-memory-doctor.mjs*)
 ---
 
 # OpenViking Memory Doctor
 
-Troubleshooting for the OpenViking memory integration in Cursor, TRAE, TRAE CN, ZCode, Antigravity, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, pi and DeepSeek Harness. Three things go wrong on a user's machine, each silently:
+Troubleshooting for the OpenViking memory integration in Claude Code, Codex, Cursor, TRAE, TRAE CN, ZCode, Antigravity, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, pi and DeepSeek Harness. Three things go wrong on a user's machine, each silently:
 
-- **Install** — the hooks and the MCP server the installer wrote into the host's configuration (Cursor, TRAE, ZCode) or shipped as a plugin the host loads (Antigravity, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, pi, DeepSeek Harness), the runtime beside them, and the skills. When these are wrong, nothing runs and nothing is logged anywhere.
-- **Configuration** — `~/.openviking/ovcli.conf`, `~/.openviking/ov.conf` and `OPENVIKING_*` environment variables, resolved as env → ovcli.conf → ov.conf → defaults. A malformed file reads as "no config" and the integration silently falls back to `http://127.0.0.1:1933` with no key; a stray env var silently overrides the file.
+- **Install** — the plugin the host loads (Claude Code, Codex, Antigravity, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, pi, DeepSeek Harness) or the hooks and MCP server the installer wrote into the host's configuration (Cursor, TRAE, ZCode), the runtime beside them, and the skills. When these are wrong, nothing runs and nothing is logged anywhere.
+- **Configuration** — `~/.openviking/ovcli.conf`, `~/.openviking/ov.conf` and `OPENVIKING_*` environment variables, resolved as env → ovcli.conf → ov.conf → defaults. A malformed file reads as "no config" and the integration silently falls back to `http://127.0.0.1:1933` with no key (Claude Code disables itself instead); a stray env var silently overrides the file.
 - **Connection** — on a self-hosted server `/health` answers 200 even with a bad key, so everything can look reachable while every real request 401s. On OpenViking Cloud the gateway authenticates `/health` and `/ready` too, so the same probe answers 401 without a key and says nothing about the url.
 
 When the resolved url is loopback, the server runs on this machine and the doctor adds a **Server health** section: whether anything listens on the port, plugin-only keys in `ov.conf` that make the server refuse to start, and `GET /ready`, the server's own per-subsystem verdict. For a remote server only `/ready` is probed. Everything else on the server side is `openviking-server doctor`, run in the server's Python environment.
 
 ## Step 1 — run the doctor
 
-Run the copy installed for the host this session runs in:
+Run the one command for the host this session runs in:
 
 | Host | Command |
 |---|---|
+| Claude Code, Codex, OpenCode, pi, DeepSeek Harness | `node <directory of this skill>/../../scripts/ov-memory-doctor.mjs` |
 | Cursor | `node ~/.openviking/agent-integrations/cursor/scripts/ov-memory-doctor.mjs` |
 | TRAE | `node ~/.openviking/agent-integrations/trae/scripts/ov-memory-doctor.mjs` |
 | TRAE CN | `node ~/.openviking/agent-integrations/trae-cn/scripts/ov-memory-doctor.mjs` |
@@ -28,17 +30,16 @@ Run the copy installed for the host this session runs in:
 | Kimi Code | `node "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs"` |
 | CodeBuddy Code | `node ~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/agent-integrations/codebuddy/scripts/ov-memory-doctor.mjs` |
 | Qoder CLI | `node ~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/agent-integrations/qoder/scripts/ov-memory-doctor.mjs` |
-| OpenCode, pi, DeepSeek Harness | `node <directory of this skill>/../../scripts/ov-memory-doctor.mjs` |
 
-On OpenCode, pi and DeepSeek Harness the doctor ships in the same plugin as this skill, two directories above it. With `OPENVIKING_HOME` set, the `~/.openviking` copies live under it instead. Options: `--json` (machine-readable), `--offline` (skip network probes), `--timeout <ms>` (per probe, default 5000), `--no-color`.
+On the hosts of the first row the doctor ships in the same plugin as this skill, two directories above it; on Claude Code and Codex it hands over to that host's own doctor, which it recognises from the environment (pass `claude-code` or `codex` as the first argument if it reports another client). With `OPENVIKING_HOME` set, the `~/.openviking` copies live under it instead. Options: `--json` (machine-readable), `--offline` (skip network probes), `--timeout <ms>` (per probe, default 5000), `--no-color`.
 
-The report has seven sections — Environment, Plugin install, Configuration, Workspace, Connection, Server health, Recent activity — and a Summary listing every ✗/⚠ with a fix. Read the whole report before acting: one root cause usually shows up in several sections (a bad key → "api key rejected" + "system/status → 401").
+The report has sections such as Environment, Plugin install, Configuration, Workspace, Connection, Server health and Recent activity, and a Summary listing every ✗/⚠ with a fix. Read the whole report before acting: one root cause usually shows up in several sections (a bad key → "api key rejected" + "system/status → 401").
 
 The API key is never printed in full. Three-segment keys are shown as `account=<a> user=<u> secret=abcd…wxyz` (the first two segments are base64url identity, decoded so the user can see which account/user the key claims). Other shapes are shown as `abcd…wxyz (N chars, unsupported format)`. Keep it that way in anything you show the user.
 
 ## Step 2 — map findings to causes
 
-Work top-down; fix the first ✗ and rerun before chasing the next.
+Work top-down; fix the first ✗ and rerun before chasing the next. Findings that only Claude Code or Codex report are in the host sections of [reference.md](reference.md).
 
 | Doctor finding | Meaning | Action |
 |---|---|---|
@@ -67,20 +68,26 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 | `api key rejected` then `system/status → 401 Invalid API Key` | Key invalid/revoked/for another deployment | Get the key re-issued; check nothing overrides ovcli.conf ("← env" in the Configuration section). |
 | `using the ROOT api key` / `403 ROOT API keys cannot access tenant-scoped data APIs` | `api_key` fell through to `ov.conf server.root_api_key`, or the root key was pasted | Use a user/admin key. |
 | `server is in trusted mode and needs account + user` | Server identity comes from headers | Set `account` and `user` in ovcli.conf. |
-| `configured account/user differ from the key's identity` | In `api_key` mode the server ignores the identity headers; data lands under the key's identity | Remove them or use a key for that identity. |
+| `configured account/user differ from the key's identity` / `plugin auth mode 'trusted' differs from the server's 'api_key'` | In `api_key` mode the server ignores the identity headers; data lands under the key's identity | Remove them (or set `OPENVIKING_AUTH_MODE=api_key`), or use a key for that identity. |
+| `request/capture timeout exceeds the hook budget` | The host kills the hook before the request finishes | Lower the timeout the finding names (`OPENVIKING_TIMEOUT_MS`, `OPENVIKING_RECALL_TIMEOUT_MS`, `OPENVIKING_CAPTURE_TIMEOUT_MS`). |
 | `POST /mcp tools/list → 404/406/502/504` while /health is fine | Reverse proxy not forwarding `/mcp`, rewriting `Accept`, or buffering SSE | Fix the proxy (`proxy_buffering off`, forward `/mcp`, pass `Authorization`). |
 | `proxy variables set` + curl works but hooks fail | Node's fetch ignores `HTTP(S)_PROXY`; no CA handling | `NODE_USE_ENV_PROXY=1` or `NODE_EXTRA_CA_CERTS=<ca.pem>` in the environment that launches the host. |
+| `MCP proxy last started against <other url>` | The proxy is a long-lived process; a changed url only takes effect after a restart | Restart the host. |
 | `one or more injection paths are switched off` | `OPENVIKING_AUTO_RECALL=0` / `OPENVIKING_AUTO_CAPTURE=0` or the matching `plugin.<client>` setting | Switch it back on if the user did not intend it. |
 | `no hook state … yet` / `no hook log … debug is on but no hook has run` | The host is not spawning the hooks at all | An install, registration or node problem, not a server problem. |
 | `no session has ever captured a turn` | The Stop hook runs but writes fail | Fix the Connection findings; failed writes are queued and replayed at the next session start. |
 | `ov.conf has a top-level '<harness>' block` / `server.url is rejected` | Plugin-only keys in the server's own config; the server refuses to start at its next restart | Move them to ovcli.conf (`plugin.<client>`, `url`) and delete them from ov.conf. |
 | `nothing listens on port … — the server is not running` | Server down or never started | Start it (`openviking-server`; first time `openviking-server init`). Ask before restarting a server the user runs. |
 | `/ready: embedding → error …` | The running server cannot call its embedding provider: recall searches nothing, commits extract nothing | Fix `embedding.*` in ov.conf and restart; `openviking-server doctor` prints the provider's reply. |
+| `/ready: vectordb → …` / `/ready: agfs → …` | Storage broken: disk full, two servers on one workspace, corrupted index | Server log; stop the duplicate; free disk. |
 | `server is still initializing (503 /ready)` | First start downloads a local embedding model, or init is slow | Wait and rerun; if it never finishes, read the server log. |
+| `docker container is up but has no ov.conf` | Official image started without a config mount (every request 503s) | Mount `~/.openviking` at `/app/.openviking`, or `docker exec -it openviking openviking-server init`. |
+
+More symptoms, exact error strings, where each piece lives and the per-host notes: [reference.md](reference.md).
 
 ## Step 3 — targeted checks (only when the report is not conclusive)
 
-Prove hooks run at all: put `OPENVIKING_DEBUG=1` in the environment that launches the host, run one turn, then read `~/.openviking/logs/<client>-hooks.log` (JSONL; grep `"error"`). An absent or unchanged log after a full turn means the hooks were not spawned. OpenCode, pi and DeepSeek Harness run in the host's own process and have no hooks log; the Recent activity section names the log each of them writes.
+Prove hooks run at all: put `OPENVIKING_DEBUG=1` in the environment that launches the host, run one turn, then read `~/.openviking/logs/<client>-hooks.log` (`cc-hooks.log` on Claude Code; JSONL; grep `"error"`). An absent or unchanged log after a full turn means the hooks were not spawned. OpenCode, pi and DeepSeek Harness run in the host's own process and have no hooks log; the Recent activity section names the log each of them writes.
 
 Prove the key and identity by hand (`Bearer` is case-sensitive with exactly one space):
 
@@ -99,9 +106,9 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$URL/mcp" \
   -H "Authorization: Bearer $KEY" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Prove a capture landed on a hook host: session state lives in `~/.openviking/hook-state/<client>/`, and the OpenViking session id is the host's own session id behind a prefix (`cu-` Cursor, `tr-` TRAE, `trcn-` TRAE CN, `zc-` ZCode, `ag-` Antigravity, `kc-` Kimi Code, `cb-` CodeBuddy Code, `qd-` Qoder CLI). `GET $URL/api/v1/sessions/<id>` (or `ov session get <id>`) should show the captured messages, and `commit_count > 0` proves extraction ran.
+Prove a capture landed: the OpenViking session id is the host's own session id behind a prefix (`cc-` Claude Code, `cx-` Codex, `cu-` Cursor, `tr-` TRAE, `trcn-` TRAE CN, `zc-` ZCode, `ag-` Antigravity, `kc-` Kimi Code, `cb-` CodeBuddy Code, `qd-` Qoder CLI), and hook hosts keep session state in `~/.openviking/hook-state/<client>/`. `GET $URL/api/v1/sessions/<id>` (or `ov session get <id>`) should show the captured messages, and `commit_count > 0` proves extraction ran.
 
-Second opinion from the CLI: `ov health` and `ov config validate` read the same `~/.openviking/ovcli.conf`. `ov config list` reveals whether a different profile was switched in with `ov config switch`, which also retargets the integration.
+Second opinion from the CLI: `ov health` and `ov config validate` read the same `~/.openviking/ovcli.conf`. `ov config list` reveals whether a different profile was switched in with `ov config switch`, which also retargets the integration unless env vars win.
 
 Server side (only meaningful when the server runs on this machine):
 
@@ -109,12 +116,13 @@ Server side (only meaningful when the server runs on this machine):
 curl -sS "$URL/ready"                       # agfs / vectordb / api_key_manager / embedding / ollama
 openviking-server doctor                    # in the server's own environment: config, native engine, embedding probe, VLM key, disk
 lsof -nP -iTCP:1933 -sTCP:LISTEN            # who owns the port
+docker logs --tail 100 openviking           # container deployments
 ```
 
 ## Fixing
 
 - Edit `~/.openviking/ovcli.conf` only with the user's agreement; show the change, keep unknown keys, keep mode 0600, never echo the key.
-- Install problems are fixed by re-running the installer for this host, not by editing the host's hook or MCP configuration by hand.
+- Install problems are fixed by re-running the installer for this host, not by editing the host's hook or MCP configuration by hand. The exceptions, the Claude Code and Codex switches named in reference.md, are edited only for the keys named there.
 - After changing `url`, installing or updating: restart the host or start a new session. Hooks re-read config per invocation, the MCP proxy does not.
 - Confirm the fix by rerunning the doctor, then by observing an `<openviking-context>` block on the next prompt.
 
@@ -130,3 +138,4 @@ lsof -nP -iTCP:1933 -sTCP:LISTEN            # who owns the port
 - `/health` returning 200 proves reachability only. Auth is proven by the identity fields with a key, or by `/api/v1/system/status`.
 - `ov doctor` is `openviking-server doctor`: it validates the server's own config and providers, and says nothing about this integration. Run it for provider-level failures, not first.
 - The doctor only reads. Never stop, restart or `kill` the user's server, or edit `ov.conf`, without asking.
+- Older proxy versions say "check that 'ov serve' is running" — there is no such command; the server is started with `openviking-server`.

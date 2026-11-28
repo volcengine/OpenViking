@@ -17,8 +17,6 @@ mkdir -p "${STAGE}"
 DIRS=(
   .claude-plugin
   .agents
-  claude-code-memory-plugin
-  codex-memory-plugin
   agent-hook-plugin
   opencode-plugin
   pi-coding-agent-extension

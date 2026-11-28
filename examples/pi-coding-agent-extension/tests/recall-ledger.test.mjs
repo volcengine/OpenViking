@@ -6,32 +6,10 @@ import { tmpdir } from "node:os";
 import { RecallManager } from "../recall.ts";
 import { RecallLedger, ledgerKey } from "../lib/recall-ledger.mjs";
 
-function config(overrides = {}) {
-  return {
-    minQueryLength: 3,
-    recallLimit: 6,
-    recallMaxContentChars: 500,
-    recallTokenBudget: 2000,
-    scoreThreshold: 0.35,
-    peerId: "",
-    ...overrides,
-  };
-}
-
-function clientReturning(rendered) {
-  return { fetchJSON: async () => ({ ok: true, result: { rendered } }) };
-}
-
-/** One provider request: run recall for the newest prompt, then inject into a
+/** One provider request: take the newest prompt's recall, then inject into a
  * fresh deep copy of the history — exactly what pi's context hook sees. */
 async function turn(recall, block, history, userEntryIds = null) {
-  recall.client = clientReturning(block);
-  const last = history[history.length - 1].content;
-  const prompt = typeof last === "string"
-    ? last
-    : last.filter((b) => b.type === "text").map((b) => b.text).join("");
-  recall.queueSearch(prompt);
-  await recall.searchPending();
+  recall.setBlock(block);
   const view = structuredClone(history);
   const entryIds = userEntryIds ?? view
     .filter((message) => message.role === "user")
@@ -48,7 +26,7 @@ async function turn(recall, block, history, userEntryIds = null) {
 
 test("historical user messages get their original block back, so the request prefix is stable across turns (#4137)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const recall = new RecallManager(new RecallLedger(dir));
   recall.openLedger("session-1");
 
   // Turn 1: [u1] with recall block b1
@@ -73,7 +51,7 @@ test("historical user messages get their original block back, so the request pre
   recall.invalidate();
 
   // Turn 3 after a process restart: a brand-new manager + ledger from disk.
-  const restarted = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const restarted = new RecallManager(new RecallLedger(dir));
   restarted.openLedger("session-1");
   const sent3 = await turn(restarted, "- b3 memory", [
     { role: "user", content: "u1 prompt" },
@@ -89,7 +67,7 @@ test("historical user messages get their original block back, so the request pre
 
 test("repeated identical prompts keep distinct blocks via stable entry ids", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const recall = new RecallManager(new RecallLedger(dir));
   recall.openLedger("session-2");
 
   const sent1 = await turn(recall, "- first continue block", [
@@ -109,7 +87,7 @@ test("repeated identical prompts keep distinct blocks via stable entry ids", asy
 
 test("missing entry ids fail closed without recording ordinal keys", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const recall = new RecallManager(new RecallLedger(dir));
   recall.openLedger("session-no-ids");
 
   const sent1 = await turn(recall, "- fresh b1", [
@@ -127,27 +105,9 @@ test("missing entry ids fail closed without recording ordinal keys", async () =>
   assert.match(sent2[2].content, /fresh b2/);
 });
 
-test("a short prompt records nothing and history it appears in stays un-injected", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
-  recall.openLedger("session-3");
-
-  const sent1 = await turn(recall, "- unused", [{ role: "user", content: "x" }]);
-  assert.equal(sent1[0].content, "x");
-  recall.invalidate();
-
-  const sent2 = await turn(recall, "- b2", [
-    { role: "user", content: "x" },
-    { role: "assistant", content: "a1" },
-    { role: "user", content: "real second prompt" },
-  ]);
-  assert.equal(sent2[0].content, "x", "no phantom block for a message that never had one");
-  assert.match(sent2[2].content, /b2/);
-});
-
 test("rewritten history misses cleanly instead of injecting into the wrong message", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const recall = new RecallManager(new RecallLedger(dir));
   recall.openLedger("session-4");
 
   await turn(recall, "- b1", [{ role: "user", content: "u1 prompt" }]);
@@ -164,7 +124,7 @@ test("rewritten history misses cleanly instead of injecting into the wrong messa
 
 test("stable entry ids restore the right blocks across compaction and /tree navigation", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const recall = new RecallManager(new RecallLedger(dir));
   recall.openLedger("session-compact");
 
   const beforeCompact = await turn(recall, "- first continue block", [
@@ -213,7 +173,7 @@ test("stable entry ids restore the right blocks across compaction and /tree navi
 
 test("array-content user messages round-trip through the ledger", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-ledger-"));
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const recall = new RecallManager(new RecallLedger(dir));
   recall.openLedger("session-5");
 
   const sent1 = await turn(recall, "- b1", [
@@ -242,7 +202,7 @@ test("a corrupt ledger file degrades to pre-ledger behaviour", async () => {
   assert.equal(files.length, 1);
   writeFileSync(join(dir, files[0]), "{not json");
 
-  const recall = new RecallManager(clientReturning(""), config(), () => null, new RecallLedger(dir));
+  const recall = new RecallManager(new RecallLedger(dir));
   recall.openLedger("session-6");
   const sent = await turn(recall, "- b2", [
     { role: "user", content: "u1 prompt" },

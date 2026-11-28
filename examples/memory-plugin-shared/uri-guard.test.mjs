@@ -14,7 +14,7 @@ import {
   normalizeToolName,
   preToolUseOutput,
   readToolEvent,
-} from "./lib/uri-guard.mjs"
+} from "../agent-hook-plugin/lib/uri-guard.mjs"
 
 test("findVikingUri detects common path and URI argument keys", () => {
   assert.equal(findVikingUri({ filePath: "viking://resources/a.md" }), "viking://resources/a.md")

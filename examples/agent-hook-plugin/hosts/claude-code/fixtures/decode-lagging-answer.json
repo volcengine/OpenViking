@@ -1,0 +1,59 @@
+{
+  "what": "at Stop a final answer the transcript does not hold yet is appended outside the cursor",
+  "decode": {
+    "transcript": "lagging.jsonl",
+    "payload": {
+      "hook_event_name": "Stop",
+      "last_assistant_message": "2 + 2 = 4."
+    }
+  },
+  "cursor": {
+    "capturedTurnCount": 3
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "What is 2+2?"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "toolu_09",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "echo $((2+2))"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "toolu_09",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "4"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "2 + 2 = 4."
+        }
+      ]
+    }
+  ]
+}

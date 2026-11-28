@@ -1,44 +1,82 @@
 import { readFile, readdir } from "node:fs/promises"
 import { join } from "node:path"
-import { isRecallEnabled } from "./shared/recall-core.mjs"
+import { createOpencodeHost } from "../host.mjs"
+import { loadConfig, resolveDataDir } from "./config.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
-import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
-import { fillHistorySession } from "./session-history.mjs"
-import { keepNewestStartContext } from "./session-inject.mjs"
-import { log } from "./utils.mjs"
+import { createRepoContext } from "./repo-context.mjs"
+import { runStage, toolCall } from "./shared/flow/index.mjs"
+import { initLogger, log } from "./utils.mjs"
 
 const METADATA_KEY = "openviking"
+// Where the 0.5 plugin kept its capture cursor; read until the flow stores its own.
 const CURSOR_KEY_PREFIX = "capture-cursor/"
-const LIFECYCLE_EVENTS = new Set([
-  "session.created",
-  "session.deleted",
+const EXECUTION_ENDS = new Set([
   "session.execution.succeeded",
   "session.execution.failed",
   "session.execution.interrupted",
-  "session.compaction.ended",
 ])
 
-export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
-  const {
-    config,
-    sessionManager,
-    repoContext,
-    recall,
-    sessionInject,
-    vikingUriGuard,
-    vikingUriNotice,
-  } = runtime
-  const captureCursors = new Map()
-  const sessionOwnership = new Map()
-  // Compaction hooks can run while lifecycle events are still flushing. Keep
-  // capture and flush ordered so the same pending message is never sent twice.
-  let sessionTask = Promise.resolve()
-  const serializeSession = (operation) => {
-    const task = sessionTask.then(operation)
-    sessionTask = task.catch(() => {})
-    return task
-  }
+export async function startV2Plugin(ctx, { pluginRoot }) {
   const directory = ctx?.location?.project?.directory || ctx?.location?.directory
+  const config = loadConfig(pluginRoot, directory)
+  const dataDir = resolveDataDir(pluginRoot, config)
+  initLogger(dataDir)
+  if (!config.enabled) {
+    log("INFO", "plugin", "OpenViking plugin is disabled in configuration")
+    return undefined
+  }
+  const host = createOpencodeHost({ dataDir, mcpEnabled: config.mcp.enabled })
+  const repoContext = createRepoContext({ config })
+  const sessions = new Map()
+  // Sessions seen and not yet ended, ended on dispose.
+  const live = new Set()
+
+  // What a session is: its parent (a subagent is captured under it) and its
+  // location. Looked up once; nothing here decides what is captured.
+  async function sessionInfo(sessionID, event) {
+    if (sessions.has(sessionID)) return sessions.get(sessionID)
+    let data = event?.type === "session.created" ? event.data : null
+    if (!data && ctx.session?.get) {
+      try {
+        const result = await ctx.session.get({ sessionID })
+        data = result?.data ?? result
+      } catch (error) {
+        logHookError("session.get", error)
+      }
+    }
+    const info = { parentID: data?.parentID ?? data?.parentId ?? "", location: event?.location ?? data?.location }
+    if (data) sessions.set(sessionID, info)
+    return info
+  }
+
+  async function payloadFor(sessionID, extra = {}) {
+    if (sessionID) live.add(sessionID)
+    const { parentID } = await sessionInfo(sessionID)
+    return { sessionID, parentID, directory, ...extra }
+  }
+
+  async function captureStage(event, sessionID) {
+    let messages = []
+    try {
+      const context = await ctx.session.context({ sessionID })
+      if (Array.isArray(context)) messages = context
+    } catch (error) {
+      logHookError(`${event}.context`, error)
+    }
+    const storedCursor = await storage("get", sessionID)
+    await runStage(host, event, await payloadFor(sessionID, { messages, storedCursor }), { cfg: config })
+  }
+
+  async function storage(op, sessionID) {
+    if (!ctx?.storage?.[op]) return undefined
+    try {
+      const value = await ctx.storage[op](CURSOR_KEY_PREFIX + sessionID)
+      return typeof value === "string" ? value : undefined
+    } catch (error) {
+      logHookError(`storage.${op}`, error)
+      return undefined
+    }
+  }
 
   if (config.mcp.enabled && ctx?.mcp?.transform) {
     let registered = false
@@ -64,17 +102,19 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
 
   if (ctx?.tool?.hook) {
     await ctx.tool.hook("execute.before", async (event) => {
-      await runtime.ready
-      fillHistorySession(sessionManager, { tool: event.tool, sessionID: event.sessionID, args: event.input })
-      await vikingUriGuard(
-        { tool: event.tool, args: event.input },
-        { args: event.input },
-      )
+      const output = toolCall(host, await payloadFor(event.sessionID, { tool: event.tool, input: event.input }), "execute.before")
+      // The host reads the arguments back by reference.
+      if (output.input && event.input && typeof event.input === "object") Object.assign(event.input, output.input)
+      if (output.deny) {
+        log("INFO", "viking-uri-guard", "Blocked filesystem tool for viking URI", { tool: event.tool })
+        throw new Error(output.deny)
+      }
     })
     await ctx.tool.hook("execute.after", async (event) => {
       try {
-        await runtime.ready
-        await noticeV2Tool(event, vikingUriNotice)
+        if (event?.status !== "completed") return
+        const { notice } = toolCall(host, { sessionID: event.sessionID, tool: event.tool, input: event.input }, "execute.before")
+        if (notice) appendToolResultText(event.result, notice)
       } catch (error) {
         logHookError("tool.execute.after", error)
       }
@@ -84,13 +124,12 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   if (ctx?.session?.hook) {
     await ctx.session.hook("prompt", async (event) => {
       try {
-        await runtime.ready
-        await prepareV2Prompt(event, {
-          directory,
-          recall,
-          sessionInject,
-          recallEnabled: isRecallEnabled(config),
-        })
+        if (!event?.sessionID || !event?.messageID) return
+        const payload = await payloadFor(event.sessionID, { messageID: event.messageID, prompt: event.prompt?.text })
+        const { context } = await runStage(host, "prompt", payload, { cfg: config })
+        if (!context) return
+        event.metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {}
+        event.metadata[METADATA_KEY] = { context: [context] }
       } catch (error) {
         logHookError("session.prompt", error)
       }
@@ -98,7 +137,6 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
 
     await ctx.session.hook("context", async (event) => {
       try {
-        await runtime.ready
         injectV2Context(event, repoContext)
       } catch (error) {
         logHookError("session.context", error)
@@ -107,64 +145,62 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
 
     await ctx.session.hook("compaction", async (event) => {
       try {
-        await runtime.ready
         // context() drops the old transcript as soon as compaction completes.
-        // Capture it now; the ended event below owns the commit.
-        await serializeSession(() => captureV2Context(ctx, sessionManager, captureCursors, event.sessionID))
+        await captureStage("compaction", event.sessionID)
       } catch (error) {
-        logHookError("session.compaction.capture", error)
+        logHookError("session.compaction", error)
       }
     })
   }
+
+  repoContext.refreshRepos({ force: true }).catch(() => {})
 
   const controller = new AbortController()
   let eventTask = Promise.resolve()
   if (ctx?.event?.subscribe) {
     eventTask = consumeEvents(ctx, controller.signal, async (event) => {
       const sessionID = event?.data?.sessionID ?? event?.data?.sessionId
-      if (!LIFECYCLE_EVENTS.has(event?.type) || !sessionID) return
-      if (!(await ownsSession(ctx, sessionOwnership, event, sessionID))) return
-      await serializeSession(async () => {
-        await runtime.ready
-        if (event.type === "session.execution.failed") {
-          log("WARN", "v2", "OpenCode v2 execution failed", {
-            opencode_session: sessionID,
-            error: event.data?.error?.message ?? event.data?.error,
-          })
-        }
-        if (isExecutionBoundary(event.type)) {
-          try {
-            await captureV2Context(ctx, sessionManager, captureCursors, sessionID)
-          } catch (error) {
-            logHookError("session.context.capture", error)
-          }
-        }
-        for (const normalized of normalizeV2LifecycleEvent(event)) {
-          await sessionManager.handleEvent(normalized)
-          if (normalized.type === "session.created") {
-            await repoContext.refreshRepos({ force: true })
-          }
-        }
-        if (event.type === "session.deleted") {
-          sessionOwnership.delete(sessionID)
-          await forgetCursor(ctx, captureCursors, sessionID)
-        }
-      })
+      if (!sessionID) return
+      const ended = EXECUTION_ENDS.has(event.type)
+      if (!ended && event.type !== "session.created" && event.type !== "session.deleted") return
+      if (!(await ownsSession(event, sessionID))) return
+      if (event.type === "session.execution.failed") {
+        log("WARN", "v2", "OpenCode v2 execution failed", {
+          opencode_session: sessionID,
+          error: event.data?.error?.message ?? event.data?.error,
+        })
+      }
+      if (event.type === "session.created") {
+        await runStage(host, "session.created", await payloadFor(sessionID), { cfg: config })
+        await repoContext.refreshRepos({ force: true })
+      } else if (ended) {
+        await captureStage("execution.ended", sessionID)
+      } else {
+        await captureStage("session.deleted", sessionID)
+        sessions.delete(sessionID)
+        live.delete(sessionID)
+        await storage("remove", sessionID)
+      }
     })
+  }
+
+  // The plugin event stream carries every location served by the process, and
+  // execution events have no envelope location, so ownership comes from the
+  // session itself. An unresolvable session is handled rather than dropped.
+  async function ownsSession(event, sessionID) {
+    if (event.location) return sameLocation(event.location, ctx.location)
+    if (event.type === "session.deleted" && !sessions.has(sessionID)) return true
+    const info = await sessionInfo(sessionID, event)
+    return sameLocation(info.location, ctx.location)
   }
 
   return async () => {
     controller.abort()
-    try {
-      await eventTask
-      await sessionTask
-      await runtime.ready
-      await runtime.background
-      await sessionManager.waitForBackground?.()
-      await sessionManager.flushAll({ commit: true })
-    } catch (error) {
-      logHookError("plugin.cleanup", error)
+    await eventTask.catch((error) => logHookError("plugin.cleanup", error))
+    for (const sessionID of live) {
+      await captureStage("session.deleted", sessionID).catch((error) => logHookError("plugin.cleanup", error))
     }
+    live.clear()
     log("INFO", "plugin", "OpenViking plugin disposed")
   }
 }
@@ -207,28 +243,18 @@ async function consumeEvents(ctx, signal, handle) {
   }
 }
 
-export async function prepareV2Prompt(event, {
-  directory,
-  recall,
-  sessionInject,
-  recallEnabled,
-}) {
-  const sessionID = event?.sessionID
-  const messageID = event?.messageID
-  if (!sessionID || !messageID) return
-  const text = event?.prompt?.text
-  const parts = typeof text === "string" && text.trim() ? [{ type: "text", text }] : []
-  const input = { sessionID, messageID, directory }
-  const blocks = (await Promise.all([
-    sessionInject.buildSessionContext(input).catch((error) => logHookError("session.prompt.profile", error)),
-    recallEnabled
-      ? recall.buildRelevantMemories(input, parts).catch((error) => logHookError("session.prompt.recall", error))
-      : undefined,
-  ])).filter(Boolean)
-  if (blocks.length === 0) return
+const START_CONTEXT = /<openviking-context source="session-start">\n[\s\S]*?\n<\/openviking-context>\n?/
 
-  event.metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {}
-  event.metadata[METADATA_KEY] = { context: blocks }
+// A compaction can keep the message that carried the start context (its recent
+// tail, an overflow replay), so a request keeps only the newest copy.
+export function keepNewestStartContext(partLists) {
+  const carriers = partLists.flatMap((parts) => (Array.isArray(parts) ? parts : [])
+    .filter((part) => typeof part?.text === "string" && START_CONTEXT.test(part.text))
+    .map((part) => [parts, part]))
+  for (const [parts, part] of carriers.slice(0, -1)) {
+    part.text = part.text.replace(START_CONTEXT, "")
+    if (!part.text.trim()) parts.splice(parts.indexOf(part), 1)
+  }
 }
 
 export function injectV2Context(event, repoContext) {
@@ -250,98 +276,13 @@ export function injectV2Context(event, repoContext) {
   keepNewestStartContext(event.messages.map((message) => message.content))
 }
 
-// The plugin event stream carries every location served by the process, and
-// execution events have no envelope location, so ownership comes from the
-// session itself. An unresolvable session is handled rather than dropped.
-async function ownsSession(ctx, ownership, event, sessionID) {
-  if (event.type === "session.created") {
-    const owned = sameLocation(event.location ?? event.data?.location, ctx.location)
-    ownership.set(sessionID, owned)
-    return owned
-  }
-  if (event.location) return sameLocation(event.location, ctx.location)
-  if (ownership.has(sessionID)) return ownership.get(sessionID)
-  if (event.type === "session.deleted" || !ctx.session?.get) return true
-  try {
-    const result = await ctx.session.get({ sessionID })
-    const location = (result?.data ?? result)?.location
-    if (location?.directory) {
-      const owned = sameLocation(location, ctx.location)
-      ownership.set(sessionID, owned)
-      return owned
-    }
-  } catch (error) {
-    logHookError("session.get", error)
-  }
-  return true
-}
-
 function sameLocation(ref, location) {
   if (!ref?.directory || !location?.directory) return true
   if (ref.directory !== location.directory) return false
   return !ref.workspaceID || !location.workspaceID || ref.workspaceID === location.workspaceID
 }
 
-export async function captureV2Context(ctx, sessionManager, cursors, sessionID) {
-  const messages = await ctx.session.context({ sessionID })
-  if (!Array.isArray(messages)) return
-  // The cursor lives in host storage because the session state file is shared
-  // by every location instance and cannot prove what was already captured.
-  const cursor = cursors.get(sessionID) ?? await readCursor(ctx, sessionID)
-  const cursorIndex = cursor ? messages.findIndex((message) => message?.id === cursor) : -1
-  const pending = cursorIndex >= 0 ? messages.slice(cursorIndex + 1) : messages
-  let lastCaptured = cursor
-  for (const message of pending) {
-    const events = contextMessageEvents(sessionID, message)
-    if (events.length === 0) continue
-    for (const normalized of events) {
-      await sessionManager.handleEvent(normalized)
-    }
-    lastCaptured = message.id
-  }
-  if (!lastCaptured) return
-  cursors.set(sessionID, lastCaptured)
-  if (lastCaptured !== cursor) await writeCursor(ctx, sessionID, lastCaptured)
-}
-
-async function readCursor(ctx, sessionID) {
-  if (!ctx?.storage?.get) return undefined
-  try {
-    const value = await ctx.storage.get(CURSOR_KEY_PREFIX + sessionID)
-    return typeof value === "string" ? value : undefined
-  } catch (error) {
-    logHookError("storage.get", error)
-    return undefined
-  }
-}
-
-async function writeCursor(ctx, sessionID, cursor) {
-  if (!ctx?.storage?.set) return
-  try {
-    await ctx.storage.set(CURSOR_KEY_PREFIX + sessionID, cursor)
-  } catch (error) {
-    logHookError("storage.set", error)
-  }
-}
-
-async function forgetCursor(ctx, cursors, sessionID) {
-  cursors.delete(sessionID)
-  if (!ctx?.storage?.remove) return
-  try {
-    await ctx.storage.remove(CURSOR_KEY_PREFIX + sessionID)
-  } catch (error) {
-    logHookError("storage.remove", error)
-  }
-}
-
-function isExecutionBoundary(type) {
-  return type === "session.execution.succeeded" ||
-    type === "session.execution.failed" ||
-    type === "session.execution.interrupted"
-}
-
 function pushSystem(event, text) {
-  if (!text) return
   if (!Array.isArray(event.system)) event.system = []
   if (event.system.some((part) => part?.type === "text" && part.text === text)) return
   event.system.push({ type: "text", text })
@@ -353,34 +294,12 @@ function logHookError(hook, error) {
   })
 }
 
-async function noticeV2Tool(event, vikingUriNotice) {
-  if (event?.status !== "completed") return
-  const before = toolResultText(event.result)
-  const output = { output: before }
-  await vikingUriNotice({ tool: event.tool, args: event.input }, output)
-  if (!output.output || output.output === before) return
-  writeToolResultText(event.result, output.output)
-}
-
-function toolResultText(result) {
-  if (!result || typeof result !== "object") return ""
-  if (typeof result.content === "string") return result.content
-  if (!Array.isArray(result.content)) return ""
-  return result.content
-    .filter((item) => item?.type === "text" && typeof item.text === "string")
-    .map((item) => item.text)
-    .join("\n\n")
-}
-
-function writeToolResultText(result, text) {
+function appendToolResultText(result, notice) {
   if (!result || typeof result !== "object") return
   if (typeof result.content === "string" || result.content == null) {
-    result.content = text
+    result.content = result.content ? `${result.content}\n\n${notice}` : notice
     return
   }
-  if (!Array.isArray(result.content)) return
-  // Preserve the original text/media blocks and append only the new notice.
-  const before = toolResultText(result)
-  const notice = text.startsWith(before) ? text.slice(before.length).trimStart() : text
-  if (notice) result.content.push({ type: "text", text: notice })
+  // The original text and media blocks stay; the notice is a block of its own.
+  if (Array.isArray(result.content)) result.content.push({ type: "text", text: notice })
 }

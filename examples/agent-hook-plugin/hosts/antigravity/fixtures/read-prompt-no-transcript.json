@@ -1,0 +1,19 @@
+{
+  "what": "without a transcript the prompt is keyed by initialNumSteps",
+  "read": {
+    "event": "pre-invocation",
+    "payload": {
+      "conversationId": "conv-1",
+      "cwd": "/workspace",
+      "transcriptPath": "/x/transcript_full.jsonl",
+      "lastUserInput": "Fallback prompt",
+      "invocationNum": 0,
+      "initialNumSteps": 1
+    }
+  },
+  "expect": {
+    "sessionId": "conv-1",
+    "prompt": "Fallback prompt",
+    "eventId": "conv-1:1"
+  }
+}

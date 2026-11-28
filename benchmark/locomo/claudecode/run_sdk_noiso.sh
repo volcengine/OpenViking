@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-: "${OPENVIKING_PLUGIN_DIR:?set to claude-code-memory-plugin dir}"
+: "${OPENVIKING_PLUGIN_DIR:?set to agent-hook-plugin dir}"
 export LOCOMO_BENCHMARK_DIR="$SCRIPT_DIR"
 
 INPUT="${LOCOMO_INPUT:-$SCRIPT_DIR/.tmp/locomo10.json}"

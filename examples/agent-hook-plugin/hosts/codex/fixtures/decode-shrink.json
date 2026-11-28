@@ -1,0 +1,34 @@
+{
+  "what": "a rollout shorter than the cursor resumes at the latest human turn",
+  "decode": {
+    "transcript": "shrunk.jsonl",
+    "cursor": {
+      "capturedTurnCount": 9,
+      "captureFormatVersion": 2
+    }
+  },
+  "cursor": {
+    "capturedTurnCount": 2,
+    "captureFormatVersion": 2
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Current question"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Current answer"
+        }
+      ]
+    }
+  ]
+}

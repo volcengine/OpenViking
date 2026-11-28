@@ -12,8 +12,8 @@ import {
   renderPeerTemplate,
   resolveEffectivePeerId,
   resolvePluginPeerId,
-} from "./lib/workspace-peer.mjs";
-import { resolveWorkspaceIdentity } from "./lib/workspace-identity.mjs";
+} from "../agent-hook-plugin/lib/workspace-peer.mjs";
+import { resolveWorkspaceIdentity } from "../agent-hook-plugin/lib/workspace-identity.mjs";
 
 async function repo({ remote = "git@github.com:volcengine/OpenViking.git", git = true, marked = false } = {}) {
   const root = realpathSync(await mkdtemp(join(tmpdir(), "ov-peer-")));
@@ -56,7 +56,7 @@ test("an explicit peer id still wins over every rule", async () => {
 
 test("the default is the repository, from any subdirectory or clone", async () => {
   const { root, env } = await repo();
-  const deep = join(root, "examples", "codex-memory-plugin");
+  const deep = join(root, "examples", "agent-hook-plugin");
   await mkdir(deep, { recursive: true });
 
   const top = resolve(root, env);

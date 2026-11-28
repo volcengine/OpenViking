@@ -1,0 +1,15 @@
+{
+  "what": "a body that mentions a URI is data: no decision",
+  "tool": {
+    "payload": {
+      "toolCall": {
+        "name": "write_to_file",
+        "args": {
+          "TargetFile": "/tmp/a.md",
+          "CodeContent": "see viking://user/default/memories/profile.md"
+        }
+      }
+    }
+  },
+  "expect": null
+}

@@ -1,0 +1,17 @@
+{
+  "what": "a list tool's DirectoryPath is its location",
+  "tool": {
+    "payload": {
+      "toolCall": {
+        "name": "list_dir",
+        "args": {
+          "DirectoryPath": "viking://resources/"
+        }
+      }
+    }
+  },
+  "expect": {
+    "decision": "deny",
+    "reason": "viking:// URIs are OpenViking virtual paths, not local filesystem paths.\nUse OpenViking MCP glob or list instead.\nExample: glob(pattern=\"**/*\", uri=\"viking://resources/\")"
+  }
+}

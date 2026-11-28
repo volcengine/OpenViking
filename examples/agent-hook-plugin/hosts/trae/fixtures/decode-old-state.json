@@ -1,0 +1,40 @@
+{
+  "what": "state from the old host (capturedHashes, pendingPrompt) is not re-sent; its pending prompt is",
+  "decode": {
+    "payload": {
+      "last_assistant_message": "the retry budget is three attempts"
+    },
+    "cursor": {
+      "capturedHashes": [
+        "fd7bd566c43a67468452fe4ce321adc8b6d1dab3e26732d0caefa4a997058a36"
+      ],
+      "lastTurnKey": 1,
+      "capturedSinceCommit": 1,
+      "pendingPrompt": {
+        "prompt": "remember this",
+        "hash": "x",
+        "at": 5
+      }
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "remember this"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "the retry budget is three attempts"
+        }
+      ]
+    }
+  ]
+}

@@ -12,7 +12,7 @@ agent-plugins/
 ├── mcp.json                             # 一个 stdio MCP server："openviking"
 ├── servers/
 │   ├── mcp-proxy.mjs                    # stdio -> streamable-HTTP 代理，转发到服务端 /mcp
-│   └── shared/                          # 由 examples/memory-plugin-shared/lib 生成
+│   └── shared/                          # 由 examples/agent-hook-plugin/lib 生成
 ├── skills/openviking-memory/SKILL.md    # 教模型完成「召回 + 沉淀」闭环
 ├── skills/ov-experience-memory/SKILL.md # 检索并应用以往任务的 Experience
 ├── skills/ov-memory-troubleshoot/SKILL.md # 追溯记忆问题的会话依据
@@ -110,7 +110,7 @@ node --test agent-plugins/plugin.test.mjs
 
 `plugin.test.mjs` 会校验：清单的 schema URL 及两个清单的规范版本一致、插件 name 规则、清单根字段闭集、semver、每个 `skills/*` 子目录都有带 `name` + `description` frontmatter 且 `name` 与目录同名的 `SKILL.md`、`mcp.json` 引用的文件存在且不逃逸插件根目录，以及包内所有 `.mjs` 都能通过 `node --check`。
 
-`servers/shared/*.mjs` 是 `examples/memory-plugin-shared/lib` 的生成副本 —— 请改共享库后重新执行 `node examples/memory-plugin-shared/sync.mjs`；一旦漂移，`examples/memory-plugin-shared/sync.test.mjs` 会失败。两个测试文件都已接入 CI。
+`servers/shared/*.mjs` 是 `examples/agent-hook-plugin/lib` 的生成副本 —— 请改共享库后重新执行 `node examples/memory-plugin-shared/sync.mjs`；一旦漂移，`examples/memory-plugin-shared/sync.test.mjs` 会失败。两个测试文件都已接入 CI。
 
 ## 参见
 

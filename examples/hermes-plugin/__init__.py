@@ -89,7 +89,7 @@ _RESERVED_HEADER_PREFIX = "x-openviking-"
 def _parse_extra_headers(raw) -> dict:
     """Extra HTTP headers to send on every OpenViking request.
 
-    Mirrors the JS layer (memory-plugin-shared/lib/mcp-proxy-config.mjs): a JSON
+    Mirrors the JS layer (agent-hook-plugin/lib/mcp-proxy-config.mjs): a JSON
     object whose values are scalars. Reserved X-OpenViking-* names are dropped so a
     caller-supplied map can never assert tenant identity (trusted mode reads those
     as identity, so allowing them would be an impersonation vector).

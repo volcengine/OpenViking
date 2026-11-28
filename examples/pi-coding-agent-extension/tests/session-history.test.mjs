@@ -1,4 +1,4 @@
-/** The session_history default and the post-compaction/resume note, through the extension. */
+/** How the extension applies the flow's session_history default and session-history note. */
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -57,8 +57,10 @@ after(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function boot(branch = [], names = ["find", "session_history"]) {
+let boots = 0;
+async function boot(branch = [], names = ["find", "session_history"], header = {}) {
   await shutdown?.();
+  process.env.OPENVIKING_HOOK_STATE_DIR = join(dir, `state-${boots++}`);
   toolNames = names;
   const handlers = new Map();
   const tools = new Map();
@@ -68,40 +70,35 @@ async function boot(branch = [], names = ["find", "session_history"]) {
     registerCommand() {}, appendEntry() {}, getAllTools: () => [], sendMessage() {},
   });
   const ctx = {
-    sessionManager: { getSessionId: () => "history-session", getBranch: () => branch, getLeafId: () => branch.at(-1)?.id ?? null },
+    sessionManager: { getSessionId: () => "history-session", getBranch: () => branch, getLeafId: () => branch.at(-1)?.id ?? null, getHeader: () => header },
     ui: { notify() {}, setStatus() {} },
     getContextUsage: () => ({ tokens: 0, contextWindow: 262144, percent: 0 }),
   };
   shutdown = () => handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, ctx);
   return {
     tools,
+    toolCall: (event) => handlers.get("tool_call")(event, ctx),
     turn: async () => (await handlers.get("before_agent_start")(
       { type: "before_agent_start", prompt: "hello", systemPrompt: "BASE" }, ctx))?.systemPrompt ?? "BASE",
     compact: () => handlers.get("session_compact")({ type: "session_compact", reason: "manual" }, ctx),
   };
 }
 
-const branchCapturedBy = (sessionId) => [
-  { type: "message", id: "e1", message: { role: "user", content: "earlier", timestamp: 1 } },
-  { type: "custom", id: "c1", customType: "ov-capture", data: { sessionId, lastEntryId: "e1" } },
-];
+const earlier = [{ type: "message", id: "e1", message: { role: "user", content: "earlier", timestamp: 1 } }];
 
 test("session_history defaults to this session's OV id", async () => {
-  const { tools, turn } = await boot();
+  const { toolCall, turn } = await boot();
   await turn();
-  await tools.get("openviking_session_history").execute("c1", { action: "overview" });
-  assert.deepEqual(calls.map(({ name, arguments: args }) => [name, args.session]), [["session_history", "pi-history-session"]]);
+  const event = { toolName: "openviking_session_history", input: { action: "overview" } };
+  assert.equal(await toolCall(event), undefined);
+  assert.equal(event.input.session, "pi-history-session");
 });
 
-test("the note follows a compaction and a resume, not a fork or a server without the tool", async () => {
+test("the note follows a compaction and a resume, not a fork", async () => {
   const fresh = await boot();
   assert.doesNotMatch(await fresh.turn(), /session-history/);
   await fresh.compact();
   assert.match(await fresh.turn(), /what the compaction summary replaced/);
-  assert.match(await (await boot(branchCapturedBy("pi-history-session"))).turn(), /your context no longer holds/);
-  assert.doesNotMatch(await (await boot(branchCapturedBy("pi-parent-session"))).turn(), /session-history/);
-  const toolless = await boot(branchCapturedBy("pi-history-session"), ["find"]);
-  await toolless.turn();
-  await toolless.compact();
-  assert.doesNotMatch(await toolless.turn(), /session-history/);
+  assert.match(await (await boot(earlier)).turn(), /your context no longer holds/);
+  assert.doesNotMatch(await (await boot(earlier, undefined, { parentSession: "parent" })).turn(), /session-history/);
 });

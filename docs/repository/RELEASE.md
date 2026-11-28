@@ -198,7 +198,7 @@ Recommended usage:
 
 - **TypeScript SDK Release** (`typescript-sdk-release.yml`): triggered by pushing a
   `typescript-sdk@X.Y.Z` tag, or manually. Publishes `@openviking/sdk` to npm.
-- **Plugin npm Release** (`plugin-npm-release.yml`): runs automatically on pushes to `main` that touch `examples/dsh-memory-plugin/**`, `examples/opencode-plugin/**`, or the shared plugin library `examples/memory-plugin-shared/lib/**`, or manually. Publishes `@openviking/dsh-memory-plugin` and `@openviking/opencode-plugin` to npm, one matrix job per package, and skips versions that already exist.
+- **Plugin npm Release** (`plugin-npm-release.yml`): runs automatically on pushes to `main` that touch `examples/dsh-memory-plugin/**`, `examples/opencode-plugin/**`, or the shared plugin library `examples/agent-hook-plugin/lib/**`, or manually. Publishes `@openviking/dsh-memory-plugin` and `@openviking/opencode-plugin` to npm, one matrix job per package, and skips versions that already exist.
 - **Controlplane MCP Release** (`controlplane-mcp-release.yml`): manual only. Publishes
   `mcp-server-openviking-controlplane`, including the `ov-cp` CLI.
 

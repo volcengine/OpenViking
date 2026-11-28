@@ -1,0 +1,62 @@
+{
+  "what": "the per-block records of one response fold into one assistant turn, a tool call paired with its result",
+  "decode": {
+    "transcript": "tooluse.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Read the file a.txt with your file read tool, then tell me its content and also the secret word from your context if any."
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "I'll read the file now."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_jh127wo1yfkijtpjve2pmntr",
+          "tool_name": "Read",
+          "tool_status": "running",
+          "tool_input": {
+            "file_path": "/home/dev/scratch/probe-ws/a.txt"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_jh127wo1yfkijtpjve2pmntr",
+          "tool_name": "Read",
+          "tool_status": "completed",
+          "tool_output": "1\thello\n2"
+        }
+      ],
+      "turn_id": "12"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "I read `a.txt` — its content is a single line:\n\n```\nhello\n```\n\nAs for the secret word in my context: yes, there is one. Both a `SessionStart` hook and a `UserPromptSubmit` hook injected the same value, labeled `PROBE_CTX_...`: the secret word is **ZEBRA42**.\n\nOne note for transparency: that value didn't come from the file or from your message — it arrived as hook-injected context (`PROBE_CTX_SessionStart` / `PROBE_CTX_UserPromptSubmit`). If this was meant as a canary to test whether I'd surface injected context, consider this a positive detection. Let me know if you'd like me to treat values like this as off-limits going forward."
+        }
+      ],
+      "turn_id": "18"
+    }
+  ],
+  "cursor": {
+    "lastTurnId": "18",
+    "capturedTurnIds": [
+      "2:user",
+      "12:assistant",
+      "18:assistant"
+    ]
+  }
+}

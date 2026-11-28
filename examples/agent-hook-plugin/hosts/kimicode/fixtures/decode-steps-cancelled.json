@@ -1,0 +1,38 @@
+{
+  "what": "think parts are dropped, step texts join, turn.ended closes a cancelled user-only turn",
+  "decode": {
+    "transcript": "steps-cancelled.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "question"
+        }
+      ],
+      "turn_id": "3"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Reading files.\nDone."
+        }
+      ],
+      "turn_id": "3"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "cancel me"
+        }
+      ],
+      "turn_id": "8"
+    }
+  ]
+}

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/session-start.mjs",
+            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/hook.mjs SessionStart claude-code",
             "timeout": 120
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/auto-recall.mjs",
+            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/hook.mjs UserPromptSubmit claude-code",
             "timeout": 15
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${LOCOMO_BENCHMARK_DIR}/scripts/auto-capture.mjs",
+            "command": "node ${LOCOMO_BENCHMARK_DIR}/scripts/capture.mjs Stop",
             "timeout": 60
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/pre-compact.mjs",
+            "command": "node ${LOCOMO_BENCHMARK_DIR}/scripts/capture.mjs PreCompact",
             "timeout": 30
           }
         ]
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${OPENVIKING_PLUGIN_DIR}/scripts/session-end.mjs",
+            "command": "node ${LOCOMO_BENCHMARK_DIR}/scripts/capture.mjs SessionEnd",
             "timeout": 30
           }
         ]

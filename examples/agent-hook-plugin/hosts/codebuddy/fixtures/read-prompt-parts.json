@@ -1,0 +1,17 @@
+{
+  "what": "a prompt given as content parts is joined",
+  "read": {
+    "event": "user-prompt-submit",
+    "payload": {
+      "prompt": [
+        {
+          "text": "a"
+        },
+        "b"
+      ]
+    }
+  },
+  "expect": {
+    "prompt": "a\nb"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "what": "SubagentStop captures the subagent's own transcript into a child session",
+  "read": {
+    "event": "SubagentStop",
+    "payload": {
+      "session_id": "5f0c1e2a-7b3d-4c9e-8a10-2d4b6c8e0f12",
+      "agent_id": "a1b2c3",
+      "agent_type": "Explore",
+      "transcript_path": "/parent.jsonl",
+      "agent_transcript_path": "/agent.jsonl"
+    }
+  },
+  "expect": {
+    "child": "subagent:a1b2c3",
+    "transcript": "/agent.jsonl"
+  }
+}

@@ -7,7 +7,7 @@ import {
   compressRecallContext,
   normalizeCompressedContext,
   repairDigestUris,
-} from "./lib/recall-compress-core.mjs";
+} from "../agent-hook-plugin/lib/recall-compress-core.mjs";
 
 async function tempPath(name) {
   const dir = await mkdtemp(join(tmpdir(), "ov-compress-"));

@@ -1,38 +1,40 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
-import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
+import { injectV2Context, startV2Plugin } from "../lib/v2-plugin.mjs"
+import { readRequestBody, scrubOpenVikingEnv, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs"
 
 const pluginRoot = fileURLToPath(new URL("..", import.meta.url))
 const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory", "ov-memory-doctor"]
 
-function runtimeFixture(overrides = {}) {
-  const events = []
-  return {
-    events,
-    runtime: {
-      config: { mcp: { enabled: true }, recall: { enabled: true } },
-      sessionManager: {
-        handleEvent: async (event) => events.push(event),
-        flushSession: async () => {},
-        flushAll: async () => {},
-      },
-      repoContext: {
-        getRepoSystemPrompt: () => null,
-        refreshRepos: async () => {},
-      },
-      recall: { buildRelevantMemories: async () => undefined },
-      sessionInject: { buildSessionContext: async () => undefined },
-      vikingUriGuard: async () => {},
-      vikingUriNotice: async () => {},
-      ready: Promise.resolve(),
-      ...overrides,
-    },
+// Every path the plugin writes or reads points into a fresh directory, and the
+// server is a loopback mock.
+async function withPluginEnv(url, fn, plugin = {}) {
+  const restore = scrubOpenVikingEnv()
+  const dir = await mkdtemp(join(tmpdir(), "ov-oc-v2-"))
+  try {
+    const ovcli = join(dir, "ovcli.conf")
+    await writeFile(ovcli, JSON.stringify({ url, plugin: { dataDir: join(dir, "data"), repoContext: false, ...plugin } }))
+    Object.assign(process.env, {
+      OPENVIKING_CLI_CONFIG_FILE: ovcli,
+      OPENVIKING_CONFIG_FILE: join(dir, "ov.conf"),
+      OPENVIKING_HOME: join(dir, "home"),
+      OPENVIKING_HOOK_STATE_DIR: join(dir, "hook-state"),
+      OPENVIKING_PENDING_DIR: join(dir, "pending"),
+      OPENVIKING_STATE_DIR: join(dir, "state"),
+      HOME: join(dir, "home"),
+    })
+    return await fn(dir)
+  } finally {
+    restore()
+    await rm(dir, { recursive: true, force: true })
   }
 }
 
-function contextFixture(messages = []) {
+function contextFixture({ messages = [], events = [] } = {}) {
   const hooks = {}
   const registered = []
   const skillSources = []
@@ -48,7 +50,7 @@ function contextFixture(messages = []) {
           add: (skill) => skillSources.push(skill),
         }),
       },
-      location: { directory: "/tmp/project" },
+      location: { directory: "/repo/a" },
       mcp: {
         transform: async (callback) => callback({
           get: () => undefined,
@@ -59,335 +61,149 @@ function contextFixture(messages = []) {
       session: {
         hook: async (name, fn) => { hooks[name] = fn },
         context: async () => messages,
-      },
-      event: { subscribe: () => (async function* empty() {})() },
-    },
-  }
-}
-
-test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
-  const { runtime } = runtimeFixture()
-  const { ctx, hooks, registered, skillSources } = contextFixture()
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
-
-  assert.deepEqual(skillSources.map((skill) => skill.id).sort(), BUNDLED_SKILLS)
-  for (const skill of skillSources) {
-    assert.ok(skill.description.length > 20 && !skill.description.includes("\n"))
-    assert.match(skill.content, /^\s*# /)
-  }
-  assert.equal(registered[0][0], "openviking")
-  assert.equal(registered[0][1].type, "local")
-  assert.equal(registered[0][1].codemode, false)
-  assert.deepEqual(Object.keys(hooks).sort(), ["compaction", "context", "execute.after", "execute.before", "prompt"])
-  await cleanup()
-})
-
-for (const disabled of [false, true]) {
-  test(`bundled skills follow MCP registration when transforms run after setup, disabled=${disabled}`, async () => {
-    const { runtime } = runtimeFixture()
-    const { ctx } = contextFixture()
-    const transforms = []
-    ctx.mcp.transform = async (callback) => { transforms.push(callback) }
-    ctx.skill.transform = async (callback) => { transforms.push(callback) }
-    const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
-    const [mcp, skill] = transforms
-    const skills = new Map()
-    mcp({ get: () => (disabled ? { disabled: true } : undefined), set: () => {} })
-    skill({ list: () => [...skills.values()], get: (id) => skills.get(id), add: (value) => skills.set(value.id, value) })
-    assert.deepEqual([...skills.keys()].sort(), disabled ? [] : BUNDLED_SKILLS)
-    await cleanup()
-  })
-}
-
-test("existing skills override bundled skills by ID or name", async () => {
-  const { runtime } = runtimeFixture()
-  const { ctx, skillSources } = contextFixture()
-  skillSources.push(
-    { id: "project-memory", name: "openviking-memory", path: "/tmp/project/.opencode/skills/project-memory/SKILL.md", content: "" },
-    { id: "openviking-skills", name: "Custom skills", path: "/tmp/project/.opencode/skills/openviking-skills/SKILL.md", content: "" },
-  )
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
-  assert.deepEqual(skillSources.map((skill) => skill.id).sort(), [
-    "openviking-rule-search",
-    "openviking-skills",
-    "ov-experience-memory",
-    "ov-memory-doctor",
-    "project-memory",
-  ])
-  assert.equal(skillSources.find((skill) => skill.id === "openviking-skills").name, "Custom skills")
-  await cleanup()
-})
-
-test("a missing skills directory leaves MCP and hooks registered", async () => {
-  const { runtime } = runtimeFixture()
-  const { ctx, hooks, registered, skillSources } = contextFixture()
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/nonexistent" })
-  assert.deepEqual(skillSources, [])
-  assert.equal(registered[0][0], "openviking")
-  assert.equal(typeof hooks.prompt, "function")
-  await cleanup()
-})
-
-test("compaction captures messages before the host drops them and contains read failures", async () => {
-  const { runtime, events } = runtimeFixture()
-  const messages = [
-    { id: "user", type: "user", text: "run the build" },
-    { id: "assistant", type: "assistant", content: [
-      { type: "tool", id: "build", name: "shell", state: { status: "completed", input: { command: "make" }, content: [{ type: "text", text: "built" }] } },
-    ] },
-  ]
-  const { ctx, hooks } = contextFixture(messages)
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
-  await hooks.compaction({ sessionID: "ses_1" })
-  assert.equal(events.filter((event) => event.type === "message.updated").length, 2)
-  assert.equal(events.at(-1).properties.part.output, "built")
-  messages.length = 0
-  await hooks.compaction({ sessionID: "ses_1" })
-  assert.equal(events.filter((event) => event.type === "message.updated").length, 2)
-  ctx.session.context = async () => { throw new Error("host unavailable") }
-  await assert.doesNotReject(() => hooks.compaction({ sessionID: "ses_1" }))
-  await cleanup()
-})
-
-test("shell notice preserves multiple text and media blocks without duplicating output", async () => {
-  const { runtime } = runtimeFixture({ vikingUriNotice: createVikingUriNotice() })
-  const { ctx, hooks } = contextFixture()
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
-  const original = [
-    { type: "text", text: "command output", metadata: { source: "stdout" } },
-    { type: "image", data: "test" },
-    { type: "text", text: "Exited with code 1" },
-  ]
-  const result = { content: structuredClone(original) }
-  await hooks["execute.after"]({ status: "completed", tool: "shell", input: { command: "cat viking://resources/test" }, result })
-  assert.deepEqual(result.content.slice(0, 3), original)
-  assert.equal(result.content.length, 4)
-  assert.match(result.content[3].text, /openviking_read/)
-  assert.doesNotMatch(result.content[3].text, /Exited with code 1/)
-  await cleanup()
-})
-
-test("cleanup waits for background initialization before flushing", async () => {
-  let completeBackground
-  let flushed = false
-  const background = new Promise((resolve) => { completeBackground = resolve })
-  const { runtime } = runtimeFixture({ background })
-  runtime.sessionManager.flushAll = async () => { flushed = true }
-  const { ctx } = contextFixture()
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
-  const cleaning = cleanup()
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(flushed, false)
-  completeBackground()
-  await cleaning
-  assert.equal(flushed, true)
-})
-
-test("prompt starts session context and recall together and keeps block order", async () => {
-  const started = []
-  const pending = {}
-  const call = (name) => new Promise((resolve) => {
-    started.push(name)
-    pending[name] = resolve
-  })
-  const event = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "query" } }
-  const preparing = prepareV2Prompt(event, {
-    recallEnabled: true,
-    sessionInject: { buildSessionContext: () => call("profile") },
-    recall: { buildRelevantMemories: () => call("recall") },
-  })
-  assert.deepEqual(started, ["profile", "recall"])
-  pending.recall("<recall/>")
-  pending.profile("<profile/>")
-  await preparing
-  assert.deepEqual(event.metadata.openviking.context, ["<profile/>", "<recall/>"])
-})
-
-test("prompt metadata is persisted and context injection is stable across model steps", async () => {
-  let recallCalls = 0
-  const event = {
-    sessionID: "ses_1",
-    messageID: "msg_1",
-    prompt: { text: "find the deployment notes" },
-    metadata: { caller: "test" },
-  }
-  await prepareV2Prompt(event, {
-    directory: "/tmp/project",
-    recallEnabled: true,
-    sessionInject: { buildSessionContext: async () => "<profile>profile</profile>" },
-    recall: {
-      buildRelevantMemories: async (_input, parts) => {
-        recallCalls += 1
-        assert.equal(parts[0].text, "find the deployment notes")
-        return "<openviking-context>memory</openviking-context>"
-      },
-    },
-  })
-  assert.equal(recallCalls, 1)
-  assert.equal(event.metadata.caller, "test")
-
-  const message = { role: "user", content: [{ type: "text", text: event.prompt.text }], metadata: event.metadata }
-  const context = { system: [], messages: [message] }
-  const repoContext = { getRepoSystemPrompt: () => "repo prompt" }
-  injectV2Context(context, repoContext)
-  injectV2Context(context, repoContext)
-
-  assert.equal(message.content.length, 2)
-  assert.match(message.content[0].text, /<profile>profile<\/profile>/)
-  assert.match(message.content[0].text, /<openviking-context>memory<\/openviking-context>/)
-  assert.equal(message.content[0].metadata.openviking, true)
-  assert.equal(context.system.length, 1)
-})
-
-test("captureV2Context advances a per-session cursor and preserves tool parts", async () => {
-  const events = []
-  const messages = [
-    { id: "msg_user", type: "user", text: "question" },
-    {
-      id: "msg_assistant",
-      type: "assistant",
-      content: [
-        { type: "text", text: "answer" },
-        {
-          type: "tool", id: "call_1", name: "read",
-          state: { status: "completed", input: { path: "README.md" }, content: [{ type: "text", text: "body" }] },
-        },
-      ],
-    },
-  ]
-  const ctx = { session: { context: async () => messages } }
-  const manager = { handleEvent: async (event) => events.push(event) }
-  const cursors = new Map()
-
-  await captureV2Context(ctx, manager, cursors, "ses_1")
-  assert.equal(events.filter((event) => event.type === "message.updated").length, 2)
-  assert.equal(events.at(-1).properties.part.tool, "read")
-  assert.equal(cursors.get("ses_1"), "msg_assistant")
-
-  events.length = 0
-  await captureV2Context(ctx, manager, cursors, "ses_1")
-  assert.deepEqual(events, [])
-})
-
-test("a trailing assistant message can be captured when its content becomes available", async () => {
-  const events = []
-  const assistant = { id: "msg_assistant", type: "assistant", content: [] }
-  const messages = [{ id: "msg_user", type: "user", text: "question" }, assistant]
-  const ctx = { session: { context: async () => messages }, storage: new Map() }
-  const manager = { handleEvent: async (event) => events.push(event) }
-
-  await captureV2Context(ctx, manager, new Map(), "ses_1")
-  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_user"])
-
-  events.length = 0
-  assistant.content = [{ type: "text", text: "answer" }]
-  await captureV2Context(ctx, manager, new Map(), "ses_1")
-  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_assistant"])
-  assert.equal(events.at(-1).properties.part.text, "answer")
-})
-
-test("v2 prompt, context, after-tool, and event failures are contained", async () => {
-  const { runtime } = runtimeFixture({
-    recall: { buildRelevantMemories: async () => { throw new Error("recall failed") } },
-    vikingUriNotice: async () => { throw new Error("notice failed") },
-  })
-  const { ctx, hooks } = contextFixture()
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
-
-  const prompt = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "query" } }
-  runtime.sessionInject.buildSessionContext = async () => "<profile>still available</profile>"
-  await assert.doesNotReject(() => hooks.prompt(prompt))
-  assert.equal(prompt.metadata.openviking.context[0], "<profile>still available</profile>")
-  await assert.doesNotReject(() => hooks.context({ sessionID: "ses_1", messages: null, system: [] }))
-  await assert.doesNotReject(() => hooks["execute.after"]({
-    status: "completed", tool: "shell", input: { command: "ls" }, result: { content: [] },
-  }))
-  await cleanup()
-})
-
-function eventLoopFixture({ events, contexts, locations, storage = new Map() }) {
-  const contextCalls = []
-  return {
-    contextCalls,
-    storage,
-    ctx: {
-      location: { directory: "/repo/a" },
-      session: {
-        hook: async () => {},
-        context: async ({ sessionID }) => {
-          contextCalls.push(sessionID)
-          return contexts[sessionID] ?? []
-        },
-        get: async ({ sessionID }) => ({ data: { id: sessionID, location: { directory: locations[sessionID] } } }),
-      },
-      storage: {
-        get: async (key) => storage.get(key),
-        set: async (key, value) => { storage.set(key, value) },
-        remove: async (key) => { storage.delete(key) },
+        get: async ({ sessionID }) => ({ data: { id: sessionID, location: { directory: "/repo/a" } } }),
       },
       event: { subscribe: () => (async function* replay() { yield* events })() },
     },
   }
 }
 
-const conversation = [
-  { id: "msg_user", type: "user", text: "question" },
-  { id: "msg_assistant", type: "assistant", content: [{ type: "text", text: "answer" }] },
-]
+const unreachable = "http://127.0.0.1:9"
 
-test("event loop handles only sessions that belong to this location", async () => {
-  const { runtime, events: handled } = runtimeFixture()
-  const { ctx, contextCalls } = eventLoopFixture({
-    events: [
-      { type: "session.created", data: { sessionID: "ses_a", location: { directory: "/repo/a" } } },
-      { type: "session.created", data: { sessionID: "ses_b", location: { directory: "/repo/b" } } },
-      { type: "session.execution.succeeded", data: { sessionID: "ses_a" } },
-      { type: "session.execution.succeeded", data: { sessionID: "ses_b" } },
-      { type: "session.execution.succeeded", data: { sessionID: "ses_c" } },
-      { type: "session.execution.failed", data: { sessionID: "ses_a", error: { message: "rate limited" } } },
-    ],
-    contexts: { ses_a: conversation, ses_b: conversation, ses_c: conversation },
-    locations: { ses_c: "/repo/b" },
+test("startV2Plugin registers the MCP server, the bundled skills and the v2 hooks", async () => {
+  await withPluginEnv(unreachable, async () => {
+    const { ctx, hooks, registered, skillSources } = contextFixture()
+    const cleanup = await startV2Plugin(ctx, { pluginRoot })
+    assert.deepEqual(skillSources.map((skill) => skill.id).sort(), BUNDLED_SKILLS)
+    for (const skill of skillSources) {
+      assert.ok(skill.description.length > 20 && !skill.description.includes("\n"))
+      assert.match(skill.content, /^\s*# /)
+    }
+    assert.equal(registered[0][0], "openviking")
+    assert.equal(registered[0][1].codemode, false)
+    assert.deepEqual(Object.keys(hooks).sort(), ["compaction", "context", "execute.after", "execute.before", "prompt"])
+    await cleanup()
   })
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
-  await cleanup()
-
-  assert.deepEqual(contextCalls, ["ses_a", "ses_a"])
-  const sessionOf = (event) => event.properties.info?.sessionID ?? event.properties.part?.sessionID
-  assert.ok(handled.every((event) => sessionOf(event) === "ses_a"))
-  assert.deepEqual(
-    handled.filter((event) => event.type.startsWith("session.")).map((event) => event.type),
-    ["session.created", "session.idle", "session.idle"],
-  )
-  assert.equal(handled.filter((event) => event.type === "message.updated").length, 2)
 })
 
-test("a new plugin instance resumes from the stored capture cursor", async () => {
-  const storage = new Map()
-  const first = runtimeFixture()
-  const firstLoop = eventLoopFixture({
-    events: [{ type: "session.execution.succeeded", data: { sessionID: "ses_a" } }],
-    contexts: { ses_a: conversation },
-    locations: { ses_a: "/repo/a" },
-    storage,
+for (const disabled of [false, true]) {
+  test(`bundled skills follow MCP registration when transforms run after setup, disabled=${disabled}`, async () => {
+    await withPluginEnv(unreachable, async () => {
+      const { ctx } = contextFixture()
+      const transforms = []
+      ctx.mcp.transform = async (callback) => { transforms.push(callback) }
+      ctx.skill.transform = async (callback) => { transforms.push(callback) }
+      const cleanup = await startV2Plugin(ctx, { pluginRoot })
+      const [mcp, skill] = transforms
+      const skills = new Map()
+      mcp({ get: () => (disabled ? { disabled: true } : undefined), set: () => {} })
+      skill({ list: () => [...skills.values()], get: (id) => skills.get(id), add: (value) => skills.set(value.id, value) })
+      assert.deepEqual([...skills.keys()].sort(), disabled ? [] : BUNDLED_SKILLS)
+      await cleanup()
+    })
   })
-  await (await startV2Plugin(firstLoop.ctx, first.runtime, { pluginRoot: "/tmp/ov" }))()
-  assert.equal(first.events.filter((event) => event.type === "message.updated").length, 2)
+}
 
-  const second = runtimeFixture()
-  const followUp = { id: "msg_follow_up", type: "user", text: "next question" }
-  const secondLoop = eventLoopFixture({
-    events: [
-      { type: "session.execution.succeeded", data: { sessionID: "ses_a" } },
-      { type: "session.deleted", data: { sessionID: "ses_a" } },
-    ],
-    contexts: { ses_a: [...conversation, followUp] },
-    locations: { ses_a: "/repo/a" },
-    storage,
+test("existing skills override bundled skills by ID or name", async () => {
+  await withPluginEnv(unreachable, async () => {
+    const { ctx, skillSources } = contextFixture()
+    skillSources.push(
+      { id: "project-memory", name: "openviking-memory", path: "/p/SKILL.md", content: "" },
+      { id: "openviking-skills", name: "Custom skills", path: "/q/SKILL.md", content: "" },
+    )
+    const cleanup = await startV2Plugin(ctx, { pluginRoot })
+    assert.deepEqual(skillSources.map((skill) => skill.id).sort(), [
+      "openviking-rule-search", "openviking-skills", "ov-experience-memory", "ov-memory-doctor", "project-memory",
+    ])
+    await cleanup()
   })
-  await (await startV2Plugin(secondLoop.ctx, second.runtime, { pluginRoot: "/tmp/ov" }))()
+})
 
-  const captured = second.events.filter((event) => event.type === "message.updated")
-  assert.deepEqual(captured.map((event) => event.properties.info.id), ["msg_follow_up"])
-  assert.equal(storage.size, 0)
+test("tool hooks apply the flow's deny, session fill and notice", async () => {
+  await withPluginEnv(unreachable, async () => {
+    const { ctx, hooks } = contextFixture()
+    const cleanup = await startV2Plugin(ctx, { pluginRoot })
+    await assert.rejects(
+      () => hooks["execute.before"]({ sessionID: "ses_1", tool: "read", input: { filePath: "viking://resources/a" } }),
+      /openviking_read/,
+    )
+    const input = { query: "x" }
+    await hooks["execute.before"]({ sessionID: "ses_1", tool: "openviking_session_history", input })
+    assert.equal(input.session, "oc-ses_1")
+
+    const original = [{ type: "text", text: "out" }, { type: "image", data: "x" }]
+    const result = { content: structuredClone(original) }
+    await hooks["execute.after"]({ status: "completed", sessionID: "ses_1", tool: "shell", input: { command: "cat viking://resources/a" }, result })
+    assert.deepEqual(result.content.slice(0, 2), original)
+    assert.match(result.content[2].text, /openviking_read/)
+    await cleanup()
+  })
+})
+
+test("prompt context reaches the user message once, with only the newest start block", () => {
+  const start = '<openviking-context source="session-start">\nprofile\n</openviking-context>'
+  const older = { role: "user", content: [{ type: "text", text: start, metadata: { openviking: true } }] }
+  const message = { role: "user", content: [{ type: "text", text: "q" }], metadata: { openviking: { context: [start] } } }
+  const event = { system: [], messages: [older, message] }
+  const repoContext = { getRepoSystemPrompt: () => "repo prompt" }
+  injectV2Context(event, repoContext)
+  injectV2Context(event, repoContext)
+  assert.equal(message.content.length, 2)
+  assert.equal(message.content[0].text, start)
+  assert.deepEqual(older.content, [])
+  assert.deepEqual(event.system, [{ type: "text", text: "repo prompt" }])
+})
+
+test("execution ends capture each message once and session deletion commits", async () => {
+  const bodies = []
+  await withMockOpenViking(async (req, res) => {
+    const body = await readRequestBody(req)
+    if (req.method !== "GET") bodies.push([req.method, new URL(req.url, "http://x").pathname, body])
+    writeJson(res, { status: "ok", result: {} })
+  }, async (url) => {
+    await withPluginEnv(url, async () => {
+      const done = { id: "ses_a", type: "session.execution.succeeded", data: { sessionID: "ses_a" } }
+      const { ctx } = contextFixture({
+        messages: [
+          { id: "msg_user", type: "user", text: "question" },
+          { id: "msg_assistant", type: "assistant", content: [{ type: "text", text: "answer" }] },
+        ],
+        events: [
+          { type: "session.created", data: { sessionID: "ses_a", location: { directory: "/repo/a" } } },
+          { type: "session.created", data: { sessionID: "ses_b", location: { directory: "/repo/b" } } },
+          done,
+          { type: "session.execution.succeeded", data: { sessionID: "ses_b" } },
+          done,
+          { type: "session.deleted", data: { sessionID: "ses_a" } },
+        ],
+      })
+      const cleanup = await startV2Plugin(ctx, { pluginRoot })
+      await cleanup()
+    })
+  })
+  const writes = bodies.filter(([, path]) => path.includes("/messages"))
+  assert.equal(writes.length, 1)
+  assert.match(writes[0][1], /\/sessions\/oc-ses_a\/messages/)
+  assert.deepEqual(writes[0][2].messages.map((message) => message.role), ["user", "assistant"])
+  assert.ok(bodies.some(([method, path]) => method === "POST" && path === "/api/v1/sessions/oc-ses_a/commit"))
+  assert.ok(!bodies.some(([, path]) => path.includes("ses_b")))
+})
+
+test("dispose commits a session that captured something", async () => {
+  const bodies = []
+  await withMockOpenViking(async (req, res) => {
+    await readRequestBody(req)
+    if (req.method !== "GET") bodies.push([req.method, new URL(req.url, "http://x").pathname])
+    writeJson(res, { status: "ok", result: {} })
+  }, async (url) => {
+    await withPluginEnv(url, async () => {
+      const { ctx } = contextFixture({
+        messages: [{ id: "msg_user", type: "user", text: "question" }],
+        events: [{ type: "session.execution.succeeded", data: { sessionID: "ses_a" } }],
+      })
+      await (await startV2Plugin(ctx, { pluginRoot }))()
+    })
+  })
+  assert.ok(bodies.some(([, path]) => path.includes("/sessions/oc-ses_a/messages")))
+  assert.ok(bodies.some(([method, path]) => method === "POST" && path === "/api/v1/sessions/oc-ses_a/commit"))
 })

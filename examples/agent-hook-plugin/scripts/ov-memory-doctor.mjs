@@ -11,20 +11,24 @@
  * Antigravity, Kimi Code, CodeBuddy Code and Qoder CLI load a plugin directory
  * instead, where the equivalent failure is a plugin the host never registered.
  * The configuration and connection sections are the ones every harness shares.
+ * Claude Code and Codex have doctors of their own, and this script hands over
+ * to them.
  *
  * Usage:
  *   node ov-memory-doctor.mjs [<client>] [--json] [--offline] [--timeout <ms>] [--no-color]
  *
- * The client defaults to the one this copy was installed for. Exit code 1 when
- * any check fails, 0 otherwise. Never prints a full api key.
+ * The client defaults to the one this copy was installed for, else the host
+ * the environment names. Exit code 1 when any check fails, 0 otherwise. Never
+ * prints a full api key.
  */
 
+import { spawnSync } from "node:child_process";
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { loadAgentHookConfig } from "../lib/agent-hook-runtime.mjs";
 import {
   credentialSources,
   existsPath,
@@ -41,7 +45,7 @@ import {
   scanDebugLog,
   sweepEnv,
   tryJson,
-} from "../../memory-plugin-shared/lib/doctor-core.mjs";
+} from "../lib/doctor-core.mjs";
 
 const PLUGIN_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
 const REQUIRED_PLUGIN_FILES = ["scripts/hook.mjs", "scripts/uri-guard.mjs", "servers/mcp-proxy.mjs", "hosts/index.mjs"];
@@ -163,6 +167,27 @@ function resolveClient(argv) {
   return CLIENTS[basename(PLUGIN_ROOT)] ? basename(PLUGIN_ROOT) : "cursor";
 }
 
+// The hosts with a doctor of their own, under the names a user may pass.
+const OWN_DOCTORS = { "claude-code": "claude-code", claude: "claude-code", codex: "codex" };
+
+/**
+ * Claude Code or Codex, when nothing names one of the clients above: the
+ * argument, else where this copy sits, else what the host puts in the
+ * environment of the commands it runs.
+ */
+function ownDoctorHost(argv) {
+  const named = argv.find((arg) => OWN_DOCTORS[arg] || CLIENTS[arg]);
+  if (named) return OWN_DOCTORS[named] || "";
+  if (CLIENTS[tryJson(join(PLUGIN_ROOT, "integration.json"))?.client] || CLIENTS[basename(PLUGIN_ROOT)]) return "";
+  const under = (dir) => Boolean(dir) && `${PLUGIN_ROOT}${sep}`.startsWith(`${resolvePath(dir)}${sep}`);
+  const env = process.env;
+  if (under(env.CLAUDE_CONFIG_DIR) || PLUGIN_ROOT.includes(`${sep}.claude${sep}`)) return "claude-code";
+  if (under(env.CODEX_HOME) || PLUGIN_ROOT.includes(`${sep}.codex${sep}`)) return "codex";
+  if (env.CLAUDECODE || env.CLAUDE_PLUGIN_ROOT) return "claude-code";
+  if (env.CODEX_THREAD_ID || env.CODEX_SANDBOX || env.PLUGIN_ROOT) return "codex";
+  return "";
+}
+
 const CLIENT = resolveClient(process.argv.slice(2));
 const SPEC = CLIENTS[CLIENT];
 // TRAE CN is served by the TRAE host directory.
@@ -183,17 +208,16 @@ function checkInstall(report) {
     report.warn(`this copy was installed for ${installed.client}, not ${CLIENT}`, "", `run the ${installed.client} copy, or pass the client name as an argument`);
   }
 
-  const missing = REQUIRED_PLUGIN_FILES.filter((rel) => !existsPath(join(PLUGIN_ROOT, rel)));
+  const missing = [...REQUIRED_PLUGIN_FILES, `hosts/${HOST_DIR}/host.mjs`].filter((rel) => !existsPath(join(PLUGIN_ROOT, rel)));
   if (!manifest) missing.unshift(relative(PLUGIN_ROOT, manifestPath));
   if (missing.length) report.fail("plugin files missing", missing.join(", "), `curl -fsSL https://openviking.ai/install | bash -s -- --harness ${CLIENT}`);
-  else report.ok("plugin files present (hook entry, URI guard, MCP proxy, host adapters)");
+  else report.ok("plugin files present (hook entry, URI guard, MCP proxy, host module)");
 
-  // The runtime is not vendored: it sits beside the integration, assembled from
-  // lib/MANIFEST at install time. A stale or absent copy is ERR_MODULE_NOT_FOUND
-  // on the first hook, which the host reports as nothing at all.
-  const shared = resolvePath(PLUGIN_ROOT, "..", "memory-plugin-shared", "lib");
+  // An absent runtime is ERR_MODULE_NOT_FOUND on the first hook, which the host
+  // reports as nothing at all.
+  const shared = join(PLUGIN_ROOT, "lib");
   const modules = existsPath(shared) ? readdirSync(shared).filter((name) => name.endsWith(".mjs")) : [];
-  if (!modules.length) report.fail("the shared runtime is not assembled beside this integration", homeShort(shared), `re-run the installer with --harness ${CLIENT}`);
+  if (!modules.length) report.fail("the shared runtime is missing from this integration", homeShort(shared), `re-run the installer with --harness ${CLIENT}`);
   else report.ok(`shared runtime: ${modules.length} modules in ${homeShort(shared)}`);
   if (!SPEC.manifest && !existsPath(join(PLUGIN_ROOT, "hosts", HOST_DIR, "hooks.json"))) {
     report.fail(`no hooks template for ${CLIENT}`, "", "re-run the installer");
@@ -267,7 +291,6 @@ function checkConfig(report, cfg, host) {
     `auto-capture ${cfg.autoCapture ? "on" : "OFF"}`,
     `write path ${cfg.writePathAsync ? "async" : "sync"}`,
   ];
-  if (CLIENT === "cursor") toggles.push(`commit threshold ${cfg.commitTurnThreshold}`);
   reportToggles(report, cfg, host, toggles);
 
   sweepEnv(report, cfg, host);
@@ -328,7 +351,13 @@ function isDirectRun() {
   }
 }
 
-if (isDirectRun()) {
+const handover = isDirectRun() ? ownDoctorHost(process.argv.slice(2)) : "";
+if (handover) {
+  const args = process.argv.slice(2).filter((arg) => !OWN_DOCTORS[arg]);
+  const run = spawnSync(process.execPath, [join(PLUGIN_ROOT, "hosts", handover, "ov-memory-doctor.mjs"), ...args], { stdio: "inherit" });
+  if (run.error) console.error("ov-memory-doctor failed:", run.error.message);
+  process.exit(run.status ?? 2);
+} else if (isDirectRun()) {
   runDoctor(HOST).catch((err) => {
     console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
     process.exit(2);

@@ -1,0 +1,90 @@
+{
+  "what": "an MCP tool nested in exec is captured by its own call id; a failed one as an error",
+  "decode": {
+    "transcript": "mcp.jsonl"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call-outer",
+          "tool_name": "exec",
+          "tool_status": "running",
+          "tool_input": {
+            "value": "await tools.mcp__openviking_memory__read(...)"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call-outer",
+          "tool_name": "exec",
+          "tool_status": "completed",
+          "tool_output": "nested call completed"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "code-mode-nested:7:call-outer:exec-read",
+          "tool_name": "read",
+          "tool_status": "running",
+          "tool_input": {
+            "uris": [
+              "viking://user/test/memories/experiences/refund.md"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "code-mode-nested:7:call-outer:exec-read",
+          "tool_name": "read",
+          "tool_status": "completed",
+          "tool_output": "{\"uri\":\"viking://user/test/memories/experiences/refund.md\",\"content\":\"refund policy\"}"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "failed-read",
+          "tool_name": "read",
+          "tool_status": "running",
+          "tool_input": {
+            "uris": [
+              "viking://user/test/memories/experiences/refund.md"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "failed-read",
+          "tool_name": "read",
+          "tool_status": "error",
+          "tool_output": "resource not found"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "what": "a session state from before the flow (top-level lastTurnId) resumes past what it captured",
+  "decode": {
+    "transcript": "wire.jsonl",
+    "cursor": {
+      "lastTurnId": "0",
+      "capturedTurnIds": [
+        "0:user",
+        "0:assistant"
+      ],
+      "pendingPrompt": {
+        "prompt": "x"
+      }
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Run the shell command 'echo two' and then reply with the single word ok."
+        }
+      ],
+      "turn_id": "1"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call_00_dt3tr0p5ztec9ud6autzirnz",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "echo two"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_dt3tr0p5ztec9ud6autzirnz",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "two"
+        },
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "turn_id": "1"
+    }
+  ]
+}

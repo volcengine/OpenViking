@@ -1,0 +1,105 @@
+{
+  "what": "function, custom and tool-search calls pair with their outputs by call_id",
+  "decode": {
+    "transcript": "tools.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Find the calendar tool and run pwd"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "c1",
+          "tool_name": "exec_command",
+          "tool_status": "running",
+          "tool_input": {
+            "cmd": "pwd"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "c1",
+          "tool_name": "exec_command",
+          "tool_status": "completed",
+          "tool_output": "project root"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "c2",
+          "tool_name": "exec",
+          "tool_status": "running",
+          "tool_input": {
+            "value": "cat note.md"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "c2",
+          "tool_name": "exec",
+          "tool_status": "completed",
+          "tool_output": "skill contents"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "c3",
+          "tool_name": "tool_search",
+          "tool_status": "running",
+          "tool_input": {
+            "query": "calendar tools",
+            "limit": 3
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "c3",
+          "tool_name": "tool_search",
+          "tool_status": "completed",
+          "tool_output": "{\"tools\":[{\"name\":\"calendar.search\"}]}"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ]
+    }
+  ]
+}

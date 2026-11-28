@@ -1,0 +1,10 @@
+{
+  "what": "an injection event with nothing to say still approves",
+  "emit": {
+    "event": "UserPromptSubmit",
+    "output": {}
+  },
+  "expect": {
+    "decision": "approve"
+  }
+}

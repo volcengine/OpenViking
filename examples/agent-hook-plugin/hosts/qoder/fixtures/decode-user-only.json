@@ -1,0 +1,21 @@
+{
+  "what": "captureAssistantTurns off sends only what the user wrote",
+  "decode": {
+    "transcript": "tooluse.jsonl",
+    "cfg": {
+      "captureAssistantTurns": false
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Read the file a.txt with your file read tool, then tell me its content and also the secret word from your context if any."
+        }
+      ],
+      "turn_id": "2"
+    }
+  ]
+}

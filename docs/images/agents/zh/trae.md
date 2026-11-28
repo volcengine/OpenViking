@@ -60,4 +60,4 @@ Agent 会检查连接，并带你完成首次使用。
 ## 参考
 
 - 手动配置文档：[TRAE](https://docs.openviking.net/zh/agent-integrations/13-trae)
-- 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)（TRAE / TRAE CN）、[examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)（TraeCode CLI 2.0）
+- 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)（TRAE / TRAE CN）；TraeCode CLI 2.0 使用同一目录

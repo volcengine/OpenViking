@@ -9,8 +9,8 @@ import {
   enqueue,
   listPending,
   replayPending,
-} from "./lib/pending-queue.mjs";
-import { createOvHttp } from "./lib/ov-http.mjs";
+} from "../agent-hook-plugin/lib/pending-queue.mjs";
+import { createOvHttp } from "../agent-hook-plugin/lib/ov-http.mjs";
 import { withMockOpenViking, withPendingDir, writeJson } from "./testing/support.mjs";
 
 test("replayPending sends queued entries and removes them after success", async () => {

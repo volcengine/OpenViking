@@ -1,0 +1,14 @@
+{
+  "what": "a session_history call that names a session is left alone",
+  "tool": {
+    "payload": {
+      "session_id": "s1",
+      "tool_name": "mcp__openviking__session_history",
+      "tool_input": {
+        "action": "overview",
+        "session": "other"
+      }
+    }
+  },
+  "expect": null
+}

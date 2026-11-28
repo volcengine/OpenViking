@@ -17,15 +17,10 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
-import { loadAgentHookConfig } from "./lib/agent-hook-runtime.mjs";
+import { loadAgentHookConfig } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 import { ROOT } from "./sync.mjs";
-import { scrubOpenVikingEnv, writeCredentialFiles } from "./testing/support.mjs";
-import { HOSTS } from "../agent-hook-plugin/hosts/index.mjs";
+import { loadHookHosts, scrubOpenVikingEnv, writeCredentialFiles } from "./testing/support.mjs";
 import { readProxyConfig as agentHookProxy } from "../agent-hook-plugin/servers/mcp-proxy.mjs";
-import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
-import { readProxyConfig as claudeCodeProxy } from "../claude-code-memory-plugin/servers/mcp-proxy.mjs";
-import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
-import { readProxyConfig as codexProxy } from "../codex-memory-plugin/servers/mcp-proxy.mjs";
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
 import { buildMcpConfig as dshMcpConfig } from "../dsh-memory-plugin/mcp-env.mjs";
 import { readProxyConfig as dshProxy } from "../dsh-memory-plugin/servers/mcp-proxy.mjs";
@@ -36,30 +31,17 @@ const WIRE = ["mcpUrl", "apiKey", "account", "user", "sendIdentityHeaders"];
 const wire = (cfg) => Object.fromEntries(WIRE.map((field) => [field, cfg[field]]));
 const pick = (env, names) => Object.fromEntries(names.filter((name) => name in env).map((name) => [name, env[name]]));
 
-const CODEX_ENV_VARS = JSON.parse(readFileSync(join(ROOT, "examples", "codex-memory-plugin", ".mcp.json"), "utf-8"))
-  .mcpServers["openviking-memory"].env_vars;
+const CODEX_MCP = JSON.parse(readFileSync(join(ROOT, "examples", "agent-hook-plugin", "hosts", "codex", ".mcp.json"), "utf-8"))
+  .mcpServers["openviking-memory"];
 
 // What a DSH child inherits: the parent's environment minus the names
 // `@deepseek-ai/dsh-subprocess` treats as credentials.
 const DSH_SCRUBBED = /KEY|PASSWORD|SECRET|TOKEN/i;
 const dshInherited = (env) => Object.fromEntries(Object.entries(env).filter(([name]) => !DSH_SCRUBBED.test(name)));
 
+const HOSTS = await loadHookHosts();
+
 const HARNESSES = [
-  {
-    name: "codex",
-    dir: "codex-memory-plugin",
-    section: "codex",
-    hook: ({ env, cwd }) => loadCodex(cwd, { env }),
-    proxy: ({ env }) => codexProxy(pick(env, CODEX_ENV_VARS)),
-  },
-  {
-    name: "claude-code",
-    dir: "claude-code-memory-plugin",
-    section: "claude_code",
-    rootKeyFallback: true,
-    hook: ({ env, cwd }) => loadClaudeCode(cwd, { env }),
-    proxy: ({ env }) => claudeCodeProxy(env),
-  },
   {
     name: "opencode",
     dir: "opencode-plugin",
@@ -72,8 +54,12 @@ const HARNESSES = [
     name: client,
     dir: "agent-hook-plugin",
     section: client.replace(/-/g, "_"),
-    hook: ({ env, cwd }) => loadAgentHookConfig(client, cwd, { env }),
-    proxy: ({ env }) => agentHookProxy({ ...env, OPENVIKING_HOOK_SOURCE: client }),
+    rootKeyFallback: Boolean(HOSTS[client].config?.rootKeyFallback),
+    hook: ({ env, cwd }) => loadAgentHookConfig(client, cwd, { ...HOSTS[client].config, env }),
+    // Codex hands its stdio server only the names in `env_vars`, plus `env`.
+    proxy: client === "codex"
+      ? ({ env }) => agentHookProxy({ ...pick(env, CODEX_MCP.env_vars), ...CODEX_MCP.env })
+      : ({ env }) => agentHookProxy({ ...env, OPENVIKING_HOOK_SOURCE: client }, undefined, HOSTS[client].config),
   })),
   // A hand-written MCP entry that names no client.
   {

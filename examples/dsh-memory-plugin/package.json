@@ -1,6 +1,6 @@
 {
   "name": "@openviking/dsh-memory-plugin",
-  "version": "0.5.44",
+  "version": "1.0.0",
   "description": "OpenViking memory and context bundle for DeepSeek Harness",
   "icon": "./icon.svg",
   "type": "module",
@@ -13,13 +13,11 @@
   "files": [
     "icon.svg",
     "index.mjs",
-    "client.mjs",
     "config.mjs",
-    "capture.mjs",
-    "lifecycle.mjs",
+    "decode.mjs",
+    "host.mjs",
     "mcp.mjs",
     "mcp-env.mjs",
-    "runtime.mjs",
     "compressor.mjs",
     "session-id.mjs",
     "skills.mjs",
@@ -46,34 +44,34 @@
     "prepublishOnly": "npm run prepack && npm run check && npm test"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.6 <1.0.0-0",
-    "@deepseek-ai/dsh-mcp-client": ">=0.1.0-rc.6 <1.0.0-0",
-    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.0-rc.6 <1.0.0-0"
+    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.2 <1.0.0-0",
+    "@deepseek-ai/dsh-mcp-client": ">=0.1.7-rc.2 <1.0.0-0",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.7-rc.2 <1.0.0-0"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-skill-filesystem": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-mcp-client": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
     "semver": "7.8.5"
   },
   "overrides": {
-    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-attachment": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-brand": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-code-runtime": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-invariants": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-mcp-client": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-scope": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-skill-filesystem": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-subprocess": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-timeout": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-typert-protocol": "0.1.0-rc.6",
-    "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6"
+    "@deepseek-ai/dsh-agent": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-attachment": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-brand": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-code-runtime": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-invariants": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-mcp-client": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-scope": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-session": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-skill-filesystem": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-subprocess": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-timeout": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.1.7-rc.2"
   },
   "engines": {
     "node": "^22.19.0 || >=24"

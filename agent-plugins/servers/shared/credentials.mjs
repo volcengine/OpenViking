@@ -1,4 +1,4 @@
-// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
+// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";

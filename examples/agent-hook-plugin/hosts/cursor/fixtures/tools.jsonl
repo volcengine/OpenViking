@@ -1,0 +1,3 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>list files</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Listing."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Found hello.txt."}]}}

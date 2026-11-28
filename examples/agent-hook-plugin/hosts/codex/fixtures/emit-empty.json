@@ -1,0 +1,8 @@
+{
+  "what": "an event with no context prints {}",
+  "emit": {
+    "event": "UserPromptSubmit",
+    "output": {}
+  },
+  "expect": {}
+}

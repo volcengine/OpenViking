@@ -28,13 +28,11 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## 安装内容
 
-安装器在 `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/` 下组装自包含插件（共享 hook 运行时与适配器同目录），将其注册为名为 `openviking` 的本地 marketplace，并用 `qodercli plugins install` 安装。插件包含：
-
-- 生命周期 Hook：加载画像、提问时召回、捕获对话、提交 session，以及 `viking://` URI 保护。
-- 以 stdio 代理形式提供的 OpenViking MCP 服务，含 `search`、`read`、`remember`、`add_skill` 等工具。
-- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 五个 skill，以插件名为前缀列出，例如 `openviking-memory:openviking-skills`。
+安装器在 `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/` 下组装自包含插件，将其注册为名为 `openviking` 的本地 marketplace，并用 `qodercli plugins install` 安装。插件包含生命周期 Hook、以 stdio 代理形式提供的 OpenViking MCP 服务（含 `search`、`read`、`remember`、`add_skill` 等工具），以及 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 五个 skill，以插件名为前缀列出，例如 `openviking-memory:openviking-skills`。
 
 `PATH` 中的每个 Qoder CLI 版本都会装上插件：`qodercli` 装在 `~/.qoder`（`QODER_CONFIG_DIR`），国内版 `qoderclicn` 装在 `~/.qoder-cn`（`QODERCN_CONFIG_DIR`）。卸载时两处都会移除。
+
+hook 与 MCP 从 `~/.openviking/ovcli.conf` 读取同一份凭据。`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.qoder` 下（见[插件配置](../configuration/02-client.md#插件配置)）。会话在 OpenViking 中记为 `qd-<session id>`。
 
 ## 验证
 
@@ -42,23 +40,18 @@ curl -fsSL https://openviking.ai/install | bash
 2. 新建会话，确认 `openviking` MCP 服务已连接。
 3. 告诉 Qoder 一条测试偏好并正常结束会话。记忆抽取完成后，在同一工作区新建会话询问它。
 
-## 工作原理
+## 宿主特有的行为
 
-- **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
-- **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。
-- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Bash 命令中包含这种 URI 时照常执行，并附加一条指向同一组工具的提示，`ov` 调用与字面量 `viking://` 参数照常可用。`mcp_call` 上的第二个 `PreToolUse` 条目在 `session_history` 调用没传 `session` 参数时补上当前会话。
-- 压缩或恢复之后，**SessionStart** 还会追加一段简短说明，给出会话的 OpenViking id 以及用来查回之前确切细节的 `session_history` MCP 工具。
-- **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
+Qoder 注册 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`Stop`、`PreCompact`、`SessionEnd`。捕获、提交、召回、离线队列等共享行为见[能力参考](./16-capability-reference.md)。
 
-hook 与 MCP 从 `~/.openviking/ovcli.conf` 读取同一份凭据，不会在服务端、账号或用户上各说各话。`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.qoder` 下（见[插件配置](../configuration/02-client.md#插件配置)）。会话在 OpenViking 中记为 `qd-<session id>`。
+- `UserPromptSubmit` 与 `SessionEnd` 在 TUI 和 headless `-p` 运行中都会触发。每次 `-p` 运行还会结束一个没有 transcript 的辅助会话，不会从中捕获任何内容。
+- Qoder 懒加载 MCP 工具：模型通过 `mcp_call` 调用它们，因此 URI 保护的拒绝信息给出的是 `mcp_call` 写法。在默认权限模式的 headless 运行中，MCP 工具需要权限规则或更宽松的权限模式。
+- URI 保护覆盖 `Read|Write|Edit|Glob|Grep|Bash`：文件工具访问 `viking://` URI 会被拒绝，包含这种 URI 的 Bash 命令照常执行并附加一条提示。`mcp_call` 上的第二个 `PreToolUse` 条目在 `session_history` 调用没传 session 时补上当前会话。
+- Qoder 把注入的上下文作为独立的 attachment 记录写进 transcript；捕获只读取对话记录，召回的记忆不会被再次捕获。
+- 插件相关命令请使用 `qodercli`：`qoder` 遇到某些参数会打开 Qoder IDE。
+- 不采集子代理。
 
-### 宿主决定的行为
-
-`UserPromptSubmit` 与 `SessionEnd` 在 TUI 和 headless `-p` 运行中都会触发，因此 headless 会话同样会召回并提交。Qoder 把注入的上下文作为独立的 attachment 记录写进 transcript；捕获只读取对话记录，召回的记忆不会被再次捕获。每次 `-p` 运行结束时还会结束一个没有 transcript 的辅助会话，它的 `SessionEnd` 会被忽略。
-
-Qoder 通过 `mcp_call` 懒加载 MCP 工具。在默认权限模式的 headless 运行中，MCP 工具需要权限规则或更宽松的权限模式。插件相关命令请使用 `qodercli`：`qoder` 遇到某些参数会打开 Qoder IDE。
-
-暂不支持子代理采集：宿主会触发 `SubagentStart`/`SubagentStop`，但共享 dispatcher 还没有子代理阶段。经过实测的宿主契约与 transcript 格式记录在 [`hosts/qoder/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/qoder/DESIGN.md)。
+经过实测的宿主契约与 transcript 格式记录在 [`hosts/qoder/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/qoder/DESIGN.md)。
 
 ## 升级与卸载
 

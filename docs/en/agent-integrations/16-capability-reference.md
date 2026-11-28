@@ -47,34 +47,60 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 
 ### What runs automatically
 
-| Integration | Recall before each prompt | Session-start context | Commits during a session | Commits at a normal exit | Host compaction |
+| Integration | Recall before each prompt | Session-start context | Commits during a session | Commits at session end | Host compaction |
 |---|---|---|---|---|---|
-| Claude Code | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Yes | Commits, then the host summarizes |
-| Codex | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Codex 0.145+; otherwise at the next start | Commits, then the host summarizes |
-| TraeCode CLI 2.0 | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Only if the build has `SessionEnd`; otherwise at the next start | Same as Codex |
-| Cursor | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | No | Commits, then the host summarizes |
-| TRAE, TRAE CN | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
-| ZCode | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
-| Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | Every 8 captured messages | Yes | Commits uncommitted messages |
-| CodeBuddy Code | Yes, session-aware, in the interactive TUI only | Profile, memory index, skills | Every 8 captured messages | Yes, in the interactive TUI only | Commits uncommitted messages |
-| Qoder CLI | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | Yes | Commits uncommitted messages |
-| Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | Every turn | No exit hook; turns are already committed | No pre-compaction hook |
-| OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 20,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
-| DSH | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
-| pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 20,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
+| Claude Code | Yes, session-aware | Profile, memory index, skills | By the server policy | Yes | Commits, then the host summarizes |
+| Codex | Yes, session-aware | Profile, memory index, skills | By the server policy | Codex 0.145+ | Commits, then the host summarizes |
+| TraeCode CLI 2.0 | Yes, session-aware | Profile, memory index, skills | By the server policy | Only if the build has `SessionEnd` | Same as Codex |
+| Cursor | Yes, session-aware | Profile, memory index, skills | By the server policy | No | Commits, then the host summarizes |
+| TRAE, TRAE CN | Yes, session-aware | Profile, memory index, skills | By the server policy | No | No pre-compaction event |
+| ZCode | Yes, session-aware | Profile, memory index, skills | By the server policy | No | No pre-compaction event |
+| Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | By the server policy | Yes | Commits, then the host summarizes |
+| CodeBuddy Code | Yes, session-aware, in the interactive TUI only | Profile, memory index, skills | By the server policy | Yes, in the interactive TUI only | Commits, then the host summarizes |
+| Qoder CLI | Yes, session-aware | Profile, memory index, skills | By the server policy | Yes | Commits, then the host summarizes |
+| Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | By the server policy | No | No pre-compaction hook |
+| OpenCode | Yes, session-aware | Profile, memory index, skills, at the first prompt | By the server policy | When the session is deleted | Commits, then the host summarizes |
+| DSH | Yes, session-aware | Profile, memory index, skills | By the server policy | Yes, with a 3-second budget | Commits, then the host summarizes |
+| pi | Yes, session-aware | Profile, memory index, skills, every turn | By the server policy; with takeover, at takeover's threshold | Yes, with a 3-second budget | Takeover off: commits, then pi summarizes; on: replaces pi's summary |
 | OpenClaw | Yes, session-aware | Profile, every turn | At half the token budget (64,000 by default) | No | The plugin owns compaction |
 | Hermes (bundled) | Yes, session-aware with a fallback | Profile and memory listings | No; only at session boundaries | Yes, if pending uploads finish within 10 seconds | Commits at fork-style compaction |
 | ov CLI | No | No | Only `ov session commit` | Not applicable | Not applicable |
 
-Rows labeled **Hermes (bundled)** describe the pinned in-tree provider
-from earlier Hermes releases. Catalog-based releases use the external plugin.
-Its different lifecycle behavior is listed in [Hermes](#hermes).
+Rows labeled **Hermes (bundled)** describe the pinned in-tree provider from earlier Hermes releases. Catalog-based releases use the external plugin. Its different lifecycle behavior is listed in [Hermes](#hermes).
 
 How to read this table:
 
-- **Session-aware recall** sends the session ID so the server can use the conversation to interpret the query. The shared plugins’ context mode also expands the query and tracks recently injected memories to avoid repeating them. Hermes uses list mode, which has no injection ledger. OpenClaw uses context search with the session ID but turns deduplication off, because its injected context is rebuilt every turn and never stored in the history. See [How recall reaches the server](#how-recall-reaches-the-server) for the request paths and fallbacks.
-- **Pending tokens** are server-side counts of captured but uncommitted messages. Most thresholds are client settings; [the commit table](#when-each-integration-commits) lists them.
-- **Commits at a normal exit** means the integration sends a commit request. Network errors, host exit budgets, or process termination can still interrupt it. [What happens at exit](#what-happens-at-exit) covers Ctrl+C, signals, and crashes.
+- **Session-aware recall** sends the session ID so the server can use the conversation to interpret the query. The shared plugins' context mode also expands the query and tracks recently injected memories to avoid repeating them. Hermes uses list mode, which has no injection ledger. OpenClaw uses context search with the session ID but turns deduplication off, because its injected context is rebuilt every turn and never stored in the history. See [How recall reaches the server](#how-recall-reaches-the-server) for the request paths and fallbacks.
+- **By the server policy** means the plugin gives the session an auto-commit policy and the server commits at 100,000 pending tokens and after 30 idle minutes. See [When sessions are committed](#when-each-integration-commits).
+- **Commits at session end** means the integration sends a commit request at the host's session-end event. Network errors, host exit budgets, or process termination can still interrupt it. [What happens at exit](#what-happens-at-exit) covers the hosts without one.
+
+<a id="host-events"></a>
+
+### Host events
+
+Every integration built on the shared plugin code runs one flow; a host only says which of its events starts each stage. This table is generated from the host modules (`node examples/memory-plugin-shared/host-table.mjs --lang en`).
+
+<!-- host-table:start -->
+| Host | Session start | Prompt | Turn end | Before compaction | Session end | Tool call | Has session end | Profile injected at | Writes may detach |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude-code | `SessionStart` | `UserPromptSubmit` | `Stop` | `PreCompact` | `SessionEnd`, `SubagentStop` | `PreToolUse` | yes | session start | yes |
+| codex | `SessionStart` | `UserPromptSubmit` | `Stop` | `PreCompact` | `SessionEnd` | — | yes | session start | yes |
+| cursor | `sessionStart` | `beforeSubmitPrompt` | `stop` | `preCompact` | `sessionEnd` | `preToolUse` | yes | session start | no |
+| trae | `session-start` | `user-prompt-submit` | `stop` | `post-compact` (after compaction) | — | — | no | session start | no |
+| trae-cn | `session-start` | `user-prompt-submit` | `stop` | `post-compact` (after compaction) | — | — | no | session start | no |
+| antigravity | `session-start` | `pre-invocation` | `stop` | — | — | — | no | session start | yes |
+| zcode | `session-start` | `user-prompt-submit` | `stop` | — | — | — | no | session start | yes |
+| kimicode | `session-start` | `user-prompt-submit` | `stop` | `pre-compact` | `session-end`, `interrupt` | — | yes | first prompt | yes |
+| codebuddy | `session-start` | `user-prompt-submit` | `stop` | `pre-compact` | `session-end` | — | yes | session start | yes |
+| qoder | `session-start` | `user-prompt-submit` | `stop` | `pre-compact` | `session-end` | `pre-tool-use` | yes | session start | yes |
+| opencode | `session.created` | `prompt` | `execution.ended` | `compaction` | `session.deleted` | `execute.before` | yes | first prompt | no |
+| dsh | `agent/created` | `agent/pre-step` | `session/event` | `compaction/start` | `session/dispose` | `tools/pre-execute` | yes | session start | no |
+| pi | `session_start`, `session_compact` | `context` | `turn_end` | `session_before_compact` | `session_shutdown`, `viking_commit` | `tool_call` | yes | session start | no |
+<!-- host-table:end -->
+
+- Codex fires `SessionEnd` from version 0.145. Cursor registers `sessionEnd`, but it fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
+- TRAE reports a compaction only after it happened (`post-compact`), so nothing is committed before it.
+- "Writes may detach" means the turn-end, compaction, and session-end writes can answer the host first and finish in a detached process (`writePathAsync`, on by default). Claude Code and Codex always run `PreCompact` inside the hook; Codex always detaches `SessionEnd`, which Codex gives 1 second by default and 3 seconds at most.
 
 <a id="_1-1-active-tool-surface-agentic-calls"></a><a id="_2-shared-capability-core"></a>
 
@@ -109,16 +135,12 @@ Host differences:
 
 - **OpenCode** prefixes the tools with `openviking_`. **DSH** names them `mcp__openviking__<tool>`.
 - **DSH** runs one MCP proxy per DSH profile. Tool calls therefore carry a process-level actor peer, and `remember` is not tied to the DSH session. Recall, capture, and commits still resolve a peer per session.
-- **pi** registers the tools only when the session is not bypassed, the health check passes, the OpenViking session exists, and the `/mcp` handshake returns a tool list. If the handshake fails, that session has no OpenViking tools, but recall, sync, and takeover continue, and a later turn retries the handshake. `mcpEnabled: false` turns the bridge off. A root API key is refused on `/mcp` with 403, so a credential chain that ends at `ov.conf`'s `server.root_api_key` produces a session without tools.
+- **pi** registers the tools only when the session is not bypassed and the `/mcp` handshake returns a tool list. If the handshake fails, that session has no OpenViking tools, but recall, sync, and takeover continue, and a later turn retries the handshake. `mcpEnabled: false` turns the bridge off. A root API key is refused on `/mcp` with 403, so a credential chain that ends at `ov.conf`'s `server.root_api_key` produces a session without tools.
 - **Codex** passes its MCP server only the environment variables listed in `.mcp.json` `env_vars`.
 
 ### Rule search across agents
 
-Rule search is a read-only, model-callable check before an action or response subject to
-constraints. Pass `task_context` with the user goal, planned action, and relevant facts;
-`rule_probability_threshold` defaults to `0.65`. Results preserve complete Rule blocks.
-Evaluate each Rule's `applies_when`, `exception`, and `content` and comply with every
-applicable Rule. A failed or unavailable check is not an empty set of Rules.
+Rule search is a read-only, model-callable check before an action or response subject to constraints. Pass `task_context` with the user goal, planned action, and relevant facts; `rule_probability_threshold` defaults to `0.65`. Results preserve complete Rule blocks. Evaluate each Rule's `applies_when`, `exception`, and `content` and comply with every applicable Rule. A failed or unavailable check is not an empty set of Rules.
 
 | Integration | Registered tool |
 |---|---|
@@ -131,15 +153,9 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 | Hermes external plugin, LangChain / LangGraph | `viking_rule_search` |
 | Magpie | `magpie-plugin_rule_search` (source installs use their folder prefix) |
 
-Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients.
-Native REST adapters require the updated plugin. The shared `openviking-rule-search`
-skill ships with Claude Code, Codex/TraeCode CLI, Cursor, TRAE/TRAE CN, ZCode, Kimi Code, CodeBuddy,
-Qoder CLI, Antigravity, OpenCode, DSH, pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
-Keep existing MCP opt-in and tool allowlist settings enabled. This adds a query entrypoint;
-it does not install an automatic per-turn check or enforcement hook.
+Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients. Native REST adapters require the updated plugin. The shared `openviking-rule-search` skill ships with Claude Code, Codex/TraeCode CLI, Cursor, TRAE/TRAE CN, ZCode, Kimi Code, CodeBuddy, Qoder CLI, Antigravity, OpenCode, DSH, pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool. Keep existing MCP opt-in and tool allowlist settings enabled. This adds a query entrypoint; it does not install an automatic per-turn check or enforcement hook.
 
-Hermes catalog installations are pinned by the Hermes catalog and need its pin updated
-to receive the new plugin; older bundled providers keep their original tools.
+Hermes catalog installations are pinned by the Hermes catalog and need its pin updated to receive the new plugin; older bundled providers keep their original tools.
 
 ### OpenClaw tools
 
@@ -201,7 +217,7 @@ The shared-plugin recall pipeline excludes resources; the model searches resourc
 The server handles a session ID in two ways:
 
 - **Context mode** (context search and legacy recall) expands the query from the conversation and keeps a per-session ledger of injected memories. Expansion needs `retrieval.enable_intent` (on by default), a session that already has messages, and either an archive overview or current messages. The original query stays first, followed by up to three planned queries.
-- **List mode** (the default when `mode` is omitted) lets intent analysis replace the query, so the original query may not survive, and it skips the ledger. Codex's second fallback, Hermes's `viking_search(mode="deep")`, and Hermes's preferred recall path land here. They send a session ID but do not get expansion or deduplication.
+- **List mode** (the default when `mode` is omitted) lets intent analysis replace the query, so the original query may not survive, and it skips the ledger. Hermes's `viking_search(mode="deep")`, and Hermes's preferred recall path land here. They send a session ID but do not get expansion or deduplication.
 
 Cross-turn deduplication (`dedup_turns`):
 
@@ -213,22 +229,22 @@ Cross-turn deduplication (`dedup_turns`):
 
 ### Recall by integration
 
-The table shows the default path. Turning on [recall digests](#recall-digest) changes the request.
+The table shows the default path. Turning on [recall digests](#recall-digest) changes the request. Every integration built on the shared plugin code applies `recallQueryFilters` and `minQueryLength` to the prompt, and a prompt event delivered twice (the same event ID, or the same text within 500 ms) is answered once.
 
 | Integration | Runs on | Query | Where the context goes |
 |---|---|---|---|
 | Claude Code | Every `UserPromptSubmit` | The prompt, trimmed | `<openviking-context>` in `additionalContext` |
-| Codex, TraeCode CLI 2.0 | Every `UserPromptSubmit`; the whole hook has a 120-second deadline | The prompt | `<openviking-context source="auto-recall">` |
-| Cursor | `beforeSubmitPrompt` | The prompt; repeated events within 500 ms reuse the previous result | `additional_context` |
+| Codex, TraeCode CLI 2.0 | Every `UserPromptSubmit` | The prompt | `additionalContext` |
+| Cursor | `beforeSubmitPrompt` | The prompt | `additional_context` |
 | TRAE, TRAE CN | `UserPromptSubmit` | The prompt, with earlier injected blocks removed | `additionalContext` |
-| ZCode | `UserPromptSubmit` | The prompt, with three kinds of injected block removed, including `<system-reminder>` | `additionalContext`, strict JSON |
+| ZCode | `UserPromptSubmit` | The prompt, with injected blocks removed, including `<system-reminder>` | `additionalContext`, strict JSON |
 | Kimi Code | `UserPromptSubmit` | The prompt | Plain context text, not JSON |
 | CodeBuddy Code | `UserPromptSubmit`, interactive TUI only | The prompt | `<openviking-context>` in `additionalContext` |
 | Qoder CLI | `UserPromptSubmit`, interactive and headless | The prompt | `<openviking-context>` in `additionalContext` |
 | Antigravity | `PreInvocation` with `invocationNum` 0, once per user turn; later calls in a tool loop and reactive wakeups skip it | `lastUserInput`, with injected `<openviking-context>` blocks removed | A `systemMessage` step in `injectSteps`, which stays in the conversation |
-| OpenCode | v1: every `chat.message`; v2: every prompt | Text parts of the message | v1 prepends a synthetic part. v2 stores the result in message metadata and injects it before that message at each model step, without a new request |
-| DSH | `agent/pre-step` | Every message in the claimed batch, minus its own injected content | Appended as a user message |
-| pi | Queued at `before_agent_start`, run in the `context` event | The prompt | Prepended to the last real user message, so this turn's prompt gets this turn's memories |
+| OpenCode | Every prompt | Text parts of the message | Stored in message metadata and injected before that message at each model step, without a new request |
+| DSH | `agent/pre-step` | The prompt, minus its own injected content | Appended as a user message |
+| pi | The `context` event | The prompt | Prepended to the last real user message, so this turn's prompt gets this turn's memories |
 | OpenClaw | Context assembly | The incoming prompt, cleaned and cut to 4,000 characters | `<relevant-memories>` in the system prompt, rebuilt every turn. On hosts that do not pass the prompt, it is prepended to the last user message |
 | Hermes | Before every model call | User input of 5 characters or more, with skill scaffolding removed | `<memory-context>` appended to the current user message in the request only; never stored |
 
@@ -239,7 +255,7 @@ The table shows the default path. Turning on [recall digests](#recall-digest) ch
 Integrations that use the shared plugin code inject one `<openviking-context>` block at session start. It holds the user profile (`viking://user/<space>/memories/profile.md`), an index of the `preferences/` and `entities/` memories, and an `<available-skills>` catalog. When the session has an actor peer, the same files under `viking://user/<space>/peers/<peer>/memories/` are added: the profile, preferences, and entities have no message range, so extraction writes the user's own facts to the user root even in a peer session. The user root comes first; the peer profile is a second `<user-profile>` element without the lines it shares with the user profile, and both roots share one budget:
 
 ```text
-<openviking-context source="startup">
+<openviking-context source="session-start">
 <user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
 <available-memories>...</available-memories>
 <available-skills>
@@ -252,22 +268,7 @@ Integrations that use the shared plugin code inject one `<openviking-context>` b
 </openviking-context>
 ```
 
-When each integration injects it:
-
-| Integration | When |
-|---|---|
-| Claude Code | `SessionStart`, every source |
-| Codex | `SessionStart` on startup, clear, resume, and compact |
-| Cursor, TRAE, TRAE CN, ZCode | `SessionStart` |
-| Antigravity | `SessionStart`, and the first turn after each compaction checkpoint in the transcript |
-| Kimi Code | The first prompt; retried on later prompts until it succeeds |
-| CodeBuddy Code | `SessionStart`, every source; it can be delivered twice in one session, so the hook is idempotent. CodeBuddy drops `SessionStart` context at a compaction, so the next prompt sends it again |
-| Qoder CLI | `SessionStart`, every source (`startup`, `resume`, `compact`) |
-| OpenCode | The first message of each session and the first after each compaction; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
-| DSH | At session start, and again on the next model step when a compaction dropped it |
-| pi | In the system prompt, rebuilt every turn |
-| OpenClaw | In the system prompt, rebuilt every turn: `<user-profile>` for the user's profile and, with `peer_role`, the actor peer's profile. No memory index or skill catalog |
-| Hermes | Its own reader loads the profile and the preferences and entities listings, with a 6,000-token default budget |
+For every integration built on the shared plugin code, the block opens the session at its session-start event (see [Host events](#host-events)). Where the session-start answer does not reach the model (Kimi Code, OpenCode), it goes with the first prompt instead. After a compaction that drops it (CodeBuddy Code, Antigravity, OpenCode, DSH), the next prompt sends it again. pi adds it to its system prompt, which pi rebuilds every turn. OpenClaw adds `<user-profile>` to the system prompt every turn, with no memory index or skill catalog. Hermes's own reader loads the profile and the preferences and entities listings, with a 6,000-token default budget.
 
 Budgets and limits:
 
@@ -276,29 +277,17 @@ Budgets and limits:
 - The catalog comes from one `GET /api/v1/skills` request. The user's own skills come first, and an account skill with the same name as a user skill is left out. Each description is cut to about 40 tokens. If descriptions do not fit, the catalog lists names only; if names do not fit, it ends with `... +N more`, or shrinks to a one-line count. Servers without that endpoint get no catalog.
 - `sessionStartMaxBytes` caps the whole block in UTF-8 bytes: 9,500 for Claude Code and Codex, whose hosts move hook output above about 10,000 characters into a file and show only a preview; 20,000 for ZCode, which drops output above 32 KB; no cap elsewhere. Above the cap, the memory index is dropped first, then the skill catalog.
 
-On resume, some integrations also inject the previous archive summary, with a 32,000-token budget: Claude Code on resume and compact, Codex on resume after its local session was cleared, OpenCode at session start, and pi when takeover is off. Claude Code and Codex skip a profile block identical to the one the session already received.
+On a resume, a session whose profile has not changed is not sent it again. With `resumeArchiveInject` (off by default), a compaction or a resume also adds the session's latest archive overview to the block, taking up to half of `sessionStartMaxBytes`. After a compaction or a resume, the session-history note (`sessionHistoryPointer`, on by default) tells the model that OpenViking holds the full session and how to look things up in it; the first event whose answer reaches the model delivers it.
 
 <a id="_3-2-4-timeout-and-budget-chain"></a>
 
 ### Timeouts and budgets
 
-The server stops query expansion after 5 seconds (`retrieval.recall_intent_timeout_s`) and digest rewriting after 30 seconds (`retrieval.recall_rewrite_timeout_s`). The shared plugins raise their context-request timeout to at least 15 seconds when expansion is on and at least 45 seconds when a digest is requested, so the client waits for every server stage. A host deadline can still end the hook first. To change these values, see [Tune recall latency](./19-recall-tuning.md#request-timeout).
+The server stops query expansion after 5 seconds (`retrieval.recall_intent_timeout_s`) and digest rewriting after 30 seconds (`retrieval.recall_rewrite_timeout_s`). The shared plugins raise their context-request timeout to at least 15 seconds when expansion is on and at least 45 seconds when a digest is requested, so the client waits for every server stage. To change these values, see [Tune recall latency](./19-recall-tuning.md#request-timeout).
 
-| Integration | Recall timeout |
-|---|---|
-| Claude Code | 15 seconds, inside a 60-second hook limit |
-| Codex | A 120-second deadline for the whole hook, including a local compressor of up to 110 seconds |
-| Cursor, TRAE, TRAE CN, ZCode | 15 seconds, inside a 20-second host limit |
-| OpenCode | 30 seconds |
-| DSH | 10 seconds, raised to at least 15 with query expansion. Recall blocks the pre-step |
-| pi | 15 seconds |
-| CodeBuddy Code | 17 seconds, inside a 60-second hook limit |
-| Qoder CLI | 17 seconds, inside a 60-second hook limit |
-| Antigravity | 17 seconds, inside a 20-second hook limit |
-| OpenClaw | 15 seconds by default for the context search (`autoRecallTimeoutMs`), after a 500 ms health check |
-| Hermes | 4 seconds in total and 3 seconds per request; configurable |
+All requests of one host event share one deadline, set per event in the host's `host.mjs` (`budgets`) to fit inside the host's hook timeout, so their timeouts cannot add up past it. The prompt event's budget is 20 seconds for Claude Code, 125 seconds for Codex (it includes the local compressor), and 17 seconds for Cursor, Kimi Code, CodeBuddy Code, and Qoder CLI.
 
-OpenClaw and Hermes limit injected recall to 4,000 characters and skip an entry that does not fit instead of cutting it.
+OpenClaw uses 15 seconds by default for the context search (`autoRecallTimeoutMs`), after a 500 ms health check. Hermes uses 4 seconds in total and 3 seconds per request. Both limit injected recall to 4,000 characters and skip an entry that does not fit instead of cutting it.
 
 <a id="_3-2-5-recall-digest"></a>
 
@@ -317,14 +306,15 @@ A recall digest asks a model to rewrite recall results into a short list of cite
 | `client` | Use a local compressor; Claude Code and Codex only |
 | `auto` | Claude Code and Codex use a local compressor when one is available and otherwise send `rewrite: "auto"`. Other integrations send `rewrite: "auto"` |
 
-Claude Code and Codex default to `auto`; the other integrations default to `off`. Server digests are supported by Claude Code, Codex, OpenCode, DSH, pi, Cursor, TRAE, TRAE CN, ZCode, OpenClaw, and the Hermes external plugin, and need a server with context-search rewrite support. The bundled Hermes provider does not support recall digests. The legacy values `1` and `0` mean `auto` and `off`. A `no_relevant` result suppresses injection; the plugin must not fall back to the raw block.
+Every integration defaults to `off`. Server digests are supported by every integration built on the shared plugin code, OpenClaw, and the Hermes external plugin, and need a server with context-search rewrite support. The bundled Hermes provider does not support recall digests. The legacy values `1` and `0` mean `auto` and `off`. A `no_relevant` result suppresses injection; the plugin must not fall back to the raw block.
 
-Local compressors:
+Local compressors, used by `client` and `auto`:
 
-- **Claude Code** checks for `claude` with `claude --version` (cached for 7 days) and runs `claude -p --model sonnet --effort low --strict-mcp-config`. The subprocess timeout defaults to 110 seconds (`recallCompressTimeoutMs`), but the 60-second prompt hook can end it sooner. Inputs under 1,500 characters are not compressed. Cited URIs are matched back to real result URIs by edit distance, and bullets that cannot be matched are dropped. On failure the plugin injects locally formatted results, or the rendered block.
+- **Claude Code** checks for `claude` with `claude --version` (cached for 7 days) and runs `claude -p --model sonnet --effort low --strict-mcp-config`. The subprocess timeout defaults to 110 seconds (`recallCompressTimeoutMs`), but the prompt hook's budget can end it sooner. Inputs under 1,500 characters are not compressed. Cited URIs are matched back to real result URIs by edit distance, and bullets that cannot be matched are dropped. On failure the plugin injects locally formatted results, or the rendered block.
 - **Codex** picks a model from `~/.codex/models_cache.json` (`gpt-5.3-codex-spark` first, then `gpt-5.6-luna` with low effort; cached for 7 days) and runs `codex exec` in a read-only, ephemeral sandbox with a 110-second default timeout. One runtime failure disables local compression until the next `SessionStart`. Output is capped at 4,000 characters; failures fall back as for Claude Code.
+- **DSH** runs one model call through the prompting agent's own LLM service.
 
-These settings apply to automatic recall only. An explicit MCP `search` call uses the arguments the model passes. For older-server fallbacks and host time budgets, see the [shared plugin documentation](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/README.md#cloud-recall-compression) and [Tune recall latency](./19-recall-tuning.md).
+These settings apply to automatic recall only. An explicit MCP `search` call uses the arguments the model passes. See also [Tune recall latency](./19-recall-tuning.md).
 
 <a id="_3-2-6-injection-backflow-protection"></a>
 
@@ -340,71 +330,61 @@ Injected context is wrapped in fixed tags such as `<openviking-context>`, and ca
 
 ### How server sessions and commits work
 
-- **Sessions are created implicitly.** The server creates a session when it receives the first message for it, or on the first context-mode recall with that session ID. DSH is the only integration that creates its sessions explicitly.
+- **Sessions are created implicitly.** The server creates a session when it receives the first message for it, or on the first context-mode recall with that session ID.
 - **A commit has two phases.** `POST /api/v1/sessions/{id}/commit` returns after phase 1 archives the messages. Its response includes a `task_id` for phase 2, memory extraction, which runs in the background. A successful commit response does not mean extraction has finished.
-- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, DSH, Cursor, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 0 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
-- **Server auto-commit is off by default.** `memory.session_auto_commit.enabled` defaults to `false`, and the idle scanner does not start while it is off. A new session can still get a policy from `server.user_config_defaults.auto_commit_policy`, or explicitly through `POST /api/v1/sessions`, `PATCH /api/v1/sessions/{id}/config`, the SDK, or `ov session new --auto-commit-policy-json` and `ov session config set`. A policy's defaults are 150,000 pending tokens (strictly greater than), 100 messages, an 86,400-second idle timeout, `keep_recent_count` 0, and no minimum interval. The idle timeout also needs `memory.session_auto_commit.enabled=true`. The memory plugins send no policy, so without one of these settings the client is the only thing that commits.
+- **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Every integration built on the shared plugin code and Hermes send 0, except pi in takeover mode, which sends the exact message count of its last 3 user turns; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
+- **Auto-commit policies.** A session can carry an auto-commit policy: a pending-token threshold the server checks on every message write, and an idle timeout. A policy is set through `POST /api/v1/sessions`, `PATCH /api/v1/sessions/{id}/config`, the SDK, `ov session new --auto-commit-policy-json` and `ov session config set`, or for every new session through `server.user_config_defaults.auto_commit_policy`. Policies need OpenViking server 0.4.13 or later. The idle timeout also needs `memory.session_auto_commit.enabled=true` on the server, which defaults to `false`; while it is off the idle scanner does not start.
 - **Writes are batched.** The shared plugins send up to 100 messages per `POST /messages/batch`, matching the server limit, and fall back to one message at a time when the batch endpoint returns 404 or 405.
 - **Large tool output is stored separately.** The server moves tool output above 20,000 characters into a separate record and leaves a `tool_output_ref`. Plugins raise their own limit (`captureToolMaxChars`) to 1,000,000 only as a safety net.
-- **Some writes run in the background.** Claude Code, Codex, and ZCode hand the `Stop` write to a detached worker by default (`OPENVIKING_WRITE_PATH_ASYNC`), so the host does not wait. The worker survives the terminal closing once it has started, but network errors or process termination can still interrupt it. While this is on, `Stop` no longer prints the `appended N turn(s)` notice.
 
 <a id="_3-3-2-regular-commit-triggers"></a>
 
 ### When each integration commits
 
-Thresholds in this table are client-side. They read the server's pending-token count unless noted.
+Every integration built on the shared plugin code follows the same rules:
 
-| Integration | During the session | On an explicit action or boundary | Before or after compaction |
-|---|---|---|---|
-| Claude Code | `Stop` at 20,000 pending tokens | `SessionEnd` and `SubagentStop` always commit; `SessionStart` replays queued writes | `PreCompact` always commits, synchronously |
-| Codex | `Stop` at 20,000 pending tokens | `SessionEnd` (Codex 0.145+) catches up missed turns, then commits in a detached worker. `SessionStart` on startup or clear commits sessions marked as ended or idle for more than 30 minutes | `PreCompact` catches up and commits everything |
-| TraeCode CLI 2.0 | Same as Codex | Same as Codex; without `SessionEnd`, only the start-up sweep | Same as Codex |
-| Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` always commits |
-| TRAE, TRAE CN | Every `Stop` that captured content | None | No pre-compaction event |
-| ZCode | Every `Stop`; turns a missed `Stop` skipped are caught up from the rollout file at the next `Stop` | None | No pre-compaction event |
-| Kimi Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent | `PreCompact` commits everything not yet committed |
-| CodeBuddy Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` (interactive TUI only) commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
-| Qoder CLI | `Stop` after 8 captured messages since the last commit | `SessionEnd` commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
-| Antigravity | Every `Stop` that captured content; steps a missed `Stop` left behind are captured at the next `Stop` | None; `SessionStart` replays queued writes | No pre-compaction hook |
-| OpenCode | v1 `session.idle`, v2 end of execution: at 20,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
-| DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check |
-| pi, takeover on (default) | Locally estimated 30,000 tokens with more than 3 user turns | `/viking commit` | `session_before_compact` |
-| pi, takeover off | 20,000 pending tokens after each sync | `session_shutdown` and `/viking commit` | `session_before_compact` |
-| OpenClaw | After a turn, at `tokenBudget × commitTokenThresholdRatio` (128,000 × 0.5 by default) | `/new`, `/reset`, and `memory_store` commit and wait | `compact()` commits and waits up to 5 minutes for extraction |
-| Hermes (bundled) | None | Session end, session switch (`/new`, `/resume`, `/branch`, fork-style compaction), gateway cache eviction, and an exit handler; `/undo` and in-place compaction do not commit | At fork-style compaction only |
-| ov CLI | None | `ov session commit`; `ov add-memory` creates, fills, and commits its own session | Not applicable |
+- **Turn end** captures the turns the host's transcript holds past the session's cursor. The cursor moves only past messages the server accepted or the offline queue took.
+- **During a session** the server commits. After the session's first write, the plugin sets the session's auto-commit policy once: `commitTokenThreshold` pending tokens (default 100,000) and `commitIdleSeconds` idle seconds (default 1,800; 0 for none, and values under 300 count as 300). The plugin never checks a threshold itself. On a server older than 0.4.13 there is no threshold commit, and the session is committed only at a compaction or a session end. The idle commit needs `memory.session_auto_commit.enabled` on the server.
+- **Before a compaction** the plugin captures and commits, unless `autoCommitOnCompact` is `false`. When the host may still be writing the last assistant message, that message waits for the next capture.
+- **At session end** the plugin captures and commits.
+- **At session start** the plugin replays the offline queue.
+
+The host's events for each stage are in [Host events](#host-events). Differences:
+
+| Integration | Difference |
+|---|---|
+| Claude Code | `SubagentStop` captures and commits the subagent's own session. `PreCompact` always runs inside the hook, because the host rewrites the transcript right after |
+| Codex | `SessionEnd` exists from Codex 0.145 and always runs in a detached worker. `PreCompact` runs inside the hook |
+| TraeCode CLI 2.0 | Same as Codex; a build without `SessionEnd` has no session-end commit |
+| Cursor, TRAE, TRAE CN, ZCode, Antigravity | No session-end commit; see [What happens at exit](#what-happens-at-exit). TRAE, TRAE CN, ZCode, and Antigravity also have no pre-compaction event |
+| Kimi Code | `Interrupt`, which Kimi Code fires instead of `Stop` after a cancelled turn, captures and commits like `SessionEnd`, inside the hook with a 2-second budget |
+| CodeBuddy Code | `SessionEnd` fires only in the interactive TUI |
+| pi | `/viking commit` commits at once. With takeover on, takeover owns the commits: the plugin sets no server policy, and takeover commits at its own token threshold |
+| OpenClaw | After a turn, at `tokenBudget × commitTokenThresholdRatio` (128,000 × 0.5 by default). `/new`, `/reset`, and `memory_store` commit and wait. `compact()` commits and waits up to 5 minutes for extraction |
+| Hermes (bundled) | No commits during a session. Session end, session switch (`/new`, `/resume`, `/branch`, fork-style compaction), gateway cache eviction, and an exit handler commit; `/undo` and in-place compaction do not |
+| ov CLI | `ov session commit`; `ov add-memory` creates, fills, and commits its own session |
 
 <a id="_3-3-3-shutdown-method-×-harness-outcome-matrix"></a>
 
 ### What happens at exit
 
-"Commits" means the exit path sends a commit request. "Conditional" depends on the note in the last column. Messages that were already written stay in the server session and are archived by the next commit of the same session. The table assumes server auto-commit is off.
+On a host with a session-end event, a normal exit captures what is left and commits. On a host without one (Cursor, TRAE, TRAE CN, ZCode, Antigravity, and Codex before 0.145), the plugin does not commit the last stretch of a session: messages already captured stay in the server session until the server's idle commit or a later commit of the same session. Turn on `memory.session_auto_commit.enabled` on the server so the idle commit covers them; no client setting is needed, because the plugin already sends the idle time with the policy.
 
-| Integration | Normal exit | Ctrl+C | SIGTERM | Terminal or window closed | `kill -9` or crash | How the rest is recovered |
-|---|---|---|---|---|---|---|
-| Claude Code | Commits | Commits | Commits | Commits | No | `SessionEnd` hands the commit to a detached worker in its own process group, which SIGHUP does not stop. Otherwise the next threshold, `/compact`, or `SessionEnd` |
-| Codex | Commits | Conditional | No | No | No | A double Ctrl+C quits cleanly and fires `SessionEnd`; a single one does not. Anything missed is committed at the next `SessionStart` on startup or clear: at once if the end marker survived, otherwise after 30 minutes idle |
-| TraeCode CLI 2.0 | No, unless the build has `SessionEnd` | No | No | No | No | The 30-minute idle sweep at the next `SessionStart` |
-| Cursor | No | No | No | No | No | Closing or switching a chat fires no event. `sessionEnd` fires only on window close, after the host has already stopped running hook commands. Messages below the 8-message threshold wait for later messages in the same session |
-| TRAE, TRAE CN | No | No | No | No | No | Every `Stop` already committed, so at most the turn in progress is lost |
-| ZCode | No | Conditional | No | No | No | Ctrl+C after that turn's `Stop` fired lets the detached worker finish. Every `Stop` commits, and missed turns are caught up at the next `Stop` |
-| Kimi Code | Commits | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent. `Interrupt` shares a 2-second request budget between capture and commit, so a slow capture leaves the commit to the next commit of the same session |
-| CodeBuddy Code | Conditional | No | No | No | No | `SessionEnd` fires only in the interactive TUI, where it commits everything not yet committed, including messages `Stop` already sent; a headless run relies on the threshold or `/compact`. The capture runs in a detached worker that the hook's own timeout does not reach |
-| Qoder CLI | Commits | Not verified | Not verified | Not verified | No | `SessionEnd` fires on `/exit` and at the end of a headless `-p` run, and commits everything not yet committed, including messages `Stop` already sent. The capture runs in a detached worker that the hook's own timeout does not reach |
-| Antigravity | No | No | No | No | No | No exit hook is registered. Every `Stop` that captured content already committed, so at most the turn in progress is left; its finished steps are captured at the next `Stop` of the same conversation |
-| OpenCode | Conditional | Conditional | Conditional | Conditional | No | v1 1.15.11+ `dispose` and v2 cleanup commit every session, but host cleanup time is limited, so slow requests or many sessions can be cut off. v2 cleanup also runs after 60 minutes idle and on plugin hot reload |
-| DSH | Commits | Commits | Commits | No | No | Teardown gives each session one 3-second commit, queued behind any slow write, inside a 5-second process grace period. A second Ctrl+C force-quits without it. Closing a browser tab in the web form does not tear down |
-| pi, takeover on | No | No | No | No | No | `session_shutdown` saves takeover state but does not commit. The next run that reaches the threshold, or `/viking commit` |
-| pi, takeover off | Commits | Commits | Commits | Commits | No | A failed commit goes to the offline queue |
-| OpenClaw | No | No | No | No | No | The `session_end` handler does not commit. Archiving relies on `/new`, `/reset`, and the threshold |
-| Hermes (bundled) | Conditional | Conditional | Conditional | Conditional | No | The exit handler drains uploads for up to 10 seconds, then commits; if the drain does not finish, it skips the commit instead of committing half a session. SIGTERM and SIGHUP get a 1.5-second grace period by default, and the Hermes exit watchdog can cut a slow commit short |
-| LangChain, Open WebUI, Agent Plugins, MCP clients | No | No | No | No | No | No session hooks. The `DELETE /mcp` an MCP proxy sends on exit only closes the protocol session. LangChain relies on the caller's `close()` |
+No integration commits after `kill -9` or a crash; the idle commit is the only fallback. Host-specific exit behavior:
 
-What this means in practice:
-
-- **Commits at a normal exit:** Claude Code, Codex 0.145+, Qoder CLI, OpenCode, DSH, pi with takeover off, and Hermes. The others rely on the recovery in the last column.
-- **No integration commits after `kill -9`.** Written messages stay live until the next commit of that session. A server auto-commit policy with an idle timeout is the only server-side fallback, and the plugins do not configure one.
-- **TRAE, TRAE CN, ZCode, and Antigravity** have the simplest exit behavior because every turn commits, at the cost of a full archive and extraction on every `Stop`.
+| Integration | At exit |
+|---|---|
+| Claude Code | `SessionEnd` hands the commit to a detached worker in its own process group, which SIGHUP does not stop |
+| Codex | A double Ctrl+C quits cleanly and fires `SessionEnd`; a single one does not |
+| Kimi Code | `SessionEnd` and `Interrupt` commit. `Interrupt` shares its 2-second budget between capture and commit, so a slow capture leaves the commit to the next commit of the same session |
+| CodeBuddy Code | `SessionEnd` fires only in the interactive TUI; a headless run is committed by the server policy or `/compact` |
+| Qoder CLI | `SessionEnd` fires on `/exit` and at the end of a headless `-p` run |
+| OpenCode | Session deletion commits |
+| DSH | `session/dispose` gives each session one commit within a 3-second budget. A second Ctrl+C force-quits without it. Closing a browser tab in the web form does not tear down |
+| pi | `session_shutdown` commits within a 3-second budget, unless takeover is on |
+| OpenClaw | The `session_end` handler does not commit. Archiving relies on `/new`, `/reset`, and the threshold |
+| Hermes (bundled) | The exit handler drains uploads for up to 10 seconds, then commits; if the drain does not finish, it skips the commit instead of committing half a session. SIGTERM and SIGHUP get a 1.5-second grace period by default, and the Hermes exit watchdog can cut a slow commit short |
+| LangChain, Open WebUI, Agent Plugins, MCP clients | No session hooks. The `DELETE /mcp` an MCP proxy sends on exit only closes the protocol session. LangChain relies on the caller's `close()` |
 
 <a id="_3-3-4-pending-queue-offline-compensation-comparison"></a>
 
@@ -412,9 +392,7 @@ What this means in practice:
 
 | Integration | What happens when a write fails |
 |---|---|
-| Claude Code, CodeBuddy Code, Qoder CLI, Antigravity, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run (2 for Kimi Code) and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
-| Cursor | New captures are not queued. The text transcript and local tool records retain unsent content; progress advances only after server acknowledgement. Later capture in the same conversation retries it, and incomplete capture prevents a commit. `SessionStart` still replays legacy queued writes |
-| Codex, TraeCode CLI 2.0 | New captures are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest. `SessionStart` still replays queued entries |
+| Every integration built on the shared plugin code | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run (2 for Kimi Code) and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses are not queued. Content the server refused is not sent again; a write refused for its credentials, or one that could not be queued, stays for the next capture. A failed message stops the replay so order is kept |
 | OpenClaw | No queue. A failed turn is not sent again |
 | Hermes (bundled) | Uploads run in in-process threads and are not replayed from disk. Pending-commit markers under `$HERMES_HOME/openviking/pending_sessions/` let a later start commit sessions left by a dead run (POSIX only) |
 | LangChain | A failed commit is retried on the next record, in memory only. A partial write raises `OpenVikingPartialWriteError` with counts that let the caller retry the remaining messages |
@@ -427,34 +405,27 @@ What this means in practice:
 | Integration | Subagent handling |
 |---|---|
 | Claude Code | Each subagent gets its own session, `cc-<id>__subagent-<agent_id>`. `SubagentStop` sends its transcript and commits |
-| Codex, TraeCode CLI 2.0 | Subagent output is folded into the main session |
-| OpenCode | Subagents get `oc-<parent>__subagent-<child>` sessions. Session-start context is skipped for them; recall is not |
-| DSH | Each subagent is a separate `dsh-<id>` session with no link to its parent, and each gets its own session-start context |
+| OpenCode | Subagents get `oc-<parent>__subagent-<child>` sessions |
+| DSH | A subagent's events go to a child session of its own |
+| Other hook hosts (Codex, Cursor, TRAE, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI, Antigravity) | Subagents are not captured |
 | Hermes | Delegated tasks run with `skip_memory=True`, so the subagent has no OpenViking session, recall, or tools, and its output is not captured |
-| Cursor, TRAE, ZCode, Kimi Code, pi, OpenClaw | No special handling. A subagent with its own session ID gets its own session; otherwise its messages join the main session. OpenClaw can exclude sessions with `bypassSessionPatterns` |
+| OpenClaw | A subagent with its own session ID gets its own session. Sessions can be excluded with `bypassSessionPatterns` |
 | Log ingestion | The Claude Code adapter skips sidechain and meta records, so subagent conversations are not imported |
+
+`skipSubagentSessions` turns subagent capture off where it exists.
 
 <a id="_3-4-compaction-takeover"></a><a id="_3-4-1-decision-matrix"></a>
 
 ## Host compaction
 
-When the host shortens its context, most integrations make sure the dropped messages are committed and leave the summary to the host. pi and OpenClaw can replace the host's summary with OpenViking's archive.
+When the host shortens its context, the integrations built on the shared plugin code capture and commit before it (where the host has a pre-compaction event) and leave the summary to the host. After it, the session-history note points the model at the full session, and on hosts whose compaction drops the session-start context (CodeBuddy Code, Antigravity, OpenCode, DSH) the next prompt sends the profile again. pi and OpenClaw can replace the host's summary with OpenViking's archive.
 
-| Integration | Approach | Before compaction | After compaction |
-|---|---|---|---|
-| Claude Code | Host summarizes | `PreCompact` commits synchronously; this is the one write that never runs in the background, because the host rewrites the transcript right after | `SessionStart` with `source="compact"` injects the archive overview and up to 5 summaries |
-| Codex, TraeCode CLI 2.0 | Host summarizes | `PreCompact` catches up uncaptured turns, commits everything, and starts a new OpenViking session. If the catch-up is incomplete, it does not commit and retries later | `SessionStart` with `source="compact"` sends the profile again; the archive summary is injected on resume |
-| Cursor | Host summarizes | `preCompact` commits | Nothing |
-| CodeBuddy Code | Host summarizes | `PreCompact` commits | The next prompt sends the profile again |
-| Qoder CLI | Host summarizes | `PreCompact` commits | Nothing |
-| TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
-| Antigravity | Host summarizes | No pre-compaction hook | The first turn after the compaction checkpoint sends the profile again |
-| Kimi Code | Host summarizes | `PreCompact` commits | Nothing |
-| OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended`. The next message sends the session-start context again |
-| DSH | Host summarizes | `compaction/start` commits regardless of the token threshold. Injected context is a user message and shrinks with the host's compaction | The next model step sends the profile again if the compaction dropped it |
-| pi | Takeover, on by default | Commits and waits for the archive overview | The overview replaces pi's summary; on failure pi compacts as usual |
-| OpenClaw | The plugin owns compaction | `compact()` commits and waits | The next context assembly rebuilds history from the server |
-| Hermes (bundled) | Host summarizes | Fork-style compaction commits the old session; in-place compaction does nothing | Nothing |
+| Integration | Difference |
+|---|---|
+| TRAE, TRAE CN, ZCode, Antigravity | No pre-compaction event, so nothing is committed before it |
+| pi | With takeover on, commits and waits for the archive overview, which replaces pi's summary; on failure pi compacts as usual |
+| OpenClaw | The plugin owns compaction: `compact()` commits and waits, and the next context assembly rebuilds history from the server |
+| Hermes (bundled) | Fork-style compaction commits the old session; in-place compaction does nothing |
 
 <a id="_3-4-2-pi-takeover"></a>
 
@@ -495,26 +466,18 @@ When the host shortens its context, most integrations make sure the dropped mess
 
 Recall errors are handled so the host can continue without injected memories. Requests can still delay a prompt until they finish or reach their deadline; error recovery does not mean there is no waiting.
 
-| Integration | Server unreachable | Cached failure | Waiting and error propagation |
-|---|---|---|---|
-| Claude Code | Every hook catches the error and lets the host continue; session start skips queue replay | Context-search marker for 6 hours, local CLI check for 7 days, health for 5 seconds | Recall waits for its request or deadline before continuing. URI guard denials are intentional and separate from recall failures |
-| Codex, TraeCode CLI 2.0 | Every hook catches the error and does nothing | Context-search marker; a failed local compressor stays off until the next start | Recall waits for its request or deadline, then the prompt continues |
-| Cursor, TRAE, TRAE CN, ZCode | Request errors are swallowed and nothing is injected. A hook that cannot get its lock within 5 seconds skips silently | Context-search marker only, so every turn waits the full 15-second recall timeout | Up to the recall timeout each turn |
-| OpenCode | Recall, capture, and cleanup errors are caught and logged | Context-search marker; health checks are not cached | Recall awaits network requests; cleanup can also wait until its deadline |
-| CodeBuddy Code | Every hook catches the error and lets the host continue | Context-search marker; health is checked per hook | Recall waits for its own request before continuing |
-| Qoder CLI | Every hook catches the error and lets the host continue | Context-search marker; health is checked per hook | Recall waits for its own request before continuing |
-| Antigravity | Request errors are swallowed and nothing is injected. A hook that cannot get its lock within 5 seconds skips silently | Context-search marker only | Recall waits for its request, up to the 17-second budget, on the first model call of each turn |
-| DSH | The plugin swallows errors. Session setup failures are not cached, so each pre-step makes two 5-second health calls | Context-search marker; the user-space lookup is cached for the life of the process | Pre-step runs profile and recall in sequence, and session flush blocks |
-| pi | If the health check fails at start, no tools are registered and later prompts retry quietly. A failed MCP handshake alone does not stop recall, sync, or takeover; the status line shows `tools ✗` and `/viking` prints the error | Context-search marker. The MCP handshake is retried once per turn and can use its 5-second budget before recall starts | Recall waits for its request or deadline. `session_shutdown` waits up to 30 seconds without takeover, and a network error at `turn_end` waits 10 seconds per message |
-| OpenClaw | Recall is skipped if a 500 ms health check fails | None; one health check per turn | Only `memory_store` errors reach the model; `compact()` can wait up to 5 minutes |
-| Hermes (bundled) | A failed connection is not retried for 30 seconds unless its settings change | The failed settings are remembered | Recall waits within its 4-second total budget before continuing without context |
-| ov CLI | Most commands exit with status 1; `ov status` in table mode and `ov health` exit 0 even when unhealthy | None | Not applicable |
+| Integration | Server unreachable | Waiting |
+|---|---|---|
+| Every integration built on the shared plugin code | Every event catches the error and lets the host continue; nothing is injected, and captures go to the offline queue. There is no health check before recall or capture. A plugin that was installed but never set up (no `ovcli.conf`, no `ov.conf`, and no server in the environment) does nothing | Recall waits for its request, up to the event's budget. The context-search marker remembers a server without context search |
+| OpenClaw | Recall is skipped if a 500 ms health check fails | Only `memory_store` errors reach the model; `compact()` can wait up to 5 minutes |
+| Hermes (bundled) | A failed connection is not retried for 30 seconds unless its settings change | Recall waits within its 4-second total budget before continuing without context |
+| ov CLI | Most commands exit with status 1; `ov status` in table mode and `ov health` exit 0 even when unhealthy | Not applicable |
 
 <a id="_3-6-2-common-timeouts"></a>
 
 ### Shared timeouts and locks
 
-The shared plugins use a 15-second HTTP timeout (1-second minimum). MCP proxy requests time out after 15 seconds, and the `DELETE /mcp` sent on exit after 2 seconds. Cross-process locks wait 5 seconds and are considered stale after 60 seconds; queue entries being replayed are reclaimed after 10 minutes. The MCP proxy does not handle SIGHUP, so closing a terminal sends no `DELETE /mcp`; the server runs MCP statelessly, so nothing is left behind.
+The shared plugins use a 15-second HTTP timeout (1-second minimum). MCP proxy requests time out after 15 seconds, and the `DELETE /mcp` sent on exit after 2 seconds. A per-session lock orders the events of one session; it waits 5 seconds and is considered stale after 60 seconds, and a session-end or compaction capture waits longer for it so the final commit is not dropped. Queue entries being replayed are reclaimed after 10 minutes. The MCP proxy does not handle SIGHUP, so closing a terminal sends no `DELETE /mcp`; the server runs MCP statelessly, so nothing is left behind.
 
 <a id="_3-1-integration-forms-installation-and-configuration"></a><a id="_3-1-1-decision-matrix"></a>
 
@@ -587,10 +550,9 @@ Integrations built on the shared plugin code read behavior settings from, highes
 
 Settings that apply only to some integrations:
 
-- `OPENVIKING_COMMIT_TURN_THRESHOLD`: Cursor, Kimi Code, CodeBuddy Code, and Qoder CLI. TRAE, TRAE CN, ZCode, and Antigravity commit every turn.
-- `OPENVIKING_WRITE_PATH_ASYNC`: Claude Code, Codex, ZCode, and Antigravity.
+- `OPENVIKING_WRITE_PATH_ASYNC`: the hosts whose writes may detach, listed in [Host events](#host-events).
 - `OPENVIKING_RECALL_COMPRESS=client`: Claude Code and Codex. `server` and `auto` work for every integration listed under [Recall digest](#recall-digest).
-- The workspace files, the `ovcli.conf` `plugin` section, `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, and the skill catalog settings: every integration built on the shared plugin code, not OpenClaw or Hermes.
+- The workspace files, the `ovcli.conf` `plugin` section, `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, the commit policy settings, and the skill catalog settings: every integration built on the shared plugin code, not OpenClaw or Hermes.
 
 <a id="_3-7-additional-ux-comparison"></a>
 
@@ -619,127 +581,112 @@ Claude Code, Cursor, TRAE, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI, Antigrav
 
 ## Notes by integration
 
-Each note covers what is specific to one integration. Shared behavior is in the sections above.
+Each note covers what is specific to one integration. Shared behavior is in the sections above, and each host's events are in [Host events](#host-events). The hook hosts, Claude Code and Codex included, ship from one plugin directory, `examples/agent-hook-plugin/` (plugin version 1.0.0 for all of them), with one hook entry (`scripts/hook.mjs <event> <host>`), one MCP proxy, and one copy of the skills.
 
 ### Claude Code
 
-[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with 9 hooks, an MCP proxy, a slash command, a status line, and 5 skills.
+[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with hooks, an MCP proxy, a slash command, a status line, and 5 skills.
 
-- It registers more hooks than any other integration: `SessionStart`, `UserPromptSubmit`, `PostToolUse:Read` (the skill-experience hook, off by default), `PreToolUse` on Read, Glob, Grep, Edit, Write, and Bash (the URI guard), `Stop`, `PreCompact`, `SessionEnd`, `SubagentStart`, and `SubagentStop`.
-- Recall digests are on by default through a local `claude -p`, with the server digest as the fallback.
-- Every exit except `kill -9` sends a commit.
-- The capture cursor is kept under `/tmp`. If the system clears it, the whole session is sent again.
+- Besides the flow's events it registers `PostToolUse:Read` (the skill-experience hook, off by default) and `PreToolUse` on Read, Glob, Grep, Edit, Write, and Bash (the URI guard).
+- Each subagent is captured into its own session at `SubagentStop`.
 - The URI guard runs even when the plugin's own switch is off.
 
 <a id="codex"></a><a id="trae-cli-traecode-cli-2-0"></a>
 
 ### Codex and TraeCode CLI 2.0
 
-[Codex Memory Plugin](./04-codex.md), [TRAE Memory Integration](./13-trae.md). A marketplace plugin with 6 hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, `PreCompact`, `PostToolUse`), an MCP proxy, and the same 5 skills as Claude Code.
+[Codex Memory Plugin](./04-codex.md), [TRAE Memory Integration](./13-trae.md). A marketplace plugin with hooks, an MCP proxy, and the same 5 skills as Claude Code.
 
-- `SessionEnd` fires only on a clean exit and only on Codex 0.145 and later. Signals, crashes, older builds, and `codex app-server` deferral fall to the start-up sweep, which uses a 30-minute idle timeout.
-- `Stop` and `SessionEnd` write in a detached worker. A per-session lock orders the `Stop` worker, `PreCompact`, the `SessionEnd` worker, and the sweep.
+- `SessionEnd` fires only on a clean exit and only on Codex 0.145 and later. Without it, the plugin does not commit the last stretch of a session; see [What happens at exit](#what-happens-at-exit).
 - There is no URI guard. Codex writes a `PreToolUse` notice into the history between a tool call and its output, and Responses servers that check the history as chat messages, such as Volcengine Ark, reject that order with HTTP 400.
-- Codex keeps a trust record per hook. After an upgrade that adds hooks, approve the new ones in `/hooks`.
-- TraeCode CLI 2.0 (binary `traecli`, config `~/.trae/traecli.toml`) is a Codex-family CLI and installs this same plugin. Only version 2.0 is supported; the earlier standalone plugin for 1.0 has been removed, and `--harness trae-cli --uninstall` still removes a copy an old install left behind. A build without `SessionEnd` ignores that hook.
+- Codex keeps a trust record per hook. After an update that moves or adds hooks, approve them again in `/hooks`.
+- TraeCode CLI 2.0 (binary `traecli`, config `~/.trae/traecli.toml`) is a Codex-family CLI and installs this same plugin. Only version 2.0 is supported; `--harness trae-cli --uninstall` still removes a copy an old install of the 1.0 plugin left behind. A build without `SessionEnd` ignores that hook.
 
 ### Cursor
 
-[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 7 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `afterMCPExecution`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 5 skills.
+[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration, an always-on rule, and 5 skills.
 
 - The URI guard runs on `beforeReadFile` only, independent of the plugin switch. Shell commands are not checked, and an upgrade removes the `beforeShellExecution` entry older installs registered.
-- `afterMCPExecution` retains completed OpenViking tool calls, uploaded with the conversation at Stop. Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
+- `postToolUse`, `postToolUseFailure`, and `afterMCPExecution` keep completed tool calls, uploaded with the conversation at the next capture. Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
 - `sessionEnd` fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
-- With the server unreachable, every turn waits out the 15-second recall timeout.
 
 <a id="trae-trae-cn-ide-editions"></a>
 
 ### TRAE and TRAE CN
 
-[TRAE Memory Integration](./13-trae.md). Hook and MCP configuration with 4 hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `Stop`, plus 5 skills. The MCP server is named `openviking`.
+[TRAE Memory Integration](./13-trae.md). Hook and MCP configuration plus 5 skills. The MCP server is named `openviking`.
 
 - `PreToolUse` denies Read, Glob, and Grep on `viking://` paths and adds a notice to Bash and RunCommand commands that contain one.
-- Every `Stop` with content commits, so an exit loses at most the turn in progress.
+- There is no transcript file: turns are built from the hook payloads. The model passes the session to `session_history` itself.
 - TRAE and TRAE CN differ only in session prefix and install paths. The same work in both clients creates separate sessions; they share memories only after extraction.
 - The skills are installed into `~/.trae/skills/<name>` or `~/.trae-cn/skills/<name>`. A skill the user edited, or an unmanaged directory of the same name, is preserved on upgrade and uninstall. TraeCode CLI also reads `~/.trae/skills`, so with both the TRAE integration and the TraeCode CLI plugin installed, the CLI lists each of these skills twice: once bare and once under the plugin namespace.
-- No compaction handling, status line, or subagent handling.
 
 ### ZCode
 
-[Community integrations: ZCode](./08-community-plugins.md#zcode-memory-integration). Hook and MCP configuration with 4 hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse` on Read, Glob, and Grep, and `Stop`, plus 5 skills.
+[Community integrations: ZCode](./08-community-plugins.md#zcode-memory-integration). Hook and MCP configuration plus 5 skills.
 
 - The skills are installed into `~/.zcode/skills/<name>`. A skill the user edited, or an unmanaged directory of the same name, is preserved on upgrade and uninstall.
-- The rollout file `~/.zcode/cli/rollout/model-io-<sid>.jsonl` is the source of captured turns; turns a missed `Stop` skipped are caught up at the next `Stop`.
+- The rollout file `~/.zcode/cli/rollout/model-io-<sid>.jsonl` is the source of captured turns; without it, turns are built from the hook payloads.
 - The first capture reads the whole rollout, so installing into a long-running session produces one large upload.
-- Capture removes injected blocks but does no other text cleanup.
-- `Stop` writes in a detached worker by default.
 
 <a id="kimicode"></a>
 
 ### Kimi Code
 
-[Community integrations: Kimi Code](./08-community-plugins.md#kimi-code-memory-integration). A managed Kimi Code plugin with 7 hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse` on Read, Glob, and Grep, `Stop`, `PreCompact`, `SessionEnd`, `Interrupt`), an MCP proxy, and 5 skills. The installer builds one self-contained copy under `$KIMI_CODE_HOME/plugins/managed/openviking-memory`.
+[Community integrations: Kimi Code](./08-community-plugins.md#kimi-code-memory-integration). A managed Kimi Code plugin with hooks, an MCP proxy, and 5 skills. The installer builds one self-contained copy under `$KIMI_CODE_HOME/plugins/managed/openviking-memory`.
 
-- Captured turns come from `wire.jsonl`. A turn moves the cursor only after it is sent or stored in the offline queue.
-- Session-start context is injected at the first prompt and retried on later prompts until it succeeds.
-- `Stop`, `PreCompact`, and `SessionEnd` may write in the background. `Interrupt` stays synchronous with a 2-second request budget.
-- `UserPromptSubmit` returns plain context text, not JSON.
+- Captured turns come from `wire.jsonl`.
+- Only the `UserPromptSubmit` answer reaches the model, so the session-start context goes with the first prompt. The answer is plain context text, not JSON.
+- The model passes the session to `session_history` itself, because the MCP server cannot tell which session calls it.
 - Installation keeps other plugin records and does not edit the older `config.toml` or `mcp.json`.
 
 ### CodeBuddy Code
 
-[CodeBuddy Code](./20-codebuddy.md). A plugin with 6 hooks, an MCP proxy, and 5 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like ZCode and Kimi Code.
+[CodeBuddy Code](./20-codebuddy.md). A plugin with hooks, an MCP proxy, and 5 skills, installed by the unified installer as a local marketplace.
 
-- `UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI**. A headless run (`-p`, `--input-format stream-json`) captures on `Stop` and never sends the final commit.
+- `UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI**. A headless run (`-p`, `--input-format stream-json`) captures on `Stop` and never sends the session-end commit.
 - The URI guard denies file tools whose path is a `viking://` URI. The denial reaches the model as the failed tool result; an `allow` carries no text through, so this host has no advisory channel. Shell commands are not checked, so `ov` calls and literal `viking://` arguments still work.
-- `SessionStart` carries no `cwd` and can be delivered twice in one session, so the hook is idempotent and falls back to the process working directory.
-- A hook killed at its timeout does not take its child processes with it, which is what lets a commit run in a detached worker after the hook process returns.
-- Subagent capture is not supported in v1, as on the other `agent-hook-plugin` hosts: the host fires the events, but the shared dispatcher has no subagent stage yet.
 
 ### Qoder CLI
 
-[Qoder CLI](./21-qoder.md). A plugin with 6 hooks, an MCP proxy, and 5 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like CodeBuddy Code.
+[Qoder CLI](./21-qoder.md). A plugin with hooks, an MCP proxy, and 5 skills, installed by the unified installer as a local marketplace.
 
 - `UserPromptSubmit` and `SessionEnd` fire in the TUI and in headless `-p` runs. Every `-p` run also ends an auxiliary session that has no transcript; its `SessionEnd` is ignored.
 - Injected context is written into the transcript as attachment records. Capture reads only the conversation records, so recalled memories are not captured back.
-- The URI guard denies file tools whose path is a `viking://` URI, and the denial reaches the model as the failed tool result, with an example `mcp_call` to the matching OpenViking tool. A Bash command that contains such a URI still runs, with a notice pointing at the same tools, so `ov` calls and literal `viking://` arguments still work.
-- A hook killed at its timeout takes its process group with it; the capture worker is detached, so a commit still finishes after the hook process returns.
+- The URI guard denies file tools whose path is a `viking://` URI, and the denial reaches the model as the failed tool result, with an example `mcp_call` to the matching OpenViking tool. A Bash command that contains such a URI still runs, with a notice pointing at the same tools.
 - MCP tools load lazily through `mcp_call`. In a headless run with the default permission mode, they need a permission rule or a permissive mode.
-- Subagent capture is not supported in v1: the host fires the events, but the shared dispatcher has no subagent stage yet.
 
 ### Antigravity
 
-[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with 4 hooks (`SessionStart`, `PreInvocation`, `PreToolUse`, `Stop`), an MCP proxy, and 5 skills, installed by the unified installer, and an `agent-hook-plugin` host adapter like ZCode. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
+[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with hooks, an MCP proxy, and 5 skills, installed by the unified installer. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
 
-- `PreInvocation` runs before every model call, including each call in a tool loop (`invocationNum` above 0) and each reactive wakeup for a background task, subagent message, or `Stop` continuation. Recall runs only when `invocationNum` is 0 and no `MODEL` step has run since the latest `USER_INPUT` step in `transcriptPath`, so a turn injects once. A `lastUserInput` that differs from that step's request is a new turn the transcript has not recorded yet, and recalls too.
+- `PreInvocation` runs before every model call, including each call in a tool loop (`invocationNum` above 0) and each reactive wakeup for a background task, subagent message, or `Stop` continuation. Recall runs only when `invocationNum` is 0 and no `MODEL` step has run since the latest `USER_INPUT` step in `transcriptPath`, so a turn injects once.
 - Antigravity hooks use their own `hooks.json` format, with each top-level key naming a hook. Context goes back as a `systemMessage` step in `injectSteps`, which stays in the conversation.
-- `Stop` carries no message text. Capture reads the finished steps of `transcriptPath` after the last captured step, preferring the untruncated `transcript_full.jsonl` beside it, in a detached worker, then commits. A step still in progress is read again by the next `Stop`; when a write is lost, the cursor stays so the next `Stop` resends it.
-- The plugin directory's `mcp_config.json` registers the OpenViking MCP server, the shared stdio proxy. When `~/.gemini/config/mcp_config.json` already defines a server named `openviking`, the installer keeps the user's server and does not write the plugin's `mcp_config.json`, so no tool appears twice.
+- `Stop` carries no message text. Capture reads the finished steps of `transcriptPath`, preferring the untruncated `transcript_full.jsonl` beside it.
+- The plugin directory's `mcp_config.json` registers the OpenViking MCP server. When `~/.gemini/config/mcp_config.json` already defines a server named `openviking`, the installer keeps the user's server and does not write the plugin's `mcp_config.json`, so no tool appears twice.
 - The skills live in the plugin directory as `skills/<name>/SKILL.md`, and each is also invocable as `/<name>`.
-- `PreToolUse` (matcher `*`) runs the URI guard: a file tool whose location argument (an argument whose name ends in `Path`, `File`, or `Directory`) is a `viking://` URI is denied, and the reason reaches the model as a failed tool call pointing at the OpenViking MCP tools. Shell commands (`run_command`) are not checked and get no notice.
+- `PreToolUse` (matcher `*`) runs the URI guard: a file tool whose location argument (an argument whose name ends in `Path`, `File`, or `Directory`) is a `viking://` URI is denied. Shell commands (`run_command`) are not checked and get no notice.
 - If `~/.gemini/config/plugins/openviking-memory` exists and OpenViking did not write it, the installer stops and `--uninstall` leaves it in place.
 
 ### OpenCode
 
-[OpenCode Plugin](./10-opencode.md). The npm plugin `@openviking/opencode-plugin` supports OpenCode v1 (1.15.7 and later) and v2 (2.0.15 and later) from one entry point.
+[OpenCode Plugin](./10-opencode.md). The npm plugin `@openviking/opencode-plugin` runs the shared flow inside OpenCode. The plugin supports OpenCode 2 only; OpenCode 1.x needs `@openviking/opencode-plugin@2026.11.26`, the last release that supports it.
 
-- v2 recalls once per prompt and stores the result in the user message's metadata; later model steps reuse it without new requests, which keeps the prompt cache stable. At the end of each execution, v2 reads the complete user, assistant, and tool messages for capture.
-- v2 checks the commit threshold after every execution, including failed or interrupted ones, which keep their state. It handles only sessions of its own location and stores its cursor in plugin storage. v2 has no toast API and logs notices instead.
-- MCP tools keep the `openviking_` prefix; v2 sets `codemode: false`. The 5 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
-- The URI guard denies `read`, `glob`, and `grep` calls whose path is a `viking://` URI before they run, with an example call to the matching `openviking_*` tool; a `bash` command that contains one runs, and a notice is appended to its output afterwards.
-- Commit timeout is 30 seconds.
+- Recall runs once per prompt and is stored in the user message's metadata; later model steps reuse it without new requests, which keeps the prompt cache stable. The session-start context goes with the first prompt.
+- MCP tools keep the `openviking_` prefix, with `codemode: false`. The 5 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
+- The URI guard denies `read`, `glob`, and `grep` calls whose path is a `viking://` URI before they run, with an example call to the matching `openviking_*` tool.
 
 <a id="dsh-deepseek-harness"></a>
 
 ### DSH
 
-[DSH Plugin](./17-dsh.md). The only in-process Cordis plugin. Hooks call the REST API directly; tools come through `@deepseek-ai/dsh-mcp-client` and the shared stdio proxy.
+[DSH Plugin](./17-dsh.md). An in-process Cordis plugin that runs the shared flow; it needs DSH 0.1.7-rc.2 or later. Tools come through `@deepseek-ai/dsh-mcp-client` and the shared stdio proxy.
 
-- It listens to `agent/session-start`, `agent/pre-step`, `session/event`, `session/flush`, `tools/pre-execute`, and `tools/post-execute`.
 - `ctx.provide("openvikingMemory")` lets other Cordis plugins build on it.
 - The installer uses the `web` profile unless `--dsh-profile` names another. On macOS it installs into DeepSeek Harness Desktop's `desktop` profile as a separate harness, `dsh-desktop`, through Desktop's own `dsh` command ([DeepSeek Harness Desktop](./17-dsh.md#deepseek-harness-desktop)). Every mode except `dev` installs the published npm package.
+- Injected context is a plugin message: instructions at session start, recall before a step. Session start waits while the agent is busy and the context goes with the next step.
 - Tool results are captured by default (`captureToolResults: true`), so `ov-experience-memory` runs its full loop; turning capture off leaves it able only to find and apply Experience.
-- The URI guard lowercases tool names, denies file tools on `viking://` paths in `tools/pre-execute`, and adds a notice to `bash` commands, and to `pwsh` commands on Windows, in `tools/post-execute`.
+- The URI guard denies file tools on `viking://` paths in `tools/pre-execute` and adds a notice to shell commands.
 - Credentials named in the Cordis patch override every other source. For behavior settings the patch is the lowest layer.
 - `mcpEnabled: false` (in `ovcli.conf` `plugin` or `plugin.dsh`, or in the Cordis patch) mounts neither the MCP tools nor the bundled skills.
 
@@ -747,14 +694,13 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### pi
 
-[pi Coding Agent Extension](./11-pi.md). A native extension with 9 event handlers and a `/viking` command. Recall, sync, session-start context, and takeover use REST; tools use pi's built-in MCP client.
+[pi Coding Agent Extension](./11-pi.md). A native extension that runs the shared flow, with a `/viking` command. Tools use pi's built-in MCP client.
 
 - Tools are whatever the server's `tools/list` returns, renamed `openviking_<tool>`. A server that adds or drops a tool changes pi's tools at the next session, without an extension release.
 - Upgrading from 0.3.x renamed every tool from `viking_*` with no alias period. Update any `--tools` or `--exclude-tools` list, or the tools disappear silently.
-- `openviking_read` returns file content with `offset` and `limit`. A directory URI returns an error. The old `level="abstract"` and `"overview"` reads have no MCP equivalent; use `openviking_search(mode="context", detail="overview")` or `openviking_tree(include_abstract=true)`.
 - A tool call times out after 15 seconds (`OPENVIKING_TIMEOUT_MS`). A timeout or ESC fails the call only locally; the request already sent keeps running, so a write may still land.
-- `tool_call` denies read, grep, find, ls, write, and edit on `viking://` paths; `tool_result` adds a notice to `bash` output that contains one.
-- With takeover off, resuming with `pi -c` sends the whole branch again.
+- `tool_call` denies file tools on `viking://` paths and adds a notice to shell commands that contain one.
+- Takeover (`takeoverEnabled`, off by default) is described in [pi takeover](#pi-takeover).
 - Bypass uses `bypassSessionPatterns`; the older `bypassPatterns` still works.
 
 ### OpenClaw
@@ -772,22 +718,12 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Hermes
 
-[Hermes Agent](./05-hermes.md). Depending on its version, Hermes uses the catalog
-plugin or the built-in provider named `openviking`:
+[Hermes Agent](./05-hermes.md). Depending on its version, Hermes uses the catalog plugin or the built-in provider named `openviking`:
 
-- The **catalog plugin** is maintained in this repository under
-  [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin).
-  Install it with `hermes plugins install openviking --enable`, then run
-  `hermes memory setup openviking`.
-- The **bundled provider** exists in earlier Hermes releases under
-  `plugins/memory/openviking` and needs no installation. The Hermes rows on this
-  page describe that provider at
-  [Hermes commit `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking).
+- The **catalog plugin** is maintained in this repository under [`examples/hermes-plugin`](https://github.com/volcengine/OpenViking/tree/main/examples/hermes-plugin). Install it with `hermes plugins install openviking --enable`, then run `hermes memory setup openviking`.
+- The **bundled provider** exists in earlier Hermes releases under `plugins/memory/openviking` and needs no installation. The Hermes rows on this page describe that provider at [Hermes commit `989798c`](https://github.com/NousResearch/hermes-agent/tree/989798cd5e691230b54b2ea72e5937b68133014c/plugins/memory/openviking).
 
-A release that still includes the bundled provider loads it first. When an
-update removes the bundle from a profile already configured for OpenViking,
-Hermes attempts to install the catalog plugin automatically. The provider name,
-configuration, and stored data do not change.
+A release that still includes the bundled provider loads it first. When an update removes the bundle from a profile already configured for OpenViking, Hermes attempts to install the catalog plugin automatically. The provider name, configuration, and stored data do not change.
 
 The two are separate code bases. Where their behavior differs:
 
@@ -872,14 +808,14 @@ Use a user or admin API key; the server reads the account and user from it. `X-O
 
 For automatic recall, capture, commits, and offline retries, reuse the existing code instead of writing it again:
 
-- **`examples/memory-plugin-shared/lib/`** (Node.js) holds the shared modules: recall with its fallbacks, session-start context, capture cleaning, the offline queue, batch sending, the MCP proxy, session IDs, and credentials. Hosts configured through hook files can add an adapter to `examples/agent-hook-plugin/hosts/`, as Cursor, TRAE, ZCode, and Kimi Code do.
+- **`examples/agent-hook-plugin/`** (Node.js) holds the shared library in `lib/` and the flow every host runs in `lib/flow/`: recall with its fallbacks, session-start context, capture, commits, the offline queue, the MCP proxy, session IDs, and credentials. A host is a directory under `hosts/` with a `host.mjs` that maps the host's events to the flow's stages and decodes its payloads and transcript; an in-process plugin passes its events to the same flow with `runStage`.
 - **The Agent Plugins package** (`agent-plugins/`) is a portable `plugin.json`, `skills/`, and `mcp.json` with a stdio-to-HTTP proxy and no hooks. Its `plugin.test.mjs` checks conformance with the Agent Plugins specification and can serve as a lint baseline for your own package.
 
 The [plugin development guide](./18-plugin-development.md) covers module ownership, configuration, generated copies, installers, and tests. Whatever you build, keep three rules so it behaves like the existing integrations:
 
 1. Use context-mode recall with a session ID and `dedup_turns`, so the server can expand queries and deduplicate across turns.
 2. Do not let the adapter's own timeout cut the deadline the shared code computes.
-3. Commit at shutdown. Otherwise a conversation tail below the threshold stays uncommitted until something else triggers a commit. If the host has no shutdown event, turn on `memory.session_auto_commit.enabled` and give sessions a policy. Then check exit events and completed writes in the real host.
+3. Commit at shutdown, or give sessions a server auto-commit policy with an idle timeout and turn on `memory.session_auto_commit.enabled`. Otherwise a conversation tail stays uncommitted until something else triggers a commit. Then check exit events and completed writes in the real host.
 
 <a id="_7-appendix-non-coding-integrations-at-a-glance"></a>
 
@@ -901,13 +837,12 @@ The comparisons above were checked against these locations. They help when you n
 - Server MCP tools: `openviking/server/mcp_endpoint.py`, where the `@mcp.tool` registrations are the authoritative list.
 - Write and delete checks: `openviking/storage/content_write.py` and `openviking/storage/viking_fs/_access.py`.
 - Server auto-commit: `openviking_cli/utils/config/memory_config.py` and `openviking/session/auto_commit_policy.py`.
-- Plugin settings and defaults: `examples/memory-plugin-shared/lib/config-schema.mjs`.
-- Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, ZCode, and Kimi Code.
+- Plugin settings and defaults: `examples/agent-hook-plugin/lib/config-schema.mjs`.
+- The flow every plugin host runs: `examples/agent-hook-plugin/lib/flow/`, with the host contract in `host.d.mts`.
+- Hosts: `examples/agent-hook-plugin/hosts/<host>/host.mjs` for the hook hosts, and `host.mjs` in `examples/opencode-plugin/`, `examples/dsh-memory-plugin/`, and `examples/pi-coding-agent-extension/`. The [host events](#host-events) table is generated from them by `examples/memory-plugin-shared/host-table.mjs`.
 - pi takeover: `examples/pi-coding-agent-extension/lib/takeover-core.mjs`.
 - OpenClaw tools and lifecycle hooks: `examples/openclaw-plugin/registries/openviking-tools.ts` and `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`.
-- Hermes: the bundled provider from earlier releases at the pinned commit linked
-  in [Hermes](#hermes), and the catalog plugin's
-  [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md).
+- Hermes: the bundled provider from earlier releases at the pinned commit linked in [Hermes](#hermes), and the catalog plugin's [README](https://github.com/volcengine/OpenViking/blob/main/examples/hermes-plugin/README.md).
 
 ## See also
 

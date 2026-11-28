@@ -1,0 +1,10 @@
+{
+  "what": "a write event prints nothing",
+  "emit": {
+    "event": "stop",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": null
+}

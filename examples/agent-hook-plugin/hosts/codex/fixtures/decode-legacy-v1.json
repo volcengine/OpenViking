@@ -1,0 +1,26 @@
+{
+  "what": "a v1 state-file cursor counted the startup message; it is corrected before resuming",
+  "decode": {
+    "transcript": "startup.jsonl",
+    "cursor": {
+      "codexSessionId": "s",
+      "capturedTurnCount": 3,
+      "ovSessionId": "cx-s"
+    }
+  },
+  "cursor": {
+    "capturedTurnCount": 3,
+    "captureFormatVersion": 2
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "New question"
+        }
+      ]
+    }
+  ]
+}

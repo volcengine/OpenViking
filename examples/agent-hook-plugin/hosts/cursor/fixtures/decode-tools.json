@@ -1,0 +1,144 @@
+{
+  "what": "tool notes sit after the text turns the transcript held when they ran; a note delivered twice is sent once",
+  "decode": {
+    "transcript": "tools.jsonl",
+    "notes": [
+      {
+        "afterTurn": 2,
+        "tool": {
+          "type": "tool_result",
+          "tool_use_id": "read-1",
+          "name": "mcp__openviking__read",
+          "state": {
+            "input": {
+              "uris": "viking://~/memories/x.md"
+            },
+            "output": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "body"
+                }
+              ],
+              "isError": false
+            }
+          },
+          "is_error": false
+        },
+        "at": 1
+      },
+      {
+        "afterTurn": 2,
+        "tool": {
+          "type": "tool_result",
+          "tool_use_id": "read-1",
+          "name": "mcp__openviking__read",
+          "state": {
+            "input": {
+              "uris": "viking://~/memories/x.md"
+            },
+            "output": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "body"
+                }
+              ],
+              "isError": false
+            }
+          },
+          "is_error": false
+        },
+        "at": 2
+      },
+      {
+        "afterTurn": 2,
+        "tool": {
+          "type": "tool_result",
+          "tool_use_id": "shell-2",
+          "name": "Shell",
+          "state": {
+            "input": {
+              "command": "false"
+            },
+            "output": "Command failed with exit code 1"
+          },
+          "is_error": true
+        },
+        "at": 3
+      }
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "list files"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Listing."
+        }
+      ],
+      "turn_id": "1"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "read-1",
+          "tool_name": "mcp__openviking__read",
+          "tool_status": "completed",
+          "tool_input": {
+            "uris": "viking://~/memories/x.md"
+          },
+          "tool_output": "{\"content\":[{\"type\":\"text\",\"text\":\"body\"}],\"isError\":false}"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "shell-2",
+          "tool_name": "Shell",
+          "tool_status": "error",
+          "tool_input": {
+            "command": "false"
+          },
+          "tool_output": "Command failed with exit code 1"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Found hello.txt."
+        }
+      ],
+      "turn_id": "2"
+    }
+  ],
+  "cursor": {
+    "lastTurnId": "2",
+    "capturedTurnIds": [
+      "389c42234497b5f25cf7368d19f9fb9cd95ce4e4d4f50913e9f4ca2a9cbf523b",
+      "9904f5d7e1f91c61c7facbf59e69ef59b65617235110d6b5c64157bb5e3557d0",
+      "tool:read-1",
+      "tool:shell-2",
+      "e1a7b76110ea9f3f39932c931b47e49ea6998fec2ff05796081edfbe53615d32"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "what": "session_history naming a session is left alone",
+  "tool": {
+    "payload": {
+      "conversation_id": "c1",
+      "tool_name": "MCP:session_history",
+      "tool_input": {
+        "session": "cu-other"
+      }
+    }
+  },
+  "expect": {}
+}

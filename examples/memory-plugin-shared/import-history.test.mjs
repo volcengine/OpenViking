@@ -29,13 +29,13 @@ import {
   resolvePeer,
   sessionId,
 } from "./import-history.mjs";
-import { HOSTS as HOOK_HOSTS } from "../agent-hook-plugin/hosts/index.mjs";
+import { loadHookHosts } from "./testing/support.mjs";
 import { deriveDshSessionId } from "../dsh-memory-plugin/session-id.mjs";
-import { deriveAgentSessionId } from "./lib/agent-hook-runtime.mjs";
-import { resolveConnection as libConnection } from "./lib/credentials.mjs";
-import { buildPluginConfig } from "./lib/plugin-config.mjs";
-import { deriveCodexSessionId, deriveHarnessSessionId } from "./lib/session-model.mjs";
-import { resolveEffectivePeerId } from "./lib/workspace-peer.mjs";
+import { deriveAgentSessionId } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
+import { resolveConnection as libConnection } from "../agent-hook-plugin/lib/credentials.mjs";
+import { buildPluginConfig } from "../agent-hook-plugin/lib/plugin-config.mjs";
+import { deriveHarnessSessionId } from "../agent-hook-plugin/lib/session-model.mjs";
+import { resolveEffectivePeerId } from "../agent-hook-plugin/lib/workspace-peer.mjs";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "import-history.mjs");
 const NOW = Date.parse("2026-10-13T12:00:00Z");
@@ -868,15 +868,15 @@ test("--input: session ids, live ids and peers follow each host's plugin", async
   // Live ids, against the plugins' own derivations.
   const ids = ["ses_4f2a9c", "sess_01J9ZX", "0199AAAA-bbbb-7ccc-8ddd-eeeeeeeeeeee", "a:b/c d?.", "im?a"];
   for (const id of ids) {
-    for (const [name, host] of Object.entries(HOOK_HOSTS)) {
+    for (const [name, host] of Object.entries(await loadHookHosts())) {
       const key = name.replace(/-/g, "_");
-      assert.equal(liveSessionId(key, id), deriveAgentSessionId(host.prefix, { session_id: id }), `${name} ${id}`);
+      assert.equal(liveSessionId(key, id), deriveAgentSessionId(host.sessionPrefix, { session_id: id }), `${name} ${id}`);
     }
     assert.equal(liveSessionId("opencode", id), deriveHarnessSessionId("oc-", id), `opencode ${id}`);
     assert.equal(liveSessionId("pi", id), deriveHarnessSessionId("pi-", id), `pi ${id}`);
     assert.equal(liveSessionId("dsh", id), deriveDshSessionId(id), `dsh ${id}`);
-    assert.equal(liveSessionId("trae_cli", id), deriveCodexSessionId(id), `trae-cli ${id}`);
-    assert.equal(liveSessionId("codex", id), deriveCodexSessionId(id), `codex ${id}`);
+    // TRAE CLI installs the Codex plugin.
+    assert.equal(liveSessionId("trae_cli", id), liveSessionId("codex", id), `trae-cli ${id}`);
   }
   assert.equal(liveSessionId("openclaw", "0199AAAA-bbbb-7ccc-8ddd-eeeeeeeeeeee"), "0199aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee");
   assert.equal(liveSessionId("openclaw", "a:b"), createHash("sha256").update("openclaw-session:a:b").digest("hex"));

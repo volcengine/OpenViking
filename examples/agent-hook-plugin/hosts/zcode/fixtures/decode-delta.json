@@ -1,0 +1,64 @@
+{
+  "what": "delta lines, a failed attempt and a compaction line assemble one turn",
+  "decode": {
+    "transcript": "delta.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "q1"
+        }
+      ],
+      "turn_id": "t1"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "a1"
+        }
+      ],
+      "turn_id": "t1"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "q2"
+        }
+      ],
+      "turn_id": "t2"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call-1",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "pwd"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call-1",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "/w"
+        },
+        {
+          "type": "text",
+          "text": "done"
+        }
+      ],
+      "turn_id": "t2"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "what": "a write tool's TargetFile is its location",
+  "tool": {
+    "payload": {
+      "toolCall": {
+        "name": "write_to_file",
+        "args": {
+          "TargetFile": "viking://user/default/memories/profile.md",
+          "CodeContent": "x"
+        }
+      }
+    }
+  },
+  "expect": {
+    "decision": "deny",
+    "reason": "viking:// URIs are OpenViking virtual paths, not local filesystem paths.\nUse OpenViking MCP write instead.\nExample: write(uri=\"viking://user/default/memories/profile.md\", content=\"...\")"
+  }
+}

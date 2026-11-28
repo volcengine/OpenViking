@@ -1,0 +1,86 @@
+{
+  "what": "tool calls and nested tool results become tool parts beside the text; thinking is dropped",
+  "decode": {
+    "transcript": "tools.jsonl"
+  },
+  "cursor": {
+    "capturedTurnCount": 6
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Read notes.txt and tell me what it says."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "I'll read it."
+        },
+        {
+          "type": "tool",
+          "tool_id": "toolu_01",
+          "tool_name": "Read",
+          "tool_status": "running",
+          "tool_input": {
+            "file_path": "/home/dev/ws/notes.txt"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "toolu_01",
+          "tool_name": "Read",
+          "tool_status": "completed",
+          "tool_output": "1\tbuy milk\n2\tcall bob"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "toolu_02",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "cat missing.txt",
+            "description": "Read a missing file"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "toolu_02",
+          "tool_name": "Bash",
+          "tool_status": "error",
+          "tool_output": "cat: missing.txt: No such file or directory"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "The notes say: buy milk, call bob."
+        }
+      ]
+    }
+  ]
+}

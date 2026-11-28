@@ -112,7 +112,7 @@ function copyExtension() {
   for (const name of readdirSync(EXT_SRC)) {
     const src = join(EXT_SRC, name);
     const dst = join(extDir, basename(name));
-    if (name.endsWith(".ts") || ["README.md", "DESIGN.md", "package.json", "package-lock.json"].includes(name)) {
+    if (name.endsWith(".ts") || name.endsWith(".mjs") || ["README.md", "DESIGN.md", "package.json", "package-lock.json"].includes(name)) {
       copyFileSync(src, dst);
     } else if (["lib", "shared", "scripts"].includes(name)) {
       cpSync(src, dst, { recursive: true });
@@ -144,7 +144,6 @@ writeFileSync(OVCLI_CONF, JSON.stringify({
       takeoverEnabled: TAKEOVER,
       resumeArchiveInject: false,
       commitTokenThreshold: 1000,
-      commitKeepRecentCount: 0,
       takeoverTokenThreshold: 600,
       takeoverKeepRecentTurns: 1,
       takeoverOverviewBudget: 3000,
@@ -176,6 +175,8 @@ function runTurn(turn, prompt, extraArgs = []) {
       OPENVIKING_URL: OV_URL,
       OPENVIKING_API_KEY: OV_KEY,
       OPENVIKING_CLI_CONFIG_FILE: OVCLI_CONF,
+      OPENVIKING_HOOK_STATE_DIR: join(root, "hook-state"),
+      OPENVIKING_PENDING_DIR: join(root, "pending"),
       SUPER_RELAY_API_KEY: RELAY_KEY,
       OV_E2E_OUT: outDir,
       OV_E2E_TURN: String(turn),

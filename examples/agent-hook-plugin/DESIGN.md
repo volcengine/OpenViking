@@ -1,70 +1,38 @@
-# DESIGN: the ZCode host
+# DESIGN: the hook plugin
 
-The ZCode adapter is the one host in this plugin whose extension surface had to be established by inspection rather than from documentation. What was verified, and what the adapter decided because of it, is recorded here.
+## The flow owns the behaviour
 
-## Verified ZCode extension surface
+`lib/flow/` decides everything a session does: which requests are sent, when a session commits, and what the model is told. `runStage(host, event, payload, { detached, cfg, outcome })` in `lib/flow/index.mjs` runs one host event; the caller hands the result to `host.emit`. The stages are in `start.mjs` (offline-queue replay, profile, skill catalog, optional archive overview), `prompt.mjs` (recall, and anything an earlier event could not deliver), `capture.mjs` (turn end, compaction, session end), `commit.mjs`, `pointer.mjs` (the session-history note) and `tool.mjs` (the `viking://` guard and `session_history` defaults).
 
-These facts were verified against a live ZCode installation (built-in `zcode-guide` plugin docs + actual `~/.zcode/cli/config.json` + real installed plugins with hooks).
+## What a host hands the flow
 
-| Aspect | Verified fact |
-|--------|--------------|
-| Supported hook events | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `Stop` (exactly 7) |
-| Unsupported events | `PreCompact`, `SessionEnd`, `Notification`, `SubagentStart`, `SubagentStop` |
-| Manifest probe order | `.zcode-plugin/plugin.json` → `.claude-plugin/plugin.json` → `.codex-plugin/plugin.json` |
-| Template vars (plugin hooks) | `${CLAUDE_PLUGIN_ROOT}`, `${ZCODE_PLUGIN_ROOT}`, `${CLAUDE_PROJECT_DIR}`, `${ZCODE_PROJECT_DIR}`, `${CLAUDE_SESSION_ID}` |
-| Template vars (config hooks) | None — config-file hooks do NOT expand templates |
-| Hook output schema | Strict JSON — any extra key fails validation, output discarded |
-| MCP config location | `~/.zcode/cli/config.json` → `mcp.servers` (user scope) |
-| Plugin MCP namespacing | `plugin:<plugin>:<server>` |
-| MCP auto-connect | All scopes auto-connect at session start |
-| Hook runner enablement | Auto-enabled when any plugin contributes a hook |
-| Timeout units | `command` type: `timeout` in **seconds**; `process` type: `timeoutMs` in milliseconds |
-| `async` field | No runtime effect — hooks always run inline |
+A host module (`hosts/<id>/host.mjs`) describes the host and decides nothing. Its contract is `lib/flow/host.d.mts`: `id`, `sessionPrefix`, `events` (host event name to stage: start, prompt, turnEnd, compactSoon, end, compacted, toolCall, toolResult), `budgets`, `canDetach`, `syncEvents`, `detachEvents`, `facts`, `config`, `toolHints`, and the functions `read` and `decode` (pure), `locate`, `emit`, `tool`, `mcpSession`, `legacyCursor`, `present`, `compress` and `observe` (told what each event did, for files the host keeps for its own UI; it cannot change the answer). `decode.mjs` beside it turns the host's transcript into turns. A host module does no network, no queue and no state files.
 
-## Key design decisions
+`scripts/hook.mjs <event> <host>` is the one hook entry, `scripts/uri-guard.mjs <host>` the guard, `servers/mcp-proxy.mjs` the one MCP proxy. OpenCode, DSH and pi run the same flow in-process through their own `host.mjs`.
 
-### 1. Assemble the shared runtime at install time (no vendored copy)
+## Where state lives
 
-ZCode imports the shared runtime across the plugin boundary, the way Cursor and TRAE do. The installer copies the modules `lib/MANIFEST` names to `~/.openviking/agent-integrations/memory-plugin-shared/lib`, which is exactly where `../../memory-plugin-shared/lib` resolves from an installed `hosts/` or `scripts/` file — so the same relative path works in this repository and on a user's machine, and no generated copy has to be kept in git.
+- Per-session hook state: `~/.openviking/hook-state/<host>/<session>.json` (`OPENVIKING_HOOK_STATE_DIR` overrides the root), written by `lib/agent-hook-runtime.mjs` under a lock.
+- Offline queue: `~/.openviking/pending`, replayed at session start; network errors, 408, 429 and 5xx are retried.
 
-### 2. Config-file hooks (not plugin-manifest hooks)
+## When a session commits
 
-`install_zcode()` writes hooks and MCP config into `~/.zcode/cli/config.json` (the config-file scope), not via plugin marketplace registration. This mirrors the Cursor/TRAE install pattern.
+`lib/flow/commit.mjs`: the plugin commits at a compaction (unless `autoCommitOnCompact` is false) and at session end, with `keep_recent_count` 0. After the session's first write it sets the session's auto-commit policy once: `pending_token_threshold` = `commitTokenThreshold`, `idle_timeout_seconds` = `commitIdleSeconds` (0 = none; under 300 raised to 300), `message_count_threshold` 0. The server checks the threshold on each write; the plugin never checks a threshold itself. This needs OpenViking server 0.4.13 or later, and the idle commit needs `memory.session_auto_commit.enabled` on the server.
 
-`__OPENVIKING_PLUGIN_ROOT__` in the source `hosts/zcode/hooks.json` is replaced by absolute paths at install time by `renderHookCommand()` in `install.sh`, so the config-file "no template expansion" limitation does not apply.
+## Server Feature Table
 
-**Provenance**: Adversarial review R4 — config-file hooks require `hooks.enabled: true`; the merge script sets this automatically.
+`lib/server-features.json` names each OpenViking server capability a client depends on, with the first server version that has it. The gateway and the plugins answer "does this server have X" from this one table: `lib/server-features.mjs` reads it for the plugins (`supports(feature, version)`, `featureStatus`, `healthVersion`), and `openviking_gateway/client.py` reads a copy the sync writes into the gateway package (`openviking_gateway/server-features.json`; `supports(feature, version)`, `VikingClient.supports(key, feature)`). The copy is committed, and CI fails a pull request whose copy differs from the source; a plugin gets the table only with a module that reads it.
 
-### 3. Four events only (ZCode-supported subset)
+Adding a row:
 
-ZCode supports 7 events but NOT `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`. The host wires 4 events. The commit-on-`Stop` strategy compensates for the absence of `PreCompact`/`SessionEnd`; the Stop parent detaches before reading stdin so network writes do not block ZCode.
+1. Add `"name": "X.Y.Z"` to `lib/server-features.json`.
+2. Add `"name"` to the `ServerFeature` union in `lib/server-features.d.mts`, so TypeScript callers can name it.
+3. Run `node examples/memory-plugin-shared/sync.mjs` and commit the regenerated `openviking_gateway/server-features.json` with the source.
+4. Add boundary cases for the row (the version itself, the release before it, a development build of it) to `tests/fixtures/server_feature_versions.json`.
 
-**Provenance**: Adversarial review R1 — confirmed all 4 event names valid; R4 — unsupported events silently dropped.
+Rules for a row:
 
-### 4. Output schema: ZCode-canonical keys only
-
-ZCode's strict JSON schema rejects unrecognized keys. The adapter's envelope emits ONLY `{ hookSpecificOutput: { hookEventName, additionalContext } }` for context injection, `{ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason } }` when the URI guard denies a file tool, and `{ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext } }` when it notices a `viking://` URI in a shell command. No `decision: "approve"` (Claude-Code-ism).
-
-The shared guard produces that notice for any shell tool, but the `PreToolUse` matcher names only `Read|Glob|Grep`, so ZCode never sends one. Whether its schema accepts `additionalContext` on `PreToolUse` is unverified; add a shell tool to the matcher only after checking that against a live session.
-
-**Provenance**: Adversarial review R1-F1, R4-V1 — the #1 silent-failure mode.
-
-### 5. No ZCode host plugin manifest
-
-ZCode probes `.zcode-plugin/plugin.json`, then `.claude-plugin/plugin.json`, then `.codex-plugin/plugin.json` — but nothing here is registered with its plugin system. The installer writes hooks and MCP config straight into `~/.zcode/cli/config.json`, so the host-consumed manifest is `hosts/zcode/openviking.integration.json`, which the installer reads.
-
-The root `plugin.json` is host-neutral package metadata. The installer copies it
-with the integration, the doctor reads its version, and repository checks keep
-that version aligned with each host's `openviking.integration.json`. No host
-probes or loads it as a native plugin manifest.
-
-## Primary unknowns
-
-1. **Hook stdin field names**: Verified via ZCode source reverse-engineering (#3127 by @quinn-zenith). The Stop hook exposes `responseText`/`responsePreview` for assistant content. User content is NOT in stdin — the parser falls back to ZCode's rollout file (`~/.zcode/cli/rollout/model-io-<sessionId>.jsonl`) which contains the complete conversation per line: `{ sessionId, turnId, request: { messages: [...] }, response: { text } }`.
-2. **Output schema acceptance**: Whether `hookSpecificOutput` wrapper is accepted as-is. Must be tested against a live ZCode session.
-3. **MCP tool name format**: Namespaced as `plugin:openviking:openviking` — verify tool names match expectations.
-4. **Turn identity**: Rollout entries carry a monotonic `turnId`. The rollout is the authoritative incremental source whenever it is readable; stdin is a compatibility fallback only. The adapter sends this identity as OpenViking's `turn_id`, records both role-specific dedup keys only after messages are sent or durably queued, and advances `lastTurnId` only through complete acknowledged rollout entries.
-
-## Adversarial review incorporation
-
-The focused regression suite covers rollout-first recovery, acknowledgement and cursor state, duplicate Stop delivery, detached slow writes, and installation from the same marketplace staging script used by the TOS release workflow.
+- The version is the next unreleased release at the time the server change merges, the release its users will first see it in.
+- Only the release part of a version is compared, so a development build such as `0.5.7.dev44` counts as 0.5.7.
+- A version that cannot be read, or none at all, counts as not supporting. Both readers accept the PEP 440 grammar and nothing else; `tests/fixtures/server_feature_versions.json` holds the cases both test suites check.
+- Callers ask the table before they use a capability. They do not infer support from a 404 or another error from the server.

@@ -1,0 +1,3 @@
+{"type":"event_msg","payload":{"type":"exec_command_end","call_id":"exec-shell","command":["pwd"],"cwd":"/workspace","aggregated_output":"/workspace\n","exit_code":0,"status":"completed"}}
+{"type":"event_msg","payload":{"type":"exec_command_end","call_id":"exec-fail","command":["false"],"cwd":"/workspace","stdout":"","stderr":"boom","exit_code":1,"status":"failed"}}
+{"type":"event_msg","payload":{"type":"patch_apply_end","call_id":"exec-patch","changes":{"README.md":{"type":"update"}},"stdout":"Done!","stderr":"","success":true,"status":"completed"}}

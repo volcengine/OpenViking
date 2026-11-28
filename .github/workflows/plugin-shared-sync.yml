@@ -13,11 +13,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "examples/agent-hook-plugin/lib/**"
       - "examples/memory-plugin-shared/lib/**"
       - "examples/memory-plugin-shared/sync.mjs"
       - "examples/skills/**"
-      - "examples/claude-code-memory-plugin/**"
-      - "examples/codex-memory-plugin/**"
       - "examples/openclaw-plugin/**"
       - "agent-plugins/**"
   workflow_dispatch:

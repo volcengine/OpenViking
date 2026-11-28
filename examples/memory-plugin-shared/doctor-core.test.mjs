@@ -23,7 +23,7 @@ import {
   unknownOvcliKeys,
   whichCommand,
   WORKSPACE_PEER_HINT,
-} from "./lib/doctor-core.mjs";
+} from "../agent-hook-plugin/lib/doctor-core.mjs";
 
 const b64 = (s) => Buffer.from(s).toString("base64url");
 
@@ -323,13 +323,13 @@ test("checkWorkspace warns when the workspace asks for a newer client", () => {
 test("no doctor wrapper redefines a name doctor-core already exports", () => {
   const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf-8");
   const exported = new Set(
-    [...read("./lib/doctor-core.mjs").matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]),
+    [...read("../agent-hook-plugin/lib/doctor-core.mjs").matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]),
   );
   assert.ok(exported.has("runDoctor"));
   assert.ok(exported.has("inspectConfigFiles"));
   for (const rel of [
-    "../claude-code-memory-plugin/scripts/ov-memory-doctor.mjs",
-    "../codex-memory-plugin/scripts/ov-memory-doctor.mjs",
+    "../agent-hook-plugin/hosts/claude-code/ov-memory-doctor.mjs",
+    "../agent-hook-plugin/hosts/codex/ov-memory-doctor.mjs",
     "../agent-hook-plugin/scripts/ov-memory-doctor.mjs",
     "../opencode-plugin/scripts/ov-memory-doctor.mjs",
     "../pi-coding-agent-extension/scripts/ov-memory-doctor.mjs",
@@ -341,7 +341,7 @@ test("no doctor wrapper redefines a name doctor-core already exports", () => {
   }
 });
 
-// The hooks bound their own requests (agent-hook-plugin/tests/request-budget),
+// The hooks bound their own requests (flow.test.mjs, hosts.test.mjs),
 // so no timeout setting is a hook overrun the doctor should report.
 test("the hook hosts' doctor reports no hook-budget overrun at any request timeout", () => {
   const home = mkdtempSync(join(tmpdir(), "ov-doctor-hosts-"));
@@ -365,6 +365,30 @@ test("the hook hosts' doctor reports no hook-budget overrun at any request timeo
       assert.deepEqual(budgetWarnings(client), [], client);
       assert.deepEqual(budgetWarnings(client, { OPENVIKING_TIMEOUT_MS: "35000" }), [], client);
     }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the hook hosts' doctor hands Claude Code and Codex over to their own doctors", () => {
+  const home = mkdtempSync(join(tmpdir(), "ov-doctor-handover-"));
+  const doctor = fileURLToPath(new URL("../agent-hook-plugin/scripts/ov-memory-doctor.mjs", import.meta.url));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OPENVIKING_") && !key.startsWith("CLAUDE") && !key.startsWith("CODEX")));
+  const runningFrom = (args, extra = {}) => {
+    const run = spawnSync(process.execPath, [doctor, ...args, "--offline", "--json"], {
+      cwd: home,
+      env: { ...env, ...extra, HOME: home, PATH: dirname(process.execPath) },
+      encoding: "utf8",
+    });
+    const install = JSON.parse(run.stdout).sections.find((section) => section.title === "Plugin install");
+    return install.findings.find((finding) => finding.title.startsWith("running from")).title;
+  };
+  try {
+    assert.match(runningFrom(["claude-code"]), /directory install \/ dev checkout/);
+    assert.match(runningFrom(["codex"]), /marketplace checkout \/ dev directory/);
+    assert.match(runningFrom([], { CLAUDECODE: "1" }), /directory install \/ dev checkout/);
+    assert.match(runningFrom([], { CODEX_THREAD_ID: "t" }), /marketplace checkout \/ dev directory/);
+    assert.match(runningFrom(["cursor"], { CLAUDECODE: "1" }), /client cursor/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

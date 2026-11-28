@@ -1,0 +1,32 @@
+{
+  "what": "a cursor from the old plugin resumes at the same turn, host-authored turns included",
+  "decode": {
+    "transcript": "compact.jsonl",
+    "cursor": {
+      "capturedTurnCount": 3
+    }
+  },
+  "cursor": {
+    "capturedTurnCount": 7
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "second question"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "second answer"
+        }
+      ]
+    }
+  ]
+}

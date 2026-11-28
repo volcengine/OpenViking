@@ -1,0 +1,17 @@
+{
+  "what": "the prompt is trimmed and generation_id identifies the prompt event",
+  "read": {
+    "event": "beforeSubmitPrompt",
+    "payload": {
+      "conversation_id": "c1",
+      "generation_id": "g1",
+      "prompt": "  what did we decide?  ",
+      "transcript_path": "/x/t.jsonl"
+    }
+  },
+  "expect": {
+    "prompt": "what did we decide?",
+    "eventId": "g1",
+    "transcript": "/x/t.jsonl"
+  }
+}

@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { sendSessionMessages } from "./lib/batch-send.mjs";
-import { listPending } from "./lib/pending-queue.mjs";
+import { sendSessionMessages } from "../agent-hook-plugin/lib/batch-send.mjs";
+import { listPending } from "../agent-hook-plugin/lib/pending-queue.mjs";
 
 function payloads(count, offset = 0) {
   return Array.from({ length: count }, (_, i) => ({
@@ -54,6 +54,8 @@ test("sendSessionMessages chunks batches at the server limit", async () => {
     queued: 0,
     enqueueFailed: 0,
     failed: 0,
+    refused: 0,
+    status: 0,
     retryable: false,
     usedBatch: true,
     lastError: null,

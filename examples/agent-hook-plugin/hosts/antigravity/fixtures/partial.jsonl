@@ -1,0 +1,6 @@
+{"step_index":0,"status":"DONE","source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>\nWhat is the retry budget?\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nlocal time\n</ADDITIONAL_METADATA>"}
+{"step_index":1,"status":"DONE","source":"SYSTEM_SDK","type":"SYSTEM_MESSAGE","content":"<openviking-context>old</openviking-context>"}
+{"step_index":2,"status":"DONE","source":"MODEL","type":"PLANNER_RESPONSE","tool_calls":[{"name":"run_command","args":{"CommandLine":"grep -c retry app.toml"}}]}
+{"step_index":3,"status":"DONE","source":"MODEL","type":"GENERIC","content":"Created At: 2026-01-01T00:00:00Z\nCompleted At: 2026-01-01T00:00:01Z\nCreated At: 2026-01-01T00:00:00Z\nCompleted At: 2026-01-01T00:00:01Z\n3"}
+{"step_index":4,"status":"DONE","source":"MODEL","type":"PLANNER_RESPONSE","content":"The retry budget is three attempts."}
+{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","content":"Still wri
