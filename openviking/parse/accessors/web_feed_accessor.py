@@ -203,7 +203,13 @@ def _dedup_relpath(relpath: str, url: str, used: set) -> str:
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:6]
     newname = f"{p.stem}-{digest}{p.suffix}"
     parent = str(p.parent)
-    return newname if parent == "." else f"{parent}/{newname}"
+    candidate = newname if parent == "." else f"{parent}/{newname}"
+    index = 2
+    while candidate in used:
+        newname = f"{p.stem}-{digest}-{index}{p.suffix}"
+        candidate = newname if parent == "." else f"{parent}/{newname}"
+        index += 1
+    return candidate
 
 
 def _wrap_inline_html(title: Optional[str], fragment: str) -> str:
