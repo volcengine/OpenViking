@@ -165,7 +165,9 @@ describe('commandCandidate on a card', () => {
 describe('matchPrefix', () => {
   it('lets an exact match win over longer candidates and reports ambiguity', () => {
     assert.deepEqual(matchPrefix('low', ['low', 'lower']), ['low']);
-    assert.deepEqual(matchPrefix('m', EFFORT_LEVELS), ['minimal', 'medium']);
+    // A local list on purpose: this is about matching, so it must not change
+    // whenever a runtime's effort levels do.
+    assert.deepEqual(matchPrefix('m', ['minimal', 'medium', 'max']), ['minimal', 'medium', 'max']);
     assert.deepEqual(matchPrefix('', EFFORT_LEVELS), []);
   });
 });
@@ -215,7 +217,7 @@ describe('executeCommand', () => {
     assert.match(outcome.text, /high/);
     assert.match(outcome.text, /\/runtime/);
     assert.doesNotMatch(outcome.text, /claude:|codex:/);
-    assert.doesNotMatch(outcome.text, /restart/);
+    assert.match(outcome.text, /\/restart/);
     assert.equal(codex.calls.length, 0);
   });
 
@@ -236,13 +238,12 @@ describe('executeCommand', () => {
     assert.deepEqual(codex.calls, [['interrupt'], ['rotate', { resume: false }]]);
   });
 
-  it('treats the removed /restart command as unknown', () => {
-    assert.deepEqual(parseCommand('/restart'), {
-      name: null,
-      arg: '',
-      token: 'restart',
-      matches: [],
-    });
+  it('recognises /restart and its prefix, next to /runtime', () => {
+    assert.deepEqual(parseCommand('/restart'), { name: 'restart', arg: '' });
+    assert.deepEqual(parseCommand('/RES'), { name: 'restart', arg: '' });
+    // 'r' alone is still ambiguous, and /run is the runtime alias, not a restart.
+    assert.equal(parseCommand('/r').name, null);
+    assert.deepEqual(parseCommand('/run claude'), { name: 'runtime', arg: 'claude' });
   });
 
   it('new while disconnected still succeeds with a deferred message', async () => {

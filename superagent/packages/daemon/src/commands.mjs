@@ -24,7 +24,7 @@ import {
 // Default vocabulary for callers; command validation uses current model metadata.
 export const EFFORT_LEVELS = getRuntimeDefinition(DEFAULT_RUNTIME_ID).efforts;
 
-const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary', 'tasks', 'workers'];
+const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary', 'tasks', 'workers', 'restart'];
 
 function settingsAdjustmentText(result) {
   const lines = [];
@@ -100,6 +100,7 @@ export function helpText(snapshot) {
     '/primary status — 查看当前主 IM（仅限 owner 私聊）',
     '/tasks [编号 | stop 编号] — 查看或停止后台任务（workers 调度，仅限 owner 私聊）',
     '/workers [runtime | model | effort | fallback | slots …] — 查看或设置后台 worker 的 Runtime、模型、推理档位、备用 Runtime 和并发槽位，与 router 分开（workers 调度，仅限 owner 私聊）',
+    '/restart — 重启当前实例（仅限 owner 私聊，无需终端；期间十几秒不响应）',
     '/runtime [名称] — 查看或切换 Runtime（可简写 /run）',
     '/model [名称] — 查看或切换当前 Runtime 的模型，保留会话',
   ];
@@ -207,9 +208,12 @@ function modelMenuLines(models, runtime) {
 // own event/config context and do not wait for or change the model session.
 // `runtimeCard(snapshot)` and `statusCard(snapshot)` answer /runtime (with no
 // argument) and /status with a card too, where the caller can send one.
-export async function executeCommand(command, runtime, { primary, tasks, workers, statusExtra = () => '', runtimeCard = null, statusCard = null } = {}) {
+export async function executeCommand(command, runtime, { primary, tasks, workers, restart, statusExtra = () => '', runtimeCard = null, statusCard = null } = {}) {
   if (command.name === 'primary') {
     return primary ? primary(command) : { ok: false, text: '当前环境不支持 /primary。' };
+  }
+  if (command.name === 'restart') {
+    return restart ? restart(command) : { ok: false, text: '当前环境不支持 /restart。' };
   }
   if (command.name === 'tasks') {
     return tasks ? tasks(command) : { ok: false, text: '当前环境不支持 /tasks。' };

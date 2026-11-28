@@ -19,6 +19,7 @@ import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, statu
 import { executePrimaryCommand } from './primary-channel.mjs';
 import { executeTasksCommand, refreshesCard, taskStatusLine } from './task-commands.mjs';
 import { executeWorkersCommand } from './worker-commands.mjs';
+import { executeRestartCommand, scheduleInstanceRestart } from './restart-command.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
 import { ActionService } from './actions/service.mjs';
 import { startActionApi, stopActionApi } from './actions/api.mjs';
@@ -563,6 +564,10 @@ export class PersonalAgentDaemon {
         tasks: (parsed) => executeTasksCommand(parsed, { event, connectors: this.connectors, tasks: this.tasks }),
         workers: (parsed) => executeWorkersCommand(parsed, {
           event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
+        }),
+        restart: (parsed) => executeRestartCommand(parsed, {
+          event, connectors: this.connectors,
+          schedule: () => scheduleInstanceRestart({ instanceId: this.config.instanceId }),
         }),
         statusExtra: () => [workerStatusLine(this.workerSettings ?? null), taskStatusLine(this.tasks)].filter(Boolean).join('\n'),
         // On Lark /runtime and /status answer with a card too (settings-card.mjs).

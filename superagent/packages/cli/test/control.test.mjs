@@ -44,15 +44,22 @@ function fixture(t, online = []) {
   };
   const ready = [];
   const fetchImpl = async (url) => { ready.push(url); return { ok: true }; };
+  // The detached backstop restart leaves behind is never launched here: the
+  // test asserts what it would have been started with.
+  const spawns = [];
+  const spawnImpl = (command, args, spawnOptions) => {
+    spawns.push({ command, args, options: spawnOptions, at: commands.length });
+    return { unref() {} };
+  };
   let output = '';
   let errors = '';
   const options = {
-    env: { OV_SUPERAGENT_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl,
+    env: { OV_SUPERAGENT_UPDATER_TARGETS_JSON: TARGETS, HOME: home, USERPROFILE: home }, releaseLink, execFileImpl, fetchImpl, spawnImpl,
     pm2Bin: 'pm2', socketPath: path.join(home, '.ov-superagent', 'updater.sock'), readyOptions: { attempts: 1, intervalMs: 1 },
     stdout: { write: (text) => { output += text; } },
     stderr: { write: (text) => { errors += text; } },
   };
-  return { options, commands, timeouts, ready, apps, output: () => output, stderr: () => errors };
+  return { options, commands, timeouts, ready, apps, spawns, output: () => output, stderr: () => errors };
 }
 
 test('a target names one instance, the Web, the updater, or everything', () => {
@@ -126,6 +133,26 @@ test('restart replaces a running app; stop leaves a stopped app; both save the p
   await stopCommand('alpha', f.options);
   assert.equal(f.apps.get('superagent-alpha'), 'stopped');
   assert.equal(f.commands.at(-1), 'save');
+});
+
+test('restart leaves a detached backstop behind before it deletes the app', async (t) => {
+  const f = fixture(t, ['superagent-alpha']);
+  await restartCommand('alpha', f.options);
+  assert.equal(f.spawns.length, 1);
+  const [spawned] = f.spawns;
+  assert.match(spawned.command, /node(?:\.exe)?$/i);
+  assert.match(spawned.args[0], /restart-watchdog\.mjs$/);
+  assert.deepEqual(spawned.args.slice(1), ['--instance', 'alpha', '--wait-pid', String(process.pid), '--deadline-ms', '120000']);
+  assert.equal(spawned.options.detached, true, 'the delete kills its own process group');
+  assert.equal(spawned.options.stdio, 'ignore');
+  // Before the delete, or the backstop dies with the tree it was meant to outlive.
+  const deleteAt = f.commands.indexOf('delete superagent-alpha');
+  assert.ok(deleteAt >= 0);
+  assert.ok(spawned.at <= deleteAt, 'the backstop starts before the delete');
+  // An app PM2 does not know has nothing to delete, so nothing to back up either.
+  const g = fixture(t);
+  await restartCommand('alpha', g.options);
+  assert.deepEqual(g.spawns, []);
 });
 
 test('delete and stop wait longer than the app kill_timeout', async (t) => {
