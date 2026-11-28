@@ -11,9 +11,7 @@ export type ExperienceFileItem = {
 
 export type ExperiencePage = {
   items: ExperienceFileItem[]
-  hasMore: boolean
-  page: number
-  pageSize: number
+  nextOffset?: number
 }
 
 export type TrajectoryOutcome =
