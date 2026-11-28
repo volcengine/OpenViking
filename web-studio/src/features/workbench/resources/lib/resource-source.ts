@@ -89,7 +89,9 @@ function looksLikeWebFeed(url: URL): boolean {
 
 function looksLikeRemoteFile(url: URL): boolean {
   const filename = url.pathname.toLowerCase().split('/').pop() ?? ''
-  const extension = filename.includes('.') ? filename.split('.').pop() : ''
+  const extension = filename.includes('.')
+    ? (filename.split('.').pop() ?? '')
+    : ''
   return REMOTE_FILE_EXTENSIONS.has(extension)
 }
 

@@ -54,7 +54,6 @@ export interface QueueStatusCardProps {
 export function QueueStatusCard({
   title,
   status = '',
-  isHealthy = true,
   customRows,
 }: QueueStatusCardProps) {
   const { t } = useTranslation('monitoringPage')

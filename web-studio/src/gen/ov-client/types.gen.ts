@@ -308,6 +308,26 @@ export type ConsistencyRequest = {
 };
 
 /**
+ * CpRequest
+ *
+ * Request model for cp.
+ */
+export type CpRequest = {
+    /**
+     * From Uri
+     */
+    from_uri: string;
+    /**
+     * To Uri
+     */
+    to_uri: string;
+    /**
+     * Recursive
+     */
+    recursive?: boolean;
+};
+
+/**
  * CreateAccountRequest
  */
 export type CreateAccountRequest = {
@@ -364,15 +384,19 @@ export type FindRequest = {
     /**
      * Query
      */
-    query: string;
+    query?: string;
+    /**
+     * Image Url
+     */
+    image_url?: string | Array<string> | null;
     /**
      * Target Uri
      */
     target_uri?: string | Array<string>;
     /**
-     * Peer Id
+     * Context Type
      */
-    peer_id?: string | null;
+    context_type?: string | Array<string> | null;
     /**
      * Limit
      */
@@ -396,6 +420,10 @@ export type FindRequest = {
      */
     include_provenance?: boolean;
     /**
+     * Tags
+     */
+    tags?: Array<string> | null;
+    /**
      * Since
      */
     since?: string | null;
@@ -412,11 +440,19 @@ export type FindRequest = {
      */
     level?: number | string | Array<number> | null;
     /**
+     * Read Content
+     */
+    read_content?: boolean;
+    /**
      * Telemetry
      */
     telemetry?: boolean | {
         [key: string]: boolean;
     };
+    /**
+     * Events Time Decay Protection
+     */
+    events_time_decay_protection?: string | null;
 };
 
 /**
@@ -602,20 +638,32 @@ export type RestoreRequest = {
  * SearchRequest
  *
  * Request model for search with session.
+ *
+ * ``mode="list"`` is the historical ranked-hit response. ``mode="context"``
+ * turns the endpoint into the context assembly face: budgeting, detail tiers,
+ * cross-turn dedup and the optional digest all live behind it.
  */
 export type SearchRequest = {
     /**
      * Query
      */
-    query: string;
+    query?: string;
+    /**
+     * Search Type
+     */
+    search_type?: 'semantic' | 'keywords';
+    /**
+     * Image Url
+     */
+    image_url?: string | Array<string> | null;
     /**
      * Target Uri
      */
     target_uri?: string | Array<string>;
     /**
-     * Peer Id
+     * Context Type
      */
-    peer_id?: string | null;
+    context_type?: string | Array<string> | null;
     /**
      * Session Id
      */
@@ -643,6 +691,10 @@ export type SearchRequest = {
      */
     include_provenance?: boolean;
     /**
+     * Tags
+     */
+    tags?: Array<string> | null;
+    /**
      * Since
      */
     since?: string | null;
@@ -659,11 +711,73 @@ export type SearchRequest = {
      */
     level?: number | string | Array<number> | null;
     /**
+     * Read Content
+     */
+    read_content?: boolean;
+    /**
      * Telemetry
      */
     telemetry?: boolean | {
         [key: string]: boolean;
     };
+    /**
+     * Events Time Decay Protection
+     */
+    events_time_decay_protection?: string | null;
+    /**
+     * Mode
+     */
+    mode?: 'list' | 'context';
+    /**
+     * Query Expansion
+     */
+    query_expansion?: 'off' | 'auto';
+    /**
+     * Max Tokens
+     */
+    max_tokens?: number;
+    /**
+     * Quotas
+     */
+    quotas?: {
+        [key: string]: number;
+    } | null;
+    /**
+     * Purpose
+     */
+    purpose?: 'chat' | 'coding' | null;
+    /**
+     * Detail
+     */
+    detail?: 'auto' | 'abstract' | 'overview' | 'full' | {
+        [key: string]: 'abstract' | 'overview' | 'full';
+    } | null;
+    /**
+     * Dedup Turns
+     */
+    dedup_turns?: number;
+    /**
+     * Exclude Uris
+     */
+    exclude_uris?: Array<string>;
+    /**
+     * Peer Scope
+     */
+    peer_scope?: 'actor' | 'all';
+    /**
+     * Other Peer Penalty
+     */
+    other_peer_penalty?: number | {
+        [key: string]: number;
+    } | null;
+    /**
+     * Rewrite
+     */
+    rewrite?: boolean | 'auto';
+    /**
+     * Rewrite Max Bullets
+     */
+    rewrite_max_bullets?: number;
 };
 
 /**
@@ -724,6 +838,22 @@ export type ValidationError = {
     ctx?: {
         [key: string]: unknown;
     };
+};
+
+/**
+ * WaitRequest
+ *
+ * Legacy wait parameters, retained for request compatibility.
+ */
+export type WaitRequest = {
+    /**
+     * Timeout
+     *
+     * Deprecated compatibility parameter; accepted and ignored.
+     *
+     * @deprecated
+     */
+    timeout?: number | null;
 };
 
 /**
