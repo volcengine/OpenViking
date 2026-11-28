@@ -26,6 +26,19 @@ export const EFFORT_LEVELS = getRuntimeDefinition(DEFAULT_RUNTIME_ID).efforts;
 
 const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary', 'tasks', 'workers'];
 
+// The commands a group may run, and only as a question: /tasks lists only that
+// group's tasks (task-commands.mjs), and /workers counts what the shared
+// workers are doing without naming runtimes or settings (worker-commands.mjs).
+// Everything that changes the session or an instance setting stays in the
+// owner's direct chat.
+const PUBLIC_COMMANDS = new Set(['help', 'status', 'tasks', 'workers']);
+
+export const PUBLIC_ONLY_TEXT = '群里只能用 /help、/status、/tasks、/workers；其他命令和设置请在私聊里用。';
+
+export function publicCommand(command) {
+  return Boolean(command?.name && PUBLIC_COMMANDS.has(command.name));
+}
+
 function settingsAdjustmentText(result) {
   const lines = [];
   if (result.modelFallback) lines.push(`原模型 ${result.modelFallback.from} 已不可用，已恢复默认模型。`);
@@ -43,14 +56,14 @@ export function matchPrefix(token, candidates) {
   return candidates.filter((name) => name.startsWith(token));
 }
 
-// Where slash commands are accepted: a private chat takes bare /commands. Group
-// chats never do — any mention in a group used to be enough to trigger a
-// command meant for a completely different person. Group /command support could
-// come back on ConnectorManager.mentionTarget, which tells "@bot /cmd" from
-// "@someone-else /cmd" by the bot's own id. Returns the parse candidate text,
-// or null when the message is not eligible (it then flows to codex as a normal
-// message).
-export function commandCandidate(event) {
+// Where slash commands are accepted: a private chat takes bare /commands. In a
+// group, only a line that @mentions the bot itself and whose text is the
+// command counts — "@bot /tasks" — never a line that calls someone else, or
+// calls both. ConnectorManager.mentionTarget tells them apart by the bot's own
+// id. A group line that does not start with '/' stays a message (and can still
+// be an approval reply). Returns the parse candidate text, or null when the
+// message is not eligible (it then flows to codex as a normal message).
+export function commandCandidate(event, { mention = null } = {}) {
   // A choice on a card the Core answered a command with runs the command it
   // names, in the direct chat the card is in: the task picked in /tasks opens
   // as /tasks <id>, and a card's refresh button runs the /tasks it was drawn
@@ -67,7 +80,20 @@ export function commandCandidate(event) {
     || !event.replyRoute || !['text', 'post'].includes(event.messageType)) return null;
   const text = String(event.content ?? '').trim();
   if (event.chatType === 'p2p') return text;
-  return null;
+  if (event.chatType !== 'group' || mention !== 'me' || event.senderType !== 'user') return null;
+  const commandText = withoutMentions(text, event.mentions);
+  return commandText.startsWith('/') ? commandText : null;
+}
+
+// A group line carries its @mentions as placeholders ("@_user_1 /tasks"), often
+// with a zero-width space Lark put in front of them; take both out so the
+// command is found where the person put it.
+function withoutMentions(text, mentions) {
+  let value = String(text ?? '');
+  for (const mention of mentions ?? []) {
+    if (typeof mention?.key === 'string' && mention.key) value = value.split(mention.key).join(' ');
+  }
+  return value.replace(/[\u200b\u200c\u200d\ufeff]/g, '').trim();
 }
 
 // null → not a command (does not start with '/'). Otherwise { name, arg } for a
@@ -89,7 +115,18 @@ export function parseCommand(text) {
   return { name: null, arg, token, matches };
 }
 
-export function helpText(snapshot) {
+export function helpText(snapshot, { publicView = false } = {}) {
+  if (publicView) {
+    return [
+      '群里可用的只读命令（支持前缀匹配，如 /h）：',
+      '/help — 显示群里可用的命令',
+      '/status — 查看我是否在工作',
+      '/tasks — 查看这个群里的后台任务',
+      '/workers — 查看后台 worker 的占用情况',
+      '',
+      '在群里 @ 我 再发命令；其他命令、任务详情和停止任务只能在私聊里用。',
+    ].join('\n');
+  }
   const supportsEffort = snapshot.capabilities?.effortControl === 'selectable';
   const lines = [
     '可用命令（支持前缀匹配，如 /h、/m）：',
@@ -146,8 +183,13 @@ export function statusHeadline(snapshot, nowMs = Date.now()) {
   return { headline, queued: status.queued ?? 0 };
 }
 
-export function statusText(snapshot, nowMs = Date.now()) {
+export function statusText(snapshot, nowMs = Date.now(), { publicView = false } = {}) {
   const { headline, queued } = statusHeadline(snapshot, nowMs);
+  // A group learns whether the agent is working, not on which runtime, model
+  // or effort, nor how many messages are queued inside the instance.
+  if (publicView) return headline
+    .replace('Runtime 未连接', '暂时没连上')
+    .replace('正在切换 Runtime', '正在切换运行环境');
   const lines = [
     headline,
     `Runtime：${snapshot.runtime ?? 'codex'}`,
@@ -207,7 +249,19 @@ function modelMenuLines(models, runtime) {
 // own event/config context and do not wait for or change the model session.
 // `runtimeCard(snapshot)` and `statusCard(snapshot)` answer /runtime (with no
 // argument) and /status with a card too, where the caller can send one.
-export async function executeCommand(command, runtime, { primary, tasks, workers, statusExtra = () => '', runtimeCard = null, statusCard = null } = {}) {
+export async function executeCommand(command, runtime, { primary, tasks, workers, statusExtra = () => '', runtimeCard = null, statusCard = null, publicView = false } = {}) {
+  // A group line reached the command layer only because it @mentioned the bot;
+  // anything that is not one of the read-only views is answered here, before a
+  // runtime call or a handler could change anything.
+  if (publicView && !publicCommand(command)) {
+    if (!command.name) {
+      const head = command.matches.length > 1
+        ? `命令 /${command.token} 有歧义：${command.matches.map((name) => `/${name}`).join('、')}`
+        : `未知命令：/${command.token}`;
+      return { ok: false, text: `${head}\n\n群里只能用 /help、/status、/tasks、/workers。` };
+    }
+    return { ok: false, text: PUBLIC_ONLY_TEXT };
+  }
   if (command.name === 'primary') {
     return primary ? primary(command) : { ok: false, text: '当前环境不支持 /primary。' };
   }
@@ -225,10 +279,11 @@ export async function executeCommand(command, runtime, { primary, tasks, workers
     return { ok: false, text: `${head}\n\n${helpText(cached)}` };
   }
 
-  if (command.name === 'help') return { ok: true, text: helpText(cached) };
+  if (command.name === 'help') return { ok: true, text: helpText(cached, { publicView }) };
 
   if (command.name === 'status') {
-    return { ok: true, text: [statusText(cached), statusExtra()].filter(Boolean).join('\n'), ...(statusCard ? { card: statusCard(cached) } : {}) };
+    return { ok: true, text: [statusText(cached, Date.now(), { publicView }), statusExtra()].filter(Boolean).join('\n'),
+      ...(!publicView && statusCard ? { card: statusCard(cached) } : {}) };
   }
 
   if (command.name === 'new') {

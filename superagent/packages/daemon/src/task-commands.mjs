@@ -18,6 +18,7 @@ import { formatBytes } from './task-dirs.mjs';
 
 const TASK_ID = /^t[0-9]{1,6}$/;
 const USAGE = '用法：/tasks 查看任务；/tasks <编号> 查看详情；/tasks stop <编号> [原因] 停止任务';
+const GROUP_ONLY = '任务详情和停止任务只能在私聊里用；群里可以用 /tasks 看这个群的任务。';
 const RECENT = 5;
 const LIVE_SHOWN = 20;
 
@@ -114,12 +115,12 @@ function liveCounts(live) {
 }
 
 // The one line /status adds when there are tasks at work.
-export function taskStatusLine(tasks) {
+export function taskStatusLine(tasks, { chatId = null } = {}) {
   if (!tasks) return '';
-  const { live } = tasks.overview({ recent: 0 });
+  const { live } = tasks.overview({ recent: 0, chatId });
   if (live.length === 0) return '';
   const parts = liveCounts(live).filter(([, n]) => n > 0).map(([label, n]) => `${label} ${n}`);
-  return `后台任务：${parts.join(' · ')}（/tasks 查看）`;
+  return `${chatId ? '本群后台任务' : '后台任务'}：${parts.join(' · ')}（/tasks 查看）`;
 }
 
 // The questions nobody answered for days, in one line at the end: still
@@ -450,7 +451,56 @@ function detail(tasks, taskId, now) {
   return { ok: true, text: detailText(task, parts), card: detailCard(task, parts, now, { live: tasks.isLive(task) }) };
 }
 
-export function executeTasksCommand(command, { event, connectors, tasks, now = Date.now() }) {
+// ---- what a group sees ------------------------------------------------------
+
+// A group's line: the same state as the owner's, but only what the people in
+// the group already know (title, requester, status) and whether the result
+// reached them. No thread markers, delivery pipeline or agent-internal notes.
+function publicLine(task, now) {
+  const result = task.report?.delivery === 'sent' && ['done', 'dropped', 'failed', 'blocked'].includes(task.status)
+    ? ' · 结果已发出' : '';
+  return `${task.id} ${state(task, now)}「${oneLine(task.title, 40)}」${task.requester_name ?? '未知'}${result}`;
+}
+
+function publicSection(lines, title, tasks, now) {
+  if (tasks.length === 0) return;
+  lines.push('', title);
+  for (const task of tasks.slice(0, LIVE_SHOWN)) lines.push(publicLine(task, now));
+  if (tasks.length > LIVE_SHOWN) lines.push(`…另有 ${tasks.length - LIVE_SHOWN} 个`);
+}
+
+function publicOverview(tasks, chatId, now) {
+  const view = tasks.overview({ recent: RECENT, chatId });
+  if (view.total === 0) {
+    return { ok: true, text: '这个群还没有后台任务。\n任务详情和停止任务在私聊里用。' };
+  }
+  const { live, ended, total } = view;
+  const waiting = live.filter((task) => task.status === 'waiting').sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+  const running = [...live.filter((task) => task.status === 'running'), ...live.filter((task) => task.status === 'queued')];
+  const counts = liveCounts(live).filter(([, n]) => n > 0).map(([label, n]) => `${label} ${n}`);
+  const lines = [`本群的后台任务：${counts.length ? `${counts.join(' · ')} · ` : ''}共 ${total} 个`];
+  publicSection(lines, '进行中', running, now);
+  publicSection(lines, '等待回复', waiting.filter((task) => !task.dormant), now);
+  publicSection(lines, '最近结束', ended, now);
+  const dormant = waiting.filter((task) => task.dormant);
+  if (dormant.length) {
+    const shown = dormant.slice(0, LIVE_SHOWN).map((task) => `${task.id} 等 ${task.requester_name ?? '请求人'} ${since(task.updated_at_ms, now)}`);
+    lines.push('', `久未回复（${view.dormantDays} 天以上无动静）：${shown.join('、')}${dormant.length > LIVE_SHOWN ? ` 等 ${dormant.length} 个` : ''}`);
+  }
+  lines.push('', '任务详情和停止任务在私聊里用；这里只列这个群的任务。');
+  return { ok: true, text: lines.join('\n') };
+}
+
+export function executeTasksCommand(command, { event, connectors, tasks, now = Date.now(), publicView = false }) {
+  // What a group gets: the tasks asked in that group, without slot or disk
+  // counts, where a task was asked, router notes, directories, runtimes, or
+  // delivery mechanics. Detail and stop stay in the owner's direct chat.
+  if (publicView) {
+    if (event?.chatType !== 'group') return { ok: false, text: GROUP_ONLY };
+    if (!tasks) return { ok: true, text: '这个实例没有启用后台任务。' };
+    if (String(command.arg ?? '').trim()) return { ok: false, text: GROUP_ONLY };
+    return publicOverview(tasks, event.chatId, now);
+  }
   if (event?.chatType !== 'p2p' || event.senderType !== 'user' || !connectors?.isOwner?.(event)) {
     return { ok: false, text: '仅限已绑定的 owner 在与机器人的私聊中使用 /tasks。' };
   }

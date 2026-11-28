@@ -132,9 +132,11 @@ export class Harness {
       return;
     }
     const filterReason = deterministicFilter(event, this.config);
-    // Only eligible, replyable P2P messages can invoke local slash commands.
+    const mention = this.mentionTarget(event);
+    // Only eligible, replyable messages can invoke local slash commands: a
+    // direct chat as before, a group line only when it @mentions the bot itself.
     // A slash in any other event body remains ordinary model input.
-    const commandText = filterReason ? null : commandCandidate(event);
+    const commandText = filterReason ? null : commandCandidate(event, { mention });
     const command = commandText === null ? null : parseCommand(commandText);
     // The owner answering a numbered draft (发送 N ...) is the Core's to
     // carry out, like a slash command; it never reaches the model as such.
@@ -214,7 +216,6 @@ export class Harness {
       // A document has no members to list: its Connector names the commenter.
       if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
       const owner = this.isOwner(event);
-      const mention = this.mentionTarget(event);
       // Bounded like the warm-up above, and never rejects.
       const recall = this.recall && wantsRecall(event, mention) ? await this.recall.forEvent(event, { owner }) : '';
       await this.runtime.prepareInputContext?.();
