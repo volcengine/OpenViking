@@ -21,6 +21,7 @@
 
 import { matchPrefix } from './commands.mjs';
 import { RUNTIME_ALIASES, modelIdProblem, parseRuntimeModelSelector, staticModelEntries } from './runtime-catalog.mjs';
+import { settingsModels } from './settings-models.mjs';
 import { MAX_WORKER_SLOTS, isWorkerRuntime } from './worker-settings.mjs';
 import { RESERVED_SLOTS, WORKER_SLOTS } from './tasks.mjs';
 import { WORKER_RUNTIMES } from './worker-executor.mjs';
@@ -103,16 +104,27 @@ export function workersOverview(settings, tasks, now = Date.now()) {
   return lines.join('\n');
 }
 
-// The models a runtime is known to serve: the router's live catalogue when
-// workers run on the router's runtime, else the runtime's static names.
+// The models a runtime is known to serve, and what each one's catalogue says
+// about its effort levels: the router's live catalogue when workers run on the
+// router's runtime, else the runtime's own catalogue (settings-models.mjs).
+// `ids` is what a model name is matched against; `models` is what an effort is
+// checked against.
 async function knownModels(runtime, router) {
   if (router && router.runtime === runtime) {
     try {
       const snapshot = await router.snapshot({ catalog: 'refresh' });
-      if (snapshot.runtime === runtime) return { live: true, ids: [...new Set((snapshot.models ?? []).flatMap((entry) => [entry.id, entry.resolvedModel].filter(Boolean)))] };
+      if (snapshot.runtime === runtime) {
+        const models = snapshot.models ?? [];
+        return { live: true, ids: [...new Set(models.flatMap((entry) => [entry.id, entry.resolvedModel].filter(Boolean)))], models };
+      }
     } catch { /* offline: no catalogue */ }
   }
-  return { live: false, ids: staticModelEntries(runtime).map((entry) => entry.id) };
+  let models = [];
+  try {
+    const snapshot = await settingsModels({ runtime }, [runtime]);
+    models = snapshot.catalogs?.[runtime] ?? [];
+  } catch { /* offline: no catalogue */ }
+  return { live: false, ids: staticModelEntries(runtime).map((entry) => entry.id), models };
 }
 
 async function modelCommand(settings, tasks, router, arg) {
@@ -145,18 +157,26 @@ async function modelCommand(settings, tasks, router, arg) {
     else if (known.live) return { ok: false, text: `未找到模型：${name}\n可选：${known.ids.join('、')}` };
   }
   settings.setModel(runtime, model);
+  // The effort set for the old model is kept only when the new one offers it:
+  // a level that does not exist there would be silently clamped at spawn.
   const effort = settings.own(runtime).effort;
-  return { ok: true, text: `worker 在 ${runtime} 上的模型已设为 ${model}${effort ? `（推理档位 ${effort}）` : ''}。${SCOPE}`
+  const keptEffort = effort && settings.efforts(runtime, model, known.models).includes(effort) ? effort : '';
+  if (effort && !keptEffort) settings.setEffort(runtime, '');
+  return { ok: true, text: `worker 在 ${runtime} 上的模型已设为 ${model}${keptEffort ? `（推理档位 ${keptEffort}）` : ''}。${SCOPE}`
+    + (effort && !keptEffort ? `\n${model} 没有 ${effort} 这一档，已恢复默认档位。` : '')
     + (liveElsewhere(tasks, null) ? `\n进行中的任务保持原模型。` : '') };
 }
 
-function effortCommand(settings, arg) {
+async function effortCommand(settings, router, arg) {
   const runtime = settings.preferred();
   if (!isWorkerRuntime(runtime)) return { ok: false, text: `worker 不能运行在 ${runtime} 上，先用 /workers runtime 指定 worker 的 Runtime` };
-  const levels = settings.efforts(runtime);
   const current = settings.modelFor(runtime);
+  const known = await knownModels(runtime, router);
+  // The levels of the model this worker will run, not the runtime's whole
+  // union: a level Codex's union has may not exist on the model set here.
+  const levels = settings.efforts(runtime, current.model, known.models);
   if (!arg) {
-    return { ok: true, text: `worker Runtime：${runtime}\n推理档位：${valued(current.effort, current.effortSource)}\n可选：${levels.join('、')}\n用法：/workers effort <档位|default>` };
+    return { ok: true, text: `worker Runtime：${runtime}\n模型：${valued(current.model, current.modelSource)}\n推理档位：${valued(current.effort, current.effortSource)}\n可选：${levels.join('、')}\n用法：/workers effort <档位|default>` };
   }
   if (FOLLOW.has(arg.toLowerCase())) {
     settings.setEffort(runtime, '');
@@ -245,7 +265,7 @@ export async function executeWorkersCommand(command, { event, connectors, settin
   try {
     if (verbs[0] === 'runtime') return runtimeCommand(settings, tasks, arg);
     if (verbs[0] === 'model') return await modelCommand(settings, tasks, router, arg);
-    if (verbs[0] === 'effort') return effortCommand(settings, arg);
+    if (verbs[0] === 'effort') return await effortCommand(settings, router, arg);
     if (verbs[0] === 'slots') return slotsCommand(settings, tasks, arg);
     return fallbackCommand(settings, arg);
   } catch (error) {

@@ -391,7 +391,13 @@ model and effort. The owner sets them with `/workers` in a direct chat
 `/workers effort high`, `/workers fallback claude`, `… default` / `router` to
 go back). Unset, they follow the router, as workers did before: the router's
 runtime, and its model and effort when the worker runs on the same runtime
-(the CLI's own default on another). So the router can run where workers
+(the CLI's own default on another). A worker set to a different model on the
+router's runtime does not take the router's effort: that level was chosen for
+a model the worker will not run, and may not exist on the one it does. The
+levels `/workers effort` offers are the ones the worker's model reports in its
+catalogue (the router's live snapshot, Codex and TraeX model caches, Pi's
+providers), and the runtime's static union only when the model reports none or
+the runtime has no catalogue to read. So the router can run where workers
 cannot (DSH, Ark) and hand work to workers on Codex, or the two can use
 different models on one runtime.
 
