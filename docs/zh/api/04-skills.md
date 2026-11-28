@@ -610,6 +610,7 @@ HTTP 对应查询为 `GET /api/v1/skills/search-web?include_content=true&include
 | 返回字段 | 含义 |
 |----------|------|
 | `content_sha256` | 返回的 SKILL.md 正文的 SHA-256；只要返回 `content` 就有该字段，不要求开启完整性模式 |
+| `content` | 可见正文，与 `content/read` 返回的是同一视图：被 Privacy 封存的值保持封存引用，不会还原。`files[].sha256` 与 `revision` 按存储字节计算，所以被封存的 SKILL.md 两者与 `content_sha256` 不一致。 |
 | `revision` | 根据排序后的包清单（路径、目录标记、文件大小与哈希）计算的版本标识，不是 Git commit 或 metadata.version |
 | `files[].name/path/uri` | 条目名称、包内相对路径、canonical URI |
 | `files[].is_dir/kind` | 目录标记；kind 为 `definition`、`summary`、`auxiliary` 或 `directory` |

@@ -186,7 +186,7 @@ describe('OpenViking tool client', () => {
     const instance = client(ov, { dataDir });
     const page = await instance.read({ uri: `${root}/SKILL.md` });
     assert.match(page.text, /^viking:\/\/user\/owner\/skills\/charts\/SKILL\.md \(whole remaining text/);
-    assert.match(page.text, /Skill charts is on this machine at .+\/skills\/charts\/dddddddddddd: run its scripts and read its references there/);
+    assert.match(page.text, /Skill charts is on this machine at .+\/skills\/user\/charts\/dddddddddddd: run its scripts and read its references there/);
     assert.equal(page.data.skill_package.name, 'charts');
     assert.equal(page.data.skill_package.revision, 'dddddddddddd');
     assert.equal(fs.readFileSync(path.join(page.data.skill_package.path, 'scripts', 'render.sh'), 'utf8'), script);
@@ -195,6 +195,11 @@ describe('OpenViking tool client', () => {
     assert.equal(fs.readFileSync(path.join(page.data.skill_package.path, 'SKILL.md'), 'utf8'), definition);
     assert.equal(requests(ov, 'GET /api/v1/content/read').length, 1, 'only the package file is fetched');
     assert.equal(requests(ov, /^GET \/api\/v1\/skills\/charts$/).length, 1);
+    // The same skill read through the instance's own `~` alias loads its
+    // package too: OV answers with the canonical user root.
+    const alias = await instance.read({ uri: 'viking://~/skills/charts/SKILL.md' });
+    assert.equal(alias.data.skill_package.name, 'charts');
+    assert.equal(alias.data.skill_package.cached, true);
     // A skill updated under the read: the page and the files are the new
     // revision, never the old text with new scripts.
     const updated = `${definition}\nAlso run scripts/other.sh.\n`;

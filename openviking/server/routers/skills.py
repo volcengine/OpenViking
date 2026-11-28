@@ -483,7 +483,13 @@ async def _read_skill_detail(
     include_source: bool,
     level: Optional[int],
 ) -> Dict[str, Any]:
-    """Read one Skill; integrity requests observe a storage-locked package snapshot."""
+    """Read one Skill; integrity requests observe a storage-locked package snapshot.
+
+    ``content`` is the visible view of SKILL.md, the same one a plain read of
+    that file returns: a sealed credential stays the reference the Privacy layer
+    put there, never the restored value. This text is handed to a client that
+    shows it and can write it to disk.
+    """
 
     async def read_fields() -> Dict[str, Any]:
         abstract = await service.fs.abstract(root_uri, ctx=ctx)
@@ -497,7 +503,11 @@ async def _read_skill_detail(
             or include_content is True
             or (level is None and include_content is not False)
         ):
-            content = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
+            # Visible, not restored: this response is shown and written out by
+            # the caller, so a credential the Privacy layer sealed stays sealed,
+            # exactly as `content/read` of the same file would answer. The
+            # manifest below still hashes what is stored.
+            content = await service.fs.read_visible(_skill_md_uri(root_uri), ctx=ctx)
             result["content"] = content
             result["content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if include_files:

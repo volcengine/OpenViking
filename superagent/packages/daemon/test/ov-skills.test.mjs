@@ -122,7 +122,7 @@ describe('OpenViking skills as frontmatter', () => {
       extra: [{ path: '.abstract.md', uri: 'viking://user/u/skills/charts/.abstract.md', is_dir: false, size: 3, sha256: sha('abs') },
         { path: 'scripts', uri: 'viking://user/u/skills/charts/scripts', is_dir: true }],
     });
-    const packageDir = path.join(dataDir, 'skills', 'charts', revision.slice(0, 12));
+    const packageDir = path.join(dataDir, 'skills', 'user', 'charts', revision.slice(0, 12));
     const first = await materializeSkill(connection(ov), { uri: `${root}/SKILL.md`, dataDir });
     assert.equal(first.path, packageDir);
     assert.equal(first.name, 'charts');
@@ -162,11 +162,15 @@ describe('OpenViking skills as frontmatter', () => {
     assert.equal(fs.existsSync(path.join(first.path, 'late.md')), false);
     assert.equal(fs.readFileSync(path.join(first.path, 'scripts', 'render.sh'), 'utf8'), script, 'what arrived is usable');
 
-    // Not whole, so the next read asks for the files again and fills the gap.
+    // Not whole, so the next read fills the gap — and keeps what the first one
+    // got, even when that file is the one unavailable this time.
     ov.state.files.set(`${root}/late.md`, 'arrived');
+    ov.state.files.delete(`${root}/scripts/render.sh`);
     const second = await materializeSkill(connection(ov), { uri: `${root}/SKILL.md`, dataDir });
     assert.equal(second.cached, false);
     assert.equal(fs.readFileSync(path.join(second.path, 'late.md'), 'utf8'), 'arrived');
+    assert.equal(fs.readFileSync(path.join(second.path, 'scripts', 'render.sh'), 'utf8'), script,
+      'a file the earlier attempt verified is not dropped when another one fails now');
     // What can never arrive stays reported, and the package is cached now.
     assert.deepEqual(second.skipped, ['../escape.md']);
     const reads = ov.state.requests.filter((entry) => entry.route === 'GET /api/v1/content/read').length;
@@ -176,7 +180,7 @@ describe('OpenViking skills as frontmatter', () => {
     assert.equal(ov.state.requests.filter((entry) => entry.route === 'GET /api/v1/content/read').length, reads);
   });
 
-  it('keeps each skill in its own directory, and an old revision while a task could still be using it', async (t) => {
+  it('keeps each skill in its own directory, an old revision while it is in use, and the two roots apart', async (t) => {
     const ov = await fakeOV(t);
     const dataDir = fs.mkdtempSync(path.join(TEMP, 'data-'));
     t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
@@ -185,20 +189,37 @@ describe('OpenViking skills as frontmatter', () => {
     const tools = await materializeSkill(connection(ov), { uri: 'viking://user/u/skills/chart-tools/SKILL.md', dataDir });
     const first = await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
     // A name that starts with another skill's name is another skill.
+    assert.equal(path.dirname(first.path), path.join(dataDir, 'skills', 'user', 'chart'));
     assert.notEqual(path.dirname(first.path), path.dirname(tools.path));
+
+    // Read yesterday, handed to a task now, the skill moves on: reading it
+    // again counts as use, so the directory it gave out stays.
+    const old = new Date(Date.now() - 25 * 60 * 60_000);
+    fs.utimesSync(first.path, old, old);
+    const again = await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
+    assert.equal(again.cached, true);
     ov.state.skills.get('chart').revision = 'd'.repeat(64);
     const second = await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
     assert.notEqual(second.path, first.path);
-    assert.equal(fs.existsSync(path.join(first.path, 'SKILL.md')), true, 'a revision handed out yesterday is still there');
+    assert.equal(fs.existsSync(path.join(first.path, 'SKILL.md')), true, 'the revision just read is kept');
     assert.equal(fs.existsSync(path.join(tools.path, 'SKILL.md')), true, 'loading chart did not touch chart-tools');
 
-    // A day later the old revision goes, and the other skill stays.
-    const old = new Date(Date.now() - 25 * 60 * 60_000);
+    // A revision nobody came back to for a day goes, and the other skill stays.
     fs.utimesSync(first.path, old, old);
     await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
-    assert.equal(fs.existsSync(first.path), false, 'the old revision is cleared');
+    assert.equal(fs.existsSync(first.path), false, 'the idle revision is cleared');
     assert.equal(fs.existsSync(path.join(second.path, 'SKILL.md')), true);
     assert.equal(fs.existsSync(path.join(tools.path, 'SKILL.md')), true);
+
+    // The account's `chart` is not this instance's `chart`: same name, another
+    // root, another directory, and neither cleanup reaches the other.
+    install(ov, { name: 'chart', root: 'viking://agent/skills/chart', revision: 'e'.repeat(64) });
+    const shared = await materializeSkill(connection(ov), { uri: 'viking://agent/skills/chart/SKILL.md', dataDir });
+    assert.equal(path.dirname(shared.path), path.join(dataDir, 'skills', 'agent', 'chart'));
+    assert.notEqual(path.dirname(shared.path), path.dirname(second.path));
+    ov.state.skills.get('chart').revision = 'f'.repeat(64);
+    await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
+    assert.equal(fs.existsSync(path.join(shared.path, 'SKILL.md')), true, 'the shared chart kept its revision');
   });
 
   it('never throws for a package it cannot have: a plain read or a missing skill stays a read', async (t) => {

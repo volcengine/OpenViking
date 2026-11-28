@@ -194,6 +194,47 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert missing_privacy_response.status_code == 404
 
 
+async def test_skills_api_show_returns_the_visible_skill_md():
+    """A show reads SKILL.md the way a plain read does, never the restored text.
+
+    The response is shown to the caller and can be written to disk, so a value
+    the Privacy layer sealed has to stay the reference it stored.
+    """
+    from openviking.server.routers.skills import _read_skill_detail
+
+    class _Fs:
+        def __init__(self):
+            self.visible = []
+
+        async def abstract(self, uri, ctx=None):
+            return ""
+
+        async def overview(self, uri, ctx=None):
+            return ""
+
+        async def read(self, uri, ctx=None):
+            raise AssertionError("skill content was restored instead of read visibly")
+
+        async def read_visible(self, uri, ctx=None):
+            self.visible.append(uri)
+            return "api_key: {{secret:api_key}}"
+
+    fs = _Fs()
+    result = await _read_skill_detail(
+        types.SimpleNamespace(fs=fs),
+        None,
+        skill_name="sealed-skill",
+        root_uri="viking://user/demo/skills/sealed-skill",
+        include_content=True,
+        include_files=False,
+        include_integrity=False,
+        include_source=False,
+        level=None,
+    )
+    assert result["content"] == "api_key: {{secret:api_key}}"
+    assert fs.visible == ["viking://user/demo/skills/sealed-skill/SKILL.md"]
+
+
 async def test_skills_api_update_requires_matching_name(client):
     await _add_skill(client, "update-skill", "Original description")
 

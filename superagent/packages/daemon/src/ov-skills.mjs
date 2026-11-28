@@ -212,11 +212,35 @@ const SCRATCH_MAX_AGE_MS = 60 * 60_000;
 // a copied cache carries it.
 const STATE_FILE = '.materialized.json';
 
-// One skill's own directory in the cache: <dataDir>/skills/<name>, with one
-// directory per revision under it. Sharing is by skill, never by a prefix of
-// its name, so `chart` clearing its old revisions cannot touch `chart-tools`.
-function skillCacheRoot(dataDir, name) {
-  return path.join(dataDir, 'skills', name);
+// One skill's own directory in the cache: <dataDir>/skills/<source>/<name>,
+// with one directory per revision under it. Sharing is by skill, never by a
+// prefix of its name, so `chart` clearing its old revisions cannot touch
+// `chart-tools`; the source keeps this instance's `chart` and the account's
+// `chart` apart, so neither evicts the other's revisions.
+function skillCacheRoot(dataDir, skillsRoot, name) {
+  const source = String(skillsRoot).replace(/\/+$/, '') === 'viking://agent/skills' ? 'agent' : 'user';
+  return path.join(dataDir, 'skills', source, name);
+}
+
+// The same package named its way: OV answers with the canonical
+// `viking://user/<id>/skills/<name>`, while a read may have said
+// `viking://~/skills/<name>`.
+function samePackageRoot(answered, asked) {
+  const value = String(answered ?? '').replace(/\/+$/, '');
+  const wanted = String(asked ?? '').replace(/\/+$/, '');
+  if (value === wanted) return true;
+  if (!wanted.startsWith('viking://~/')) return false;
+  return value.replace(/^viking:\/\/user\/[^/]+\//, '') === wanted.slice('viking://~/'.length);
+}
+
+// When this revision was last handed out: cleanup measures the keep window from
+// here, so a directory a task is still using does not look old because the
+// skill has not changed since.
+function touch(dir) {
+  try {
+    const now = new Date();
+    fs.utimesSync(dir, now, now);
+  } catch { /* best effort */ }
 }
 
 function readState(dir) {
@@ -278,7 +302,7 @@ export async function fetchSkillPackage(connection, { uri, timeoutMs, logger = n
   }
   const rootUri = String(detail?.root_uri ?? detail?.uri ?? '').replace(/\/+$/, '');
   const content = typeof detail?.content === 'string' ? detail.content : '';
-  if (rootUri !== info.packageUri || !content) return skip('not-the-same-package');
+  if (!samePackageRoot(rootUri, info.packageUri) || !content) return skip('not-the-same-package');
   return {
     info,
     rootUri,
@@ -302,7 +326,7 @@ export async function writeSkillPackage(connection, snapshot, { dataDir, timeout
     logger?.debug?.('ov_skill_package_skipped', { name: info.name, reason, ...fields });
     return null;
   };
-  const cacheRoot = skillCacheRoot(dataDir, info.name);
+  const cacheRoot = skillCacheRoot(dataDir, info.rootUri, info.name);
   const target = path.join(cacheRoot, revision);
   try {
     fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
@@ -312,11 +336,24 @@ export async function writeSkillPackage(connection, snapshot, { dataDir, timeout
   pruneRevisions(cacheRoot, revision);
   const state = readState(target);
   if (state?.complete && fs.existsSync(path.join(target, 'SKILL.md'))) {
+    touch(target);
     return {
       path: target, name: info.name, rootUri, revision, files: null, complete: true,
       skipped: Array.isArray(state.skipped) ? state.skipped : [], cached: true,
     };
   }
+
+  // A revision that was left open keeps what it already verified: a retry
+  // fetches only what is still missing, so two files failing on different
+  // attempts do not trade places, and what a task already has stays.
+  const kept = (relative, item) => {
+    try {
+      const bytes = fs.readFileSync(path.join(target, relative));
+      return sameBytes(bytes, item) ? bytes : null;
+    } catch {
+      return null;
+    }
+  };
 
   // One download is bounded as a whole, not per file: a package with many
   // files must not hold the read that activated it.
@@ -334,6 +371,13 @@ export async function writeSkillPackage(connection, snapshot, { dataDir, timeout
   for (const item of files) {
     const relative = safeRelativePath(item.path);
     if (!relative || Number(item.size) > MAX_FILE_BYTES) { skipped.push(String(item.path)); continue; }
+    const held = kept(relative, item);
+    if (held) {
+      total += held.length;
+      if (total > MAX_TOTAL_BYTES) return fail('too-large', { bytes: total });
+      staged.push({ path: relative, bytes: held });
+      continue;
+    }
     const remaining = deadline - Date.now();
     if (remaining <= 0) { skipped.push(relative); continue; }
     let text;

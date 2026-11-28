@@ -609,6 +609,7 @@ The HTTP equivalent is `GET /api/v1/skills/search-web?include_content=true&inclu
 | Response field | Meaning |
 |----------------|---------|
 | `content_sha256` | SHA-256 of the returned SKILL.md text; present whenever `content` is returned, even without integrity mode |
+| `content` | The visible text, the same view `content/read` gives: a value the Privacy layer sealed stays the reference it stored, never the restored value. `files[].sha256` and `revision` are over the stored bytes, so for a sealed SKILL.md they do not match `content_sha256`. |
 | `revision` | Version derived from the sorted package manifest: paths, directory flags, sizes, and hashes; not a Git commit or metadata.version |
 | `files[].name/path/uri` | Entry name, package-relative path, and canonical URI |
 | `files[].is_dir/kind` | Directory flag; kind is `definition`, `summary`, `auxiliary`, or `directory` |
