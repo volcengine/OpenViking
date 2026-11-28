@@ -35,7 +35,7 @@ The instance's own OV user (`ovConfig`), which OpenViking SuperAgent owns for th
 _Avoid_: OV client, memory service
 
 **Skill**:
-An agent skill stored in OpenViking: a package under `viking://~/skills/<name>` (or the account-shared `viking://agent/skills`), defined by its `SKILL.md`. OpenViking SuperAgent does not manage them; it discloses the ones that rank for a line as their frontmatter (`ov-skills.mjs`, `<skills source="openviking">`) and materializes a package when its SKILL.md is read, so its scripts can run.
+An agent skill stored in OpenViking: a package under `viking://~/skills/<name>` (or the account-shared `viking://agent/skills`), defined by its `SKILL.md`. OpenViking SuperAgent does not manage them; for a line that becomes a worker's task it puts the ones that rank for that line into the worker's policy as their frontmatter (`ov-skills.mjs`, `<skills source="openviking">`; the router's own lines carry none) and materializes a package when its SKILL.md is read, so its scripts can run.
 _Avoid_: local skill directory, prompt snippet
 
 **Meeting plugin**:

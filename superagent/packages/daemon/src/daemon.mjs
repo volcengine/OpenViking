@@ -132,7 +132,9 @@ export class PersonalAgentDaemon {
 
   // A worker turn's Standing preferences: the owner's, and those of whoever
   // asked for the task's current round, found from the line that asked as
-  // the router's recall finds them. Null without OpenViking.
+  // the router's recall finds them, plus the skills OpenViking ranks for that
+  // line (the task's policy is the only place skills are ranked). Null without
+  // OpenViking.
   async workerPreferences(task) {
     if (!this.recall || !this.tasks) return null;
     const round = this.tasks.roundOf(task);

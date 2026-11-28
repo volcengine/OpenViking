@@ -4,12 +4,15 @@
 // OpenViking skills, the way vikingbot uses them: the agent is told what may
 // fit as each skill's frontmatter (name, description, the SKILL.md to read),
 // and reading that definition makes the package itself available next to it,
-// so a skill that ships scripts can run them. Nothing here manages skills:
-// installing and updating belong to OpenViking's own `ov skills` CLI and API,
-// and this module only reads.
+// so a skill that ships scripts can run them. Only the work is told: a worker's
+// policy carries the skills that rank for the line its task came from, and the
+// router's own lines carry none. Nothing here manages skills: installing and
+// updating belong to OpenViking's own `ov skills` CLI and API, and this module
+// only reads.
 //
 // Two reads make it work, both against the connection the caller already has:
-// POST /api/v1/skills/find for the candidates of one line, and
+// POST /api/v1/skills/find for the candidates of one line (ranked only when a
+// line becomes a worker's task), and
 // GET /api/v1/skills/{name}?include_content&include_files&include_integrity for
 // the package a read of its SKILL.md activates.
 
@@ -104,8 +107,8 @@ function skillElement(skill, { withDescriptions }) {
 
 // The <skills> block for one line: each candidate's frontmatter, whole while it
 // fits, then names and locations only, and finally a count when not even those
-// do. '' when there is nothing to show.
-export function renderSkillSummary(skills, { reason = 'may fit this line', budgetTokens = SKILL_SUMMARY_TOKENS } = {}) {
+// do. '' when there is nothing to show. Only a worker's policy renders one.
+export function renderSkillSummary(skills, { reason = 'may fit this task', budgetTokens = SKILL_SUMMARY_TOKENS } = {}) {
   const seen = new Set();
   const unique = [];
   for (const skill of Array.isArray(skills) ? skills : []) {

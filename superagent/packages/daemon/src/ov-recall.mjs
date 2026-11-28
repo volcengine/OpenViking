@@ -18,11 +18,13 @@ import { discoverSkills, renderSkillSummary } from './ov-skills.mjs';
 // With agents[].ovAutoRecall, also one context search on the line itself.
 // Anything else the agent looks up with the openviking_* tools.
 //
-// Skills, like vikingbot shows them: the line as OpenViking ranks its installed
-// skills for it, each with the frontmatter that says what it is and where its
-// SKILL.md sits (<skills>). The model reads that file with openviking_read when
-// one fits, which is also what makes its package available to run; nothing is
-// installed, updated or read on its behalf here.
+// Skills, like vikingbot shows them, belong to the work rather than to every
+// line: a line the router answers carries none, and only a worker's policy
+// names the ones OpenViking ranked for the line that asked for its task, each
+// with the frontmatter that says what it is and where its SKILL.md sits
+// (<skills>). The model reads that file with openviking_read when one fits,
+// which is also what makes its package available to run; nothing is installed,
+// updated or read on its behalf here.
 //
 // Bounded like the roster warm-up beside it: past the deadline, or on any
 // failure, the line goes on with what arrived in time. The policy (core.md)
@@ -76,30 +78,27 @@ export class OVRecall {
     const query = String(event.content ?? '').trim();
     const sender = owner ? null : personId(event);
     const senderDirectory = sender ? personDirectory(event) : null;
-    const asked = query.length >= MIN_QUERY_CHARS;
-    const [ownerPreferences, senderPreferences, entries, skills] = await this.bounded([
+    const [ownerPreferences, senderPreferences, entries] = await this.bounded([
       this.preferences({ owner: true }),
       sender ? this.preferences({ id: sender, directory: senderDirectory }) : null,
-      this.autoRecall && asked ? this.search(query) : null,
-      asked ? this.skills(query) : null,
+      this.autoRecall && query.length >= MIN_QUERY_CHARS ? this.search(query) : null,
     ]);
-    return this.render(event, {
-      sender, ownerPreferences, senderPreferences, entries: entries ?? [], skills: skills ?? [],
-    });
+    return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [] });
   }
 
   // A worker's Standing preferences (worker-executor.mjs): the owner's, and the
   // requester's unless the requester is the owner, read like forEvent's and
-  // within the same deadline, without the search. { owner, requester }, each
-  // text or null; never rejects.
+  // within the same deadline, without the search. The task's own line is the
+  // only place skills are ranked: { owner, requester }, each text or null, and
+  // skills (the <skills> block for that line) when some fit; never rejects.
   async preferencesFor(event, { owner = false } = {}) {
     const person = owner ? null : personId(event);
     const request = String(event?.content ?? '').trim();
     const [ownerPreferences, requesterPreferences, skills] = await this.bounded([
       this.preferences({ owner: true }),
       person ? this.preferences({ id: person, directory: personDirectory(event) }) : null,
-      // A worker has no per-line recall: its policy is rebuilt every turn from
-      // the line that asked, so the skills for that line are ranked here.
+      // A worker has no per-line recall, so its policy carries the skills
+      // ranked for the line that asked for the task.
       request.length >= MIN_QUERY_CHARS ? this.skills(request) : null,
     ]);
     const summary = renderSkillSummary(skills ?? [], { reason: 'may fit this task' });
@@ -145,8 +144,8 @@ export class OVRecall {
     for (const key of this.cache.keys()) if (key.startsWith('preferences:')) this.cache.delete(key);
   }
 
-  // The installed skills OpenViking ranks for one line. Never rejects: a
-  // discovery that fails leaves the line without them.
+  // The installed skills OpenViking ranks for a task's line. Never rejects: a
+  // discovery that fails leaves the policy without them.
   async skills(query) {
     try {
       return await discoverSkills(this.connection, query, { timeoutMs: this.timeoutMs });
@@ -242,7 +241,7 @@ export class OVRecall {
     return match[1];
   }
 
-  render(event, { sender, ownerPreferences, senderPreferences, entries, skills = [] }) {
+  render(event, { sender, ownerPreferences, senderPreferences, entries }) {
     const memories = [];
     if (ownerPreferences) {
       memories.push(`<memory who="owner" type="preferences">\n${ownerPreferences}\n</memory>`);
@@ -258,11 +257,8 @@ export class OVRecall {
       const text = String(entry.text ?? '').trim();
       memories.push(text ? `<memory ${attributes}>\n${text}\n</memory>` : `<memory ${attributes} />`);
     }
+    if (!memories.length) return '';
     const line = event.messageId ? `msg=${event.messageId}` : `event=${event.eventId}`;
-    const blocks = [];
-    if (memories.length) blocks.push([`[daemon recall ${line}: OpenViking memory that may bear on this line]`, ...memories].join('\n'));
-    const summary = renderSkillSummary(skills, { reason: 'may fit this line' });
-    if (summary) blocks.push(summary);
-    return blocks.join('\n\n');
+    return [`[daemon recall ${line}: OpenViking memory that may bear on this line]`, ...memories].join('\n');
   }
 }

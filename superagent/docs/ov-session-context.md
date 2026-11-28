@@ -47,10 +47,13 @@ tools. Reads are cached ten minutes (dropped as soon as `openviking_remember`
 changes a preference) and bounded at 3 s together; on a timeout or a failure
 the line goes on with what arrived. No request carries a peer.
 
-Skills follow vikingbot's model rather than a catalog of tools. For a line
-addressed to the agent the daemon asks OpenViking which installed skills rank
-for it (`/api/v1/skills/find`, at most five above 0.35) and appends their
-frontmatter as `<skills source="openviking">`: the name, a 40-token
+Skills follow vikingbot's model rather than a catalog of tools, and they
+belong to the work rather than to every line. A line the router answers
+carries none: it either replies or dispatches, and ranking skills for each
+message would be a lookup nothing acts on. A task is where they matter, so
+the worker's policy (assembled for each turn from the line that asked) carries
+the skills OpenViking ranked for that line (`/api/v1/skills/find`, at most five
+above 0.35) as `<skills source="openviking">`: the name, a 40-token
 description, the SKILL.md to read and the tool that reads it, within 600 tokens
 (whole entries while they fit, then names and locations only, then a count).
 The model reads one with `openviking_read`; that read also downloads the
@@ -59,11 +62,9 @@ the result, so a skill that ships scripts can run them. The download is bounded
 (200 files, 1 MiB each, 20 MiB in total), every file is verified against the
 manifest's SHA-256, files whose bytes do not match are left out, OpenViking's
 own summaries are not part of the package, and nothing is written outside that
-cache. A worker's policy carries the same block for the line that asked, since
-a worker has no per-line recall. Nothing here installs, updates or removes a
-skill: that stays with OpenViking's own `ov skills` CLI, which the policy
-points the model at, and a discovery that fails leaves the line without
-skills.
+cache. Nothing here installs, updates or removes a skill: that stays with
+OpenViking's own `ov skills` CLI, which the policy points the model at, and a
+discovery that fails leaves the policy without skills.
 
 For substantive questions and project discussions, the local runtime's policy
 asks the model to start with one focused `openviking_find`, reuse earlier
