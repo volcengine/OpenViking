@@ -14,7 +14,11 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
-from openviking.models.model_error import model_error_boundary
+from openviking.models.model_error import (
+    ModelError,
+    model_error_boundary,
+    model_error_from_exception,
+)
 from openviking.models.network import (
     create_optional_async_httpx_client,
     create_optional_sync_httpx_client,
@@ -26,6 +30,39 @@ from openviking.utils.embedding_input import truncate_embedding_input
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+_ENCODING_FORMAT_FIX = (
+    'OpenViking sent the configured encoding_format="base64", but this route rejected it. '
+    'Set embedding.dense.encoding_format to "float", or remove the explicit base64 setting.'
+)
+
+
+def _names_encoding_format(value: Any) -> bool:
+    if isinstance(value, str):
+        normalized = value.lower().replace("-", "_").replace(" ", "_")
+        return "encoding_format" in normalized
+    if isinstance(value, (list, tuple)):
+        return any(_names_encoding_format(item) for item in value)
+    return False
+
+
+def _rejects_encoding_format(error: openai.APIError) -> bool:
+    """Return whether a 400/422 response rejects the encoding_format field."""
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        status_code = getattr(getattr(error, "response", None), "status_code", None)
+    if status_code not in {400, 422}:
+        return False
+
+    body = getattr(error, "body", None)
+    if isinstance(body, dict):
+        nested = body.get("error")
+        if isinstance(nested, dict):
+            body = {**body, **nested}
+        if any(_names_encoding_format(body.get(key)) for key in ("param", "parameter", "path")):
+            return True
+    return _names_encoding_format(str(error))
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -322,7 +359,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def supports_multimodal(self) -> bool:
         return self._supports_multimodal
 
-    def _prepare_embedding_input(self, text: EmbeddingInput | List[str]) -> EmbeddingInput | List[str]:
+    def _prepare_embedding_input(
+        self, text: EmbeddingInput | List[str]
+    ) -> EmbeddingInput | List[str]:
         if isinstance(text, list) and all(isinstance(item, str) for item in text):
             if self.max_input_tokens is None:
                 return text
@@ -350,6 +389,21 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         if self._provider == "openai":
             return False
         return bool(self.api_base)
+
+    def _api_error(self, error: openai.APIError) -> Exception:
+        message = error.message
+        if self.encoding_format == "base64" and _rejects_encoding_format(error):
+            converted = model_error_from_exception(error)
+            assert converted is not None
+            return ModelError(
+                converted.kind,
+                f"OpenAI API error: {message.rstrip().rstrip('.')}. {_ENCODING_FORMAT_FIX}",
+                provider=self.provider,
+                status_code=converted.status_code,
+                code=converted.code,
+                remediation=_ENCODING_FORMAT_FIX,
+            )
+        return RuntimeError(f"OpenAI API error: {message}")
 
     def _get_async_client(self):
         def _build_async_client():
@@ -403,12 +457,14 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 operation_name="OpenAI embedding",
             )
         except openai.APIError as e:
-            raise RuntimeError(f"OpenAI API error: {e.message}") from e
+            raise self._api_error(e) from e
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
     @model_error_boundary
-    async def embed_async(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, text: EmbeddingInput | List[str], is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
         embedding_input = self._prepare_embedding_input(text)
 
@@ -427,7 +483,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 operation_name="OpenAI async embedding",
             )
         except openai.APIError as e:
-            raise RuntimeError(f"OpenAI API error: {e.message}") from e
+            raise self._api_error(e) from e
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
