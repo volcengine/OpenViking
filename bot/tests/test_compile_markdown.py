@@ -905,6 +905,81 @@ async def test_simple_recovery_requires_each_changed_source_and_its_frozen_conte
     )
 
 
+async def test_simple_compile_incremental_fails_when_write_is_rejected_after_source_inspection(
+    pipeline, agent_loop
+):
+    pipeline.client.write = AsyncMock()
+    pipeline.client.diff_paths = AsyncMock(
+        return_value={
+            "changes": [{"uri": "viking://resources/source/a.md", "change_type": "added"}],
+            "has_more": False,
+        }
+    )
+    calls = [
+        ("openviking_diff_paths", {}),
+        ("openviking_write", {"path": "selection-rules.md", "content": INVALID_FRONTMATTER}),
+    ]
+
+    with pytest.raises(CompileFailure, match=r"selection-rules\.md.*line 4, column 13") as caught:
+        await run_simple_incremental(
+            pipeline,
+            agent_loop,
+            incremental_request(pipeline.request),
+            calls,
+            LLMResponse(content="Done"),
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    pipeline.client.write.assert_not_awaited()
+
+
+async def test_simple_compile_reports_latest_rejected_write_error_after_retry(pipeline, agent_loop):
+    pipeline.client.write = AsyncMock()
+    calls = [
+        ("openviking_write", {"path": "first.md", "content": INVALID_FRONTMATTER}),
+        (
+            "openviking_write",
+            {"path": "second.md", "content": "---\n type: concept\ntitle: Rules\n---\n"},
+        ),
+    ]
+
+    with pytest.raises(CompileFailure, match=r"second\.md.*line 3, column 1") as caught:
+        await run_simple_incremental(
+            pipeline,
+            agent_loop,
+            pipeline.request,
+            calls,
+            LLMResponse(content="Done"),
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    assert "first.md" not in str(caught.value)
+    pipeline.client.write.assert_not_awaited()
+
+
+async def test_simple_compile_iteration_limit_includes_last_write_error(pipeline, agent_loop):
+    loop, _session_key, _ = agent_loop
+    loop.max_iterations = 1
+    pipeline.client.write = AsyncMock()
+    calls = [
+        ("openviking_write", {"path": "selection-rules.md", "content": INVALID_FRONTMATTER}),
+    ]
+
+    with pytest.raises(
+        CompileFailure,
+        match=r"Iteration limit reached without confirmed output\..*Last write error:.*selection-rules\.md",
+    ) as caught:
+        await run_simple_incremental(
+            pipeline,
+            agent_loop,
+            pipeline.request,
+            calls,
+        )
+
+    assert caught.value.code == "COMPILE_INCOMPLETE"
+    pipeline.client.write.assert_not_awaited()
+
+
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):
     pipeline.evidence["input"] = {"uri": "viking://resources/source/a.md"}
     pipeline.status["input"] = "prepared"
