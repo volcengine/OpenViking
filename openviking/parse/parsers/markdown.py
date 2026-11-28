@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
 import yaml
+from markdown_it import MarkdownIt
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
@@ -744,11 +745,36 @@ class MarkdownParser(BaseParser):
         while table_end < len(lines) and self._is_markdown_table_row(lines[table_end]):
             table_end += 1
 
+        suffix = ""
+        tokens = []
+        if any(line.strip() for line in lines[table_end:]):
+            # Token source maps use LF lines; retain the old fallback if coordinates differ.
+            source_lines = content.split("\n")
+            if source_lines[-1] == "":
+                source_lines.pop()
+            if source_lines != lines:
+                return None
+            # A non-border row can still continue a GFM table. Use the real block
+            # boundary before treating the remainder as a separate Markdown block.
+            tokens = MarkdownIt("commonmark").enable("table").parse(content)
+            table = next(
+                (
+                    token
+                    for token in tokens
+                    if token.type == "table_open"
+                    and token.level == 0
+                    and token.map
+                    and token.map[0] == table_start
+                ),
+                None,
+            )
+            if table is None or table.map is None:
+                return None
+            table_end = table.map[1]
+            suffix = "\n".join(lines[table_end:]).strip()
+
         if table_end - table_start < 3:
             return None
-        if any(line.strip() for line in lines[table_end:]):
-            return None
-
         prefix = "\n".join(lines[:table_start]).strip()
         header = lines[table_start : table_start + 2]
         rows = lines[table_start + 2 : table_end]
@@ -785,6 +811,32 @@ class MarkdownParser(BaseParser):
             current_lines.append(row)
 
         flush()
+        if suffix:
+            suffix_parts: List[str] = []
+            cursor = table_end
+            # Keep subsequent tables isolated before reusing the normal splitter,
+            # so a document with many adjacent tables does not recurse per table.
+            for token in tokens:
+                if (
+                    token.type != "table_open"
+                    or token.level != 0
+                    or not token.map
+                    or token.map[0] < table_end
+                ):
+                    continue
+                for block in (
+                    "\n".join(lines[cursor : token.map[0]]).strip(),
+                    "\n".join(lines[token.map[0] : token.map[1]]).strip(),
+                ):
+                    if block:
+                        suffix_parts.extend(self._smart_split_content(block, max_size=max_chars))
+                cursor = token.map[1]
+            tail = "\n".join(lines[cursor:]).strip()
+            if tail:
+                suffix_parts.extend(self._smart_split_content(tail, max_size=max_chars))
+            if suffix_parts and len(parts[-1]) + 2 + len(suffix_parts[0]) <= max_chars:
+                parts[-1] += "\n\n" + suffix_parts.pop(0)
+            parts.extend(suffix_parts)
         return parts or None
 
     async def _ingest_local_images(
