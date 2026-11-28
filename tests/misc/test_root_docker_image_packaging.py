@@ -1,8 +1,11 @@
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
+
+from openviking_cli import vikingbot_bootstrap
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,6 +59,43 @@ def test_openviking_package_includes_console_static_assets():
     assert '"console/static/**/*"' in pyproject
     assert '"console/static/**/*"' in pyproject.split("vikingbot = [", maxsplit=1)[0]
     assert '"console/static/**/*"' in setup_py
+
+
+def test_vikingbot_console_script_uses_lightweight_bootstrap():
+    pyproject = _read_text("pyproject.toml")
+    module_entrypoint = _read_text("bot/vikingbot/__main__.py")
+
+    assert 'vikingbot = "openviking_cli.vikingbot_bootstrap:main"' in pyproject
+    assert "from openviking_cli.vikingbot_bootstrap import main" in module_entrypoint
+
+
+def test_vikingbot_bootstrap_reports_missing_optional_dependency(monkeypatch, capsys):
+    def raise_missing_dependency(_module_name):
+        raise ModuleNotFoundError("No module named 'prompt_toolkit'", name="prompt_toolkit")
+
+    monkeypatch.setattr(vikingbot_bootstrap.importlib, "import_module", raise_missing_dependency)
+
+    with pytest.raises(SystemExit) as exc_info:
+        vikingbot_bootstrap.main()
+
+    assert exc_info.value.code == 1
+    error = capsys.readouterr().err
+    assert "prompt_toolkit" in error
+    assert 'uv tool install --force "openviking[bot]"' in error
+
+
+def test_vikingbot_bootstrap_delegates_to_real_app(monkeypatch):
+    calls = []
+    fake_module = SimpleNamespace(app=lambda: calls.append("called"))
+    monkeypatch.setattr(
+        vikingbot_bootstrap.importlib,
+        "import_module",
+        lambda module_name: fake_module,
+    )
+
+    vikingbot_bootstrap.main()
+
+    assert calls == ["called"]
 
 
 def test_build_workflow_invokes_maturin_via_python_module():
