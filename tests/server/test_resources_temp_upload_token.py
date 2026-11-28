@@ -208,6 +208,41 @@ async def test_token_upload_oversize_rejected(
     assert resp.status_code == 413
 
 
+async def test_malformed_request_does_not_consume_the_upload_token(upload_api_key_manager):
+    """FastAPI resolves dependencies before reporting body errors; a 422 must not burn the token."""
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.config import ServerConfig
+    from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
+    from openviking.server.routers.resources import router
+    from openviking_cli.exceptions import OpenVikingError
+
+    config = ServerConfig(auth_mode="api_key", root_api_key="test-root")
+    app = FastAPI()
+    app.state.config = config
+    app.state.auth_plugin = ApiKeyAuthPlugin()
+    app.state.api_key_manager = upload_api_key_manager
+    app.include_router(router)
+
+    @app.exception_handler(OpenVikingError)
+    async def handle_error(_request, exc):
+        return JSONResponse(
+            status_code=ERROR_CODE_TO_HTTP_STATUS[exc.code], content={"error": exc.code}
+        )
+
+    token, _ = upload_token_store.issue("acct", "user", role=Role.ADMIN, ttl_seconds=600)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/v1/resources/temp_upload", params={"token": token})
+
+    assert resp.status_code == 422, resp.text
+    assert upload_token_store.peek(token) is not None
+
+
 async def test_apikey_temp_upload_returns_temp_file_id(
     client: httpx.AsyncClient, upload_temp_dir: Path
 ):
