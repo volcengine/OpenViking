@@ -93,8 +93,16 @@ class SchemaModelGenerator:
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._operations_model: Optional[Type[BaseModel]] = None
 
-    def _render_description(self, description: str) -> str:
-        return render_description_template(description, self._template_context, strip=False)
+    def _render_description(self, description: str, *, memory_type: str, field: str) -> str:
+        # Extraction runs far from the template file, so the error names the
+        # memory type and field alongside the offending variable.
+        return render_description_template(
+            description,
+            self._template_context,
+            strip=False,
+            field=field,
+            memory_type=memory_type,
+        )
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
@@ -174,19 +182,31 @@ class SchemaModelGenerator:
         # Add business fields from schema
         for field in memory_type.fields:
             base_type = self._map_field_type(field.field_type)
+            field_label = f"fields.{field.name}.description"
             if field.merge_op == MergeOp.IMMUTABLE:
                 # Existing updates may omit immutable fields. New objects are
                 # checked by the conditional validator below.
                 field_definitions[field.name] = (
                     Optional[base_type],
-                    Field(None, description=self._render_description(field.description)),
+                    Field(
+                        None,
+                        description=self._render_description(
+                            field.description,
+                            memory_type=memory_type.memory_type,
+                            field=field_label,
+                        ),
+                    ),
                 )
             else:
                 # Mutable fields: Union[base_type, patch_type], optional
                 merge_op = MergeOpFactory.from_field(field)
                 patch_type = merge_op.get_output_schema_type(field.field_type)
                 union_type = Union[base_type, patch_type]
-                desc = self._render_description(field.description)
+                desc = self._render_description(
+                    field.description,
+                    memory_type=memory_type.memory_type,
+                    field=field_label,
+                )
                 if memory_type.operation_mode != "add_only":
                     desc = merge_op.get_output_schema_description(desc)
                 field_definitions[field.name] = (
@@ -313,7 +333,8 @@ class SchemaModelGenerator:
                 Field(
                     default_factory=list,
                     description=(
-                        f"{mt.memory_type} memories: {self._render_description(mt.description)} "
+                        f"{mt.memory_type} memories: "
+                        f"{self._render_description(mt.description, memory_type=mt.memory_type, field='description')} "
                         "(top-level field, do not nest inside other arrays)"
                     ),
                 ),

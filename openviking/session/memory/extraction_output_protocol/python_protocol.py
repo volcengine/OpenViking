@@ -204,7 +204,12 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
                 # Render only YAML field descriptions, using the same context and
                 # restricted renderer as JSON. Keep the DSL's own edit instructions
                 # instead of copying the JSON model's merge-operation wrappers.
-                description = render_description_template(description, context.template_context)
+                description = render_description_template(
+                    description,
+                    context.template_context,
+                    memory_type=schema.memory_type,
+                    field=f"fields.{name}.description",
+                )
                 field = schema_fields[name]
                 if field.merge_op == MergeOp.REPLACE and schema.operation_mode != "add_only":
                     description = MergeOpFactory.from_field(field).get_output_schema_description(

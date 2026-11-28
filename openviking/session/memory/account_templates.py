@@ -222,10 +222,12 @@ def _validate_template(
         raise ValueError("Template field names must be nonempty and unique")
     defaults = deployment_defaults or {}
     if validate_descriptions:
-        validate_description_template(schema.description)
+        validate_description_template(schema.description, memory_type=memory_type)
         for field in schema.fields:
             validate_description_template(
-                field.description, field=f"fields.{field.name}.description"
+                field.description,
+                field=f"fields.{field.name}.description",
+                memory_type=memory_type,
             )
     if memory_type in _EDITABLE_CONTENT_TEMPLATES and schema.content_template is not None:
         # Only an exact match to server-owned deployment defaults inherits the
