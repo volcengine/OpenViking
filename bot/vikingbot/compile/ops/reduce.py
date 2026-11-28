@@ -70,6 +70,7 @@ async def resolve_files(runtime, documents):
         """Resolve one path and reserve its chosen output names without an intervening await."""
         path, items = item
         refs = sorted({ref for doc in items for ref in doc.source_refs})
+        blocked = set()
         try:
             for _ in range(MAX_JOB_ATTEMPTS):
                 outputs = await runtime.generate(
@@ -80,9 +81,15 @@ async def resolve_files(runtime, documents):
                     "conditions, applicability and conflicting claims. Write only the resolved "
                     "candidate files; do not generate extra indexes or unrelated pages. "
                     "reserved_paths belong to other outputs and must not be written. "
-                    "Output paths must be unique under Unicode NFC normalization and case folding.",
+                    "Output paths must be unique under Unicode NFC normalization and case folding."
+                    + (
+                        " Fix the conflicts reported in previous_rejected_paths before writing again."
+                        if blocked
+                        else ""
+                    ),
                     {
                         "path": items[0].path,
+                        **({"previous_rejected_paths": sorted(blocked)[:8]} if blocked else {}),
                         "documents": [vars(doc) for doc in items],
                         "reserved_paths": sorted(
                             display_paths[p] for p, owner in reserved.items() if owner != path
