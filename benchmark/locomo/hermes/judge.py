@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from openai import AsyncOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 try:
     from dotenv import load_dotenv
@@ -26,8 +26,8 @@ def is_retryable_judge_error(reasoning: str) -> bool:
 
 
 def require_suite(value: str) -> str:
-    if value not in {"baseline", "e2e", "preingest"}:
-        raise argparse.ArgumentTypeError("suite must be one of: baseline, e2e, preingest")
+    if value not in {"baseline", "e2e", "preingest", "agentic-rag"}:
+        raise argparse.ArgumentTypeError("suite must be one of: baseline, e2e, preingest, agentic-rag")
     return value
 
 
@@ -36,6 +36,8 @@ def default_input_path(script_dir: Path, suite: str) -> str:
         return str(script_dir / "result_baseline" / "qa_results.csv")
     if suite == "e2e":
         return str(script_dir / "result_e2e" / "qa_results.csv")
+    if suite == "agentic-rag":
+        return str(script_dir / "result_agentic_rag" / "qa_results.csv")
     return str(script_dir / "result_preingest" / "qa_results.csv")
 
 
@@ -121,6 +123,9 @@ async def main():
         default=os.getenv("ARK_API_KEY", os.getenv("OPENAI_API_KEY", "")),
         help="LLM API token",
     )
+    parser.add_argument(
+        "--api-version", default=os.getenv("JUDGE_API_VERSION"), help="Dated Azure OpenAI API version"
+    )
     parser.add_argument("--model", default="doubao-seed-2-0-pro-260215", help="Judge model name")
     parser.add_argument("--parallel", type=int, default=5, help="Parallel request count")
     parser.add_argument(
@@ -169,7 +174,12 @@ async def main():
         print("All valid answers already graded, exit")
         return
 
-    client = AsyncOpenAI(base_url=args.base_url, api_key=args.token)
+    if args.api_version:
+        client = AsyncAzureOpenAI(
+            api_key=args.token, azure_endpoint=args.base_url, api_version=args.api_version
+        )
+    else:
+        client = AsyncOpenAI(base_url=args.base_url, api_key=args.token)
     semaphore = asyncio.Semaphore(args.parallel)
     file_lock = asyncio.Lock()
 
