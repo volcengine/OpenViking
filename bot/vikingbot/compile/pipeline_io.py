@@ -259,7 +259,12 @@ class JsonModel:
             raise
         finally:
             report["milliseconds"] = round((time.monotonic() - started) * 1000)
-            await self.files.put(f"calls/{stage}-{number}", report)
+            try:
+                await self.files.put(f"calls/{stage}-{number}", report)
+            except Exception as exc:
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError() from exc
+                logger.warning("Compile call diagnostic write failed: {}", type(exc).__name__)
             logger.info("[COMPILE_CALL] {}", json.dumps(report))
 
     async def ask(self, stage, system, data, schema, validate=None, *, readers=None):

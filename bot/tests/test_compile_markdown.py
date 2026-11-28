@@ -25,7 +25,8 @@ from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
 from vikingbot.compile.pipeline import Pipeline
 from vikingbot.compile.pipeline_agent import TargetReader, agent_runner
-from vikingbot.compile.plan import Contract, PlanProposal, Transform, parse_plan
+from vikingbot.compile.pipeline_io import ModelCallLimitError
+from vikingbot.compile.plan import Contract, PlanProposal, ReviewDecision, Transform, parse_plan
 from vikingbot.compile.results import Document, Group, RouteResponse
 from vikingbot.compile.service import BotCompileService
 from vikingbot.compile.sources import split_source
@@ -317,6 +318,30 @@ async def test_file_tool_rejects_paths_outside_private_worker(agent_loop, path):
         await tool.execute(
             ToolContext(session_key=key, sandbox_manager=manager), path=path, content="x"
         )
+
+
+@pytest.mark.parametrize("outcome", ["response", "timeout", "cancel"])
+async def test_model_call_diagnostic_failure_does_not_replace_outcome(pipeline, outcome):
+    async def chat(**kwargs):
+        if outcome == "timeout":
+            raise TimeoutError("provider timeout")
+        if outcome == "cancel":
+            asyncio.current_task().cancel()
+            await asyncio.sleep(0)
+        return LLMResponse(content='{"action": "continue"}')
+
+    pipeline.model.provider.chat = chat
+    pipeline.files.put = AsyncMock(side_effect=OSError("diagnostic write failed"))
+    call = asyncio.create_task(pipeline.model.ask("review", "Review", {}, ReviewDecision))
+    if outcome == "response":
+        assert (await call).action == "continue"
+    elif outcome == "timeout":
+        with pytest.raises(ModelCallLimitError, match="budget exhausted"):
+            await call
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        assert call.cancelled()
 
 
 async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeline, monkeypatch):
