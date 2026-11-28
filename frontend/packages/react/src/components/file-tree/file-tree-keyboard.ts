@@ -3,11 +3,13 @@ import type { KeyboardEvent } from 'react';
 import { FILE_TREE_ROW_ATTRIBUTE } from './types.js';
 import type { FileTreeEntryRow } from './types.js';
 
-/** 按 DOM 顺序取出当前可见的行元素。Visible row elements, in DOM order. */
+/** 按 DOM 顺序取出可聚焦的行元素。Focusable row elements, in DOM order. */
 function visibleRows(root: HTMLElement | null) {
   if (!root) return [];
   return Array.from(
-    root.querySelectorAll<HTMLElement>(`[${FILE_TREE_ROW_ATTRIBUTE}]`),
+    root.querySelectorAll<HTMLElement>(
+      `[${FILE_TREE_ROW_ATTRIBUTE}][tabindex]`,
+    ),
   );
 }
 
@@ -31,9 +33,11 @@ export function handleRowKeyDown(
     onToggleExpand?: (row: FileTreeEntryRow) => void;
   },
 ) {
+  if (event.target !== event.currentTarget) return;
+
   const isDirectory = row.type === 'directory';
   const expanded = Boolean(row.expanded);
-  const canToggle = isDirectory && !row.disabled;
+  const canToggle = isDirectory && row.hasChildren !== false && !row.disabled;
 
   switch (event.key) {
     case 'ArrowDown':
