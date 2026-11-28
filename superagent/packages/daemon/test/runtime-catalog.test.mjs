@@ -67,6 +67,7 @@ describe('runtime catalog', () => {
       effortControl: 'remote-managed',
       activeInput: 'queue-next-turn',
       scopePolicy: 'single-conversation',
+      requiresInboundSeq: true,
       outputOwnership: 'runtime',
       sessionAuthority: 'rotate',
       agentTools: 'lark-cli',

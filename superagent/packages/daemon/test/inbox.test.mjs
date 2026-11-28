@@ -259,15 +259,16 @@ describe('MessageInbox durability and fallback', () => {
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM inbox_pending').get().n, 0);
   });
 
-  it('is not usable on a runtime without Core tools, and drains everything in order there', () => {
+  it('B5 drains only consecutive entries of the same scope in FIFO order', () => {
     const { inbox, runtime } = setup({ capabilities: { agentTools: 'lark-cli', activeInput: 'queue-next-turn' } });
     assert.equal(inbox.usable(), false);
     runtime.busy = true;
-    const lines = [input('oc_a'), input('oc_b')];
+    const lines = [input('oc_a'), input('oc_b'), input('oc_a'), input('oc_a')];
     for (const line of lines) inbox.add(...line);
-    assert.equal(inbox.drain(), 2);
-    assert.deepEqual(runtime.submissions.at(-1).items.map((item) => item.seq), lines.map(([item]) => item.seq));
-    assert.equal(runtime.submissions.at(-1).admission, 'enqueue');
+    assert.equal(inbox.drain(), 4);
+    const [a1, b2, a3, a4] = lines.map(([{ seq }]) => seq);
+    assert.deepEqual(runtime.submissions.map(({ items }) => items.map(({ seq }) => seq)), [[a1], [b2], [a3, a4]]);
+    assert.ok(runtime.submissions.every(({ admission }) => admission === 'enqueue'));
   });
 
   it('describes a non-chat input by its source and kind', () => {

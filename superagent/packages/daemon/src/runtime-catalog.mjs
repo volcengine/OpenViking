@@ -194,6 +194,7 @@ export const RUNTIME_CATALOG = Object.freeze({
       effortControl: 'remote-managed',
       activeInput: 'queue-next-turn',
       scopePolicy: 'single-conversation',
+      requiresInboundSeq: true,
       outputOwnership: 'runtime',
       sessionAuthority: 'rotate',
       agentTools: 'lark-cli',
