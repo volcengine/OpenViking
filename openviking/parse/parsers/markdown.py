@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
 import yaml
+from markdown_it import MarkdownIt
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
@@ -663,6 +664,35 @@ class MarkdownParser(BaseParser):
                 continue
             headings.append((match.start(), match.end(), title, level))
 
+        if re.search(r"[\r\n] {0,3}(?:=+|-+)[ \t]*(?=$|[\r\n])", content):
+            headings.extend(self._find_setext_headings(content))
+            headings.sort(key=lambda heading: heading[0])
+        return headings
+
+    def _find_setext_headings(self, content: str) -> List[Tuple[int, int, str, int]]:
+        # A retained frontmatter closer is not a Setext underline.
+        body, _ = self._extract_frontmatter(content)
+        body_start = len(content) - len(body)
+        offsets = [body_start]
+        offsets.extend(body_start + match.end() for match in re.finditer(r"\r\n|\r|\n", body))
+        if offsets[-1] != len(content):
+            offsets.append(len(content))
+
+        headings = []
+        tokens = MarkdownIt("commonmark").parse(body)
+        for index, token in enumerate(tokens):
+            if (
+                token.type != "heading_open"
+                or token.level != 0
+                or token.markup not in {"=", "-"}
+                or token.map is None
+            ):
+                continue
+            first, last = token.map
+            start = offsets[first]
+            heading = content[start : offsets[last]].rstrip("\r\n")
+            title = " ".join(tokens[index + 1].content.splitlines())
+            headings.append((start, start + len(heading), title, int(token.tag[1:])))
         return headings
 
     def _smart_split_content(self, content: str, max_size: int) -> List[str]:
@@ -1746,17 +1776,23 @@ class MarkdownParser(BaseParser):
 
         has_children = first_child_idx is not None
 
-        # Build content
-        heading_prefix = "#" * level
-        section_start = end_pos  # After heading line
-        full_content = f"{heading_prefix} {title}\n\n{content[section_start:section_end].strip()}"
+        # Keep the source form for Setext headings. Regenerating these as ATX
+        # can turn literal trailing hashes into a closing delimiter.
+        heading_source = content[start_pos:end_pos].rstrip("\r\n")
+        heading = (
+            heading_source
+            if "\n" in heading_source or "\r" in heading_source
+            else f"{'#' * level} {title}"
+        )
+        section_start = end_pos
+        full_content = f"{heading}\n\n{content[section_start:section_end].strip()}"
         full_chars = len(full_content)
 
         direct_content = ""
         if has_children:
             direct_text = content[section_start:direct_content_end].strip()
             if direct_text:
-                direct_content = f"{heading_prefix} {title}\n\n{direct_text}"
+                direct_content = f"{heading}\n\n{direct_text}"
 
         return {
             "name": section_name,
