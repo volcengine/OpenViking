@@ -421,9 +421,14 @@ export function getConfig() {
     // tools and assembles the same policy text as without them. Unpinned (a
     // daemon started without a manifest) it stays off.
     explicitSilence: boolEnv('OV_SUPERAGENT_EXPLICIT_SILENCE', false),
-    // Number of times an undecided chat input is offered again. Its seq comes
-    // with each reminder so the next turn end can settle it, up to this limit.
-    decisionReminderLimit: intEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', 3, { min: 0, max: 100 }),
+    // Turn-end reminders an undecided chat input gets before it is recorded
+    // missing. Its seq comes with each reminder so the next turn end can
+    // settle it. One whose delivery the freshness fence held gets one more,
+    // first, from a timer.
+    decisionReminderLimit: intEnv('OV_SUPERAGENT_DECISION_REMINDER_LIMIT', 2, { min: 0, max: 100 }),
+    // How long after the fence held its delivery that timer reminds about a
+    // still undecided input (see DecisionPolicy).
+    decisionReminderDelayMs: intEnv('OV_SUPERAGENT_DECISION_REMINDER_DELAY_MS', 60_000, { min: 1_000, max: 3_600_000 }),
     // Opt-in per instance (agents[].stagedReplies): a longer task may get an
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('OV_SUPERAGENT_STAGED_REPLIES', false),

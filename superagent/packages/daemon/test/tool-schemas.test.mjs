@@ -43,6 +43,9 @@ describe('Core tool schemas', () => {
 
   it('keep the length bounds and refused characters of an input reference', () => {
     const reference = tool('send_message').inputSchema.properties.decision_id;
+    const covers = tool('send_message').inputSchema.properties.covers;
+    assert.match(covers.description, /every input this action handles and settles/);
+    assert.doesNotMatch(covers.description, /Leave it out when you handle decision_id alone/);
     validateInput(reference, 'e'.repeat(4096));
     assert.throws(() => validateInput(reference, 'e'.repeat(4097)), /too long/);
     assert.throws(() => validateInput(reference, ''), /invalid format/);

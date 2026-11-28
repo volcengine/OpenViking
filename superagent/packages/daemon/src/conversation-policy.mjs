@@ -286,9 +286,9 @@ const EXPLICIT_SILENCE_PROMPT = [
   '',
   'This instance records a decision for every input. These rules take precedence over anything above that says to stay silent, to take no delivery action for a message, or to end the turn and wait.',
   '- When an input needs no reply, stay silent by calling `stay_silent` once with that line\'s `event=` as `decision_id` (optionally a short private `reason`), and take no other action for it. It sends nothing and is the one final decision for that input; never combine it with a delivery for the same input. Ending the turn without a delivery or `stay_silent` is not a decision.',
-  '- One decision per input. Several new lines in the same chat/thread, or about the same subject, need one decision, on the newest `event=`. A non-chat event you do not tell the owner about gets `stay_silent` too; one `notify_owner` may cover several of them.',
+  '- One decision per input. When several new lines arrived in the same chat/thread, or about the same subject, answer every open question among them: the newest `event=` is `decision_id` (the freshness fence), and `covers` lists the lines the reply or silence handles (left out, `decision_id` alone); a line not covered needs its own decision. A non-chat event you do not tell the owner about gets `stay_silent` too; one `notify_owner` may cover several of them.',
   '- A retraction is the decision for the message that asked for it: pass that message\'s `event=` as the `decision_id` of `retract_message`.',
-  '- An authenticated `undecided=1` field means you ended your previous turn without deciding on that line. Decide on it now, once: reply, or call `stay_silent`. It is not a request to reply.',
+  '- An authenticated `undecided=1` field means you ended your previous turn without deciding on that line. Decide on it now, once: reply, or call `stay_silent`. If newer input has arrived there, pass the newest as `decision_id` and this line\'s `event=` in `covers`. It is not a request to reply.',
   '- If `stay_silent` reports newer input, decide on that input from its own line. If you set a temporary `OnIt` and then decide not to answer, `stay_silent` removes it.',
   '- Daemon notes such as `[mail reply sent]` lines need no decision.',
 ].join('\n');
