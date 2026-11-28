@@ -41,6 +41,49 @@ async def test_parse_rewrites_rendered_links_and_preserves_examples(tmp_path, ot
     )
 
 
+@pytest.mark.parametrize(
+    ("heading", "fragment"),
+    [
+        pytest.param("Use <kbd>Enter</kbd>", "use-enter", id="kbd"),
+        pytest.param(
+            'Use <STRONG title="a > b"><kbd>Enter</kbd></STRONG>ing', "use-entering", id="nested"
+        ),
+        pytest.param("Use Enter", "use-enter", id="plain"),
+        pytest.param(r"Use \<kbd>Enter\</kbd>", "use-kbdenterkbd", id="escaped"),
+        pytest.param("Use `<kbd>Enter</kbd>`", "use-kbdenterkbd", id="code"),
+        pytest.param("Use &amp; Enter", "use-amp-enter", id="entity"),
+        pytest.param("Use <example>Enter</example>", "use-exampleenterexample", id="custom"),
+    ],
+)
+async def test_parse_keeps_cross_document_heading_fragment(tmp_path, heading, fragment):
+    source = tmp_path / "index.md"
+    source.write_text(f"[Target](target.md#{fragment})", encoding="utf-8")
+    target = tmp_path / "target.md"
+    body = "Ordinary body text. " * 60
+    target.write_text(f"# {heading}\n\n{body}\n\n# Other\n\n{body}", encoding="utf-8")
+
+    parser = MarkdownParser()
+    store = LocalParseOutputStore(str(tmp_path / "out"))
+    parsed_target = await parser.parse(target, parse_output_store=store)
+    assert parsed_target.artifact_ref is not None
+    target_root = Path(parsed_target.artifact_ref.root)
+    sections = list(target_root.rglob("*.md"))
+    assert len(sections) == 2
+    [section] = [p for p in sections if p.read_text(encoding="utf-8").startswith(f"# {heading}\n")]
+
+    result = await parser.parse(
+        source,
+        enable_link_rewrite=True,
+        link_rewrite_root=str(tmp_path),
+        parse_output_store=store,
+    )
+    assert result.artifact_ref is not None
+    content = await store.read_bytes(result.artifact_ref, "index/index.md")
+    assert (
+        content.decode() == f"[Target](../{section.relative_to(target_root).as_posix()}#{fragment})"
+    )
+
+
 class TestRewriteRelativeLinks:
     def _parser(self) -> MarkdownParser:
         return MarkdownParser()
