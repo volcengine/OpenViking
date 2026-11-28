@@ -475,7 +475,12 @@ class _AnyDocMarkdownRenderer:
             elif kind == "code_block":
                 text = (block.text or "").strip()
                 if text:
-                    parts.append(self._render_code_span(text, context="table_cell"))
+                    parts.append(
+                        "<br>".join(
+                            self._render_code_span(line, context="table_cell") if line else ""
+                            for line in text.replace("\r\n", "\n").split("\n")
+                        )
+                    )
             elif kind == "math":
                 source = self._escape_math_source(block.text or "", context="table_cell")
                 if source:
