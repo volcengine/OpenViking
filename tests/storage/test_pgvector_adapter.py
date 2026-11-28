@@ -406,6 +406,62 @@ def test_connect_failure_closes_pool(monkeypatch, failure_stage):
         cursor.close.assert_called_once_with()
 
 
+def _make_mock_pgvector_driver():
+    cursor = Mock()
+    cursor.fetchone.return_value = ("0.8.0",)
+    connection = Mock(closed=False)
+    connection.cursor.return_value = cursor
+    pool = Mock()
+    pool.getconn.return_value = connection
+    driver = Mock()
+    driver.pool.ThreadedConnectionPool.return_value = pool
+    return driver, pool, cursor
+
+
+def test_split_field_mode_passes_password_verbatim(monkeypatch):
+    driver, pool, _ = _make_mock_pgvector_driver()
+    monkeypatch.setattr(pgvector_adapter, "_import_psycopg2", lambda: driver)
+    monkeypatch.setattr(pgvector_adapter, "_ensure_meta_table", Mock())
+    adapter = pgvector_adapter.PgvectorCollectionAdapter.__new__(
+        pgvector_adapter.PgvectorCollectionAdapter
+    )
+    adapter._config = PgvectorConfig(
+        host="pg.example.com", user="ov", password="p@ss:w/rd' #?", db_name="openviking"
+    )
+    adapter._connect()
+    _, kwargs = driver.pool.ThreadedConnectionPool.call_args
+    assert kwargs["password"] == "p@ss:w/rd' #?"
+    assert kwargs["host"] == "pg.example.com"
+    assert kwargs["dbname"] == "openviking"
+    assert "dsn" not in kwargs
+
+
+def test_split_field_mode_forwards_sslmode(monkeypatch):
+    driver, pool, _ = _make_mock_pgvector_driver()
+    monkeypatch.setattr(pgvector_adapter, "_import_psycopg2", lambda: driver)
+    monkeypatch.setattr(pgvector_adapter, "_ensure_meta_table", Mock())
+    adapter = pgvector_adapter.PgvectorCollectionAdapter.__new__(
+        pgvector_adapter.PgvectorCollectionAdapter
+    )
+    adapter._config = PgvectorConfig(host="pg.example.com", sslmode="require")
+    adapter._connect()
+    _, kwargs = driver.pool.ThreadedConnectionPool.call_args
+    assert kwargs["sslmode"] == "require"
+
+
+def test_split_field_mode_omits_sslmode_when_none(monkeypatch):
+    driver, pool, _ = _make_mock_pgvector_driver()
+    monkeypatch.setattr(pgvector_adapter, "_import_psycopg2", lambda: driver)
+    monkeypatch.setattr(pgvector_adapter, "_ensure_meta_table", Mock())
+    adapter = pgvector_adapter.PgvectorCollectionAdapter.__new__(
+        pgvector_adapter.PgvectorCollectionAdapter
+    )
+    adapter._config = PgvectorConfig(host="pg.example.com")
+    adapter._connect()
+    _, kwargs = driver.pool.ThreadedConnectionPool.call_args
+    assert "sslmode" not in kwargs
+
+
 @pytest.mark.parametrize("failure_stage", ["table", "metadata", "wrap"])
 @pytest.mark.parametrize("cleanup_fails", [False, True])
 def test_creation_cleanup_preserves_original_error(monkeypatch, failure_stage, cleanup_fails):

@@ -27,7 +27,7 @@ from openviking_cli.utils.config.open_viking_config import (
     is_valid_openviking_config,
 )
 from openviking_cli.utils.config.storage_config import StorageConfig
-from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
+from openviking_cli.utils.config.vectordb_config import PgvectorConfig, VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -1300,6 +1300,42 @@ def test_opengauss_l1_requires_hnsw():
             distance_metric="l1",
             opengauss=OpenGaussConfig(index_type="ivfflat", build_params={"lists": 100}),
         )
+
+
+def test_pgvector_split_field_defaults_are_aligned_with_opengauss():
+    config = PgvectorConfig(dsn_env="OV_POSTGRES_DSN")
+    assert config.host == "127.0.0.1"
+    assert config.port == 5432
+    assert config.user == "postgres"
+    assert config.password == ""
+    assert config.db_name == "openviking"
+    assert config.sslmode is None
+
+
+def test_pgvector_split_fields_with_default_dsn_env_succeeds():
+    config = PgvectorConfig(host="pg.example.com", password="p@ss:w/rd")
+    assert config.host == "pg.example.com"
+    assert config.dsn_env == "OV_POSTGRES_DSN"
+
+
+def test_pgvector_dsn_env_only_succeeds():
+    config = PgvectorConfig(dsn_env="MY_PG_DSN")
+    assert config.dsn_env == "MY_PG_DSN"
+
+
+def test_pgvector_no_connection_fields_defaults_to_dsn_mode():
+    config = PgvectorConfig()
+    assert config.dsn_env == "OV_POSTGRES_DSN"
+
+
+def test_pgvector_sslmode_is_accepted():
+    config = PgvectorConfig(host="pg.example.com", sslmode="require")
+    assert config.sslmode == "require"
+
+
+def test_pgvector_split_fields_and_explicit_dsn_env_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="cannot both be configured"):
+        PgvectorConfig(dsn_env="MY_PG_DSN", host="pg.example.com")
 
 
 def test_vectordb_volcengine_api_key_auth_requires_host_or_region():
