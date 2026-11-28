@@ -500,6 +500,21 @@ CLI 当前不直接提供批量写入命令。
 |------|------|------|------|
 | `uri` | string | 是 | 要下载的文件 URI |
 
+| `max_bytes` | integer | 否 | 可选非负字节上限，最大 `2^63 - 2`；0 仅允许空文件 |
+
+超限返回 `RESOURCE_EXHAUSTED`。服务端复用已有授权读取入口：先按 stat 大小快速
+拒绝，再最多读取 `max_bytes + 1` 字节，防止文件在检查后增长。省略上限保留原有
+不设限行为。签名下载链接的授权 URI 和单次消费语义保持不变，添加上限不能换文件。
+
+SDK 同时在本地限读，旧服务器忽略 `max_bytes` 时仍生效：Python 使用
+`download_bytes(uri, max_bytes=...)`（同步包装同样支持），TypeScript 使用
+`downloadBytes(uri, { maxBytes: ..., signal })`（非负安全整数），Go 使用
+`DownloadBytesWithLimit(ctx, uri, maxBytes)`。超限、取消或传输错误会关闭/取消响应。
+上限计算解码后的响应字节；网络/解压缓冲及返回字节数组时的复制仍占额外内存，
+不代表总网络流量或堆内存硬上限，也不是流式文件写入接口。错误响应体同样受限，
+错误体超限时返回 `RESOURCE_EXHAUSTED`，不会全量读取后再解析。
+
+
 **Python SDK**
 
 ```python

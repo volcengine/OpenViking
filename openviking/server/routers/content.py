@@ -259,6 +259,7 @@ async def download(
     request: Request,
     uri: Optional[str] = Query(None, description="Viking URI"),
     _ctx: RequestContext = Depends(get_download_request_context),
+    max_bytes: Optional[int] = Query(None, ge=0, le=2**63 - 2),
 ):
     """Download file as raw bytes (for images, binaries, etc.).
 
@@ -273,7 +274,9 @@ async def download(
     service = get_service()
     uri = validate_request_viking_uri(resolve_path_variables(uri), _ctx)
     try:
-        content = await service.fs.read_file_bytes(uri, ctx=_ctx)
+        content = await service.fs.read_file_bytes(
+            uri, ctx=_ctx, **({"max_bytes": max_bytes} if max_bytes is not None else {})
+        )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
