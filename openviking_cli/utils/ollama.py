@@ -13,6 +13,7 @@ stdlib-only (no third-party dependencies).
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -187,6 +188,10 @@ def start_ollama(
             ["ollama", "serve"],
             stdout=subprocess.DEVNULL,
             stderr=stderr_file,
+            env={
+                **os.environ,
+                "OLLAMA_HOST": urllib.parse.urlsplit(_ollama_tags_url(host, port)).netloc,
+            },
         )
     except FileNotFoundError:
         stderr_file.close()

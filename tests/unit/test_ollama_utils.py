@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+import openviking_cli.utils.ollama as ollama
 from openviking_cli.utils.ollama import (
     OllamaStartResult,
     detect_ollama_in_config,
@@ -205,6 +209,35 @@ class TestEnsureOllamaForServer:
 
 
 class TestStartOllama:
+    @pytest.mark.parametrize(
+        ("host", "port"), [("localhost", 11434), ("127.0.0.1", 8080), ("::1", 8080)]
+    )
+    def test_server_start_binds_the_probed_address(self, monkeypatch, host, port):
+        monkeypatch.setenv("OLLAMA_HOST", "localhost:9999")
+        monkeypatch.setenv("OLLAMA_MODELS", "test-model-cache")
+        bound_address = None
+
+        def popen(command, **kwargs):
+            nonlocal bound_address
+            assert command == ["ollama", "serve"]
+            env = kwargs.get("env", os.environ)
+            assert env["OLLAMA_MODELS"] == "test-model-cache"
+            bound_address = parse_ollama_url("http://" + env["OLLAMA_HOST"])
+            return MagicMock()
+
+        monkeypatch.setattr(ollama.subprocess, "Popen", popen)
+        monkeypatch.setattr(ollama, "is_ollama_installed", lambda: True)
+        monkeypatch.setattr(
+            ollama, "check_ollama_running", lambda host, port: bound_address == (host, port)
+        )
+        monkeypatch.setattr(ollama.time, "sleep", lambda _: None)
+
+        result = ensure_ollama_for_server(host, port)
+
+        assert result.success is True
+        assert bound_address == (host, port)
+        assert os.environ["OLLAMA_HOST"] == "localhost:9999"
+
     @patch("openviking_cli.utils.ollama.check_ollama_running", return_value=True)
     def test_already_running_returns_success(self, mock_check):
         result = start_ollama()
