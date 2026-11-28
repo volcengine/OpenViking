@@ -108,6 +108,8 @@ description: 让模型通过 OpenViking 网关代为执行的工具检索、读�
 
 模型在同一条回复中同时调用 OpenViking 工具和客户端工具时，网关处理 OpenViking 调用，客户端照常执行自己的工具并回传结果。Responses 支持客户端的 function 和 custom 工具，Anthropic Messages 支持客户端的 tool_use 调用。
 
+有些客户端只给模型一个执行代码的工具，其他工具要在代码里调用，例如 Codex 的 `exec` 和其中的 `tools` 对象。OpenViking 工具只存在于网关，代码里调用 `tools.openviking_search(...)` 到了客户端一定失败。网关不会把这样的调用交给客户端，而是告诉模型直接调用 OpenViking 工具，然后再问一次。每个请求只这样处理一次，并且只在这条回复里的客户端调用全都是这种情况时才处理；否则调用原样交给客户端。
+
 依赖服务商端已存状态的 Responses 请求（`previous_response_id`、`conversation`、`background`），以及没有设置 `store: false` 的 Responses 请求，原样转发：既不补充召回的记忆，也不提供 OpenViking 工具。之后查询这些响应时，请求仍然发往创建它们的上游。
 
 ## 什么时候不提供工具 {#when-tools-are-not-offered}

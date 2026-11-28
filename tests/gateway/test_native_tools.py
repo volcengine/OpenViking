@@ -9,7 +9,7 @@ from aiohttp import web
 from test_app import enable_tools
 
 from openviking_gateway.protocols import SSEDecoder, heartbeat
-from openviking_gateway.tool_loop import HiddenToolLoop
+from openviking_gateway.tool_loop import RETURNED, HiddenToolLoop
 from openviking_gateway.tool_protocols import ResponseCapture
 from openviking_gateway.tool_protocols.common import ToolLoopError, ToolRound, sse
 from openviking_gateway.tool_protocols.responses import ResponsesProtocol, response_error_code
@@ -848,6 +848,102 @@ async def test_responses_custom_tool_mixed_handoff(running_gateway, streaming):
         "tool_status": "completed",
         "tool_output": "/work/project",
     }
+
+
+def code_call(number, code, custom=True):
+    """A client call whose input is code, as a Codex exec call is."""
+    return {
+        "type": "custom_tool_call" if custom else "function_call",
+        "id": f"call_item_{number}",
+        "call_id": f"client-{number}",
+        "name": "shell",
+        "input" if custom else "arguments": code
+        if custom
+        else orjson.dumps({"code": code}).decode(),
+        "status": "completed",
+    }
+
+
+def code_backend(app, replies, streaming):
+    """Answer each model request with the next of ``replies``; the requests are returned."""
+    requests = []
+
+    async def backend(request):
+        if request.path != "/v1/responses":
+            return None
+        requests.append(await request.json())
+        value = native_response("responses", len(requests))
+        value["output"] += replies[len(requests) - 1]
+        return await wire_response(request, "responses", value, streaming)
+
+    app.state.test_backend["handler"] = backend
+    return requests
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    "code",
+    [
+        'text(await tools.openviking_search({query:"blue"}))',
+        "text(await tools.mcp__openviking_search({}))",
+        "text(await tools['openviking_search']({}))",
+    ],
+)
+async def test_gateway_tool_called_from_client_code_is_returned_once(
+    running_gateway, streaming, code
+):
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin)
+    first, again = code_call(1, code), code_call(2, code)
+    requests = code_backend(app, [[first], [again], []], streaming)
+    body = request_body("responses", streaming)
+    headers = {"Authorization": "Bearer " + key["key"]}
+    response = await client.post("/v1/responses", headers=headers, json=body)
+    assert response.status_code == 200
+    value = visible_response("responses", response, streaming)
+
+    # The gateway answers the first call; the next one in this request is the client's.
+    assert len(requests) == 2
+    answer = {
+        "type": "custom_tool_call_output",
+        "call_id": "client-1",
+        "output": RETURNED.format("openviking_search"),
+    }
+    assert requests[1]["input"][-2:] == [first, answer]
+    assert [i for i in value["output"] if "call_id" in i] == [again]
+    assert "client-1" not in response.text and "Gateway tool" not in response.text
+
+    # The next request replays the call the client never saw, with its answer.
+    output = {"type": "custom_tool_call_output", "call_id": "client-2", "output": "TypeError"}
+    body["input"].extend([*value["output"], output])
+    response = await client.post("/v1/responses", headers=headers, json=body)
+    assert response.status_code == 200
+    assert [i for i in requests[2]["input"] if "call_id" in i] == [first, answer, again, output]
+
+
+@pytest.mark.parametrize(
+    ("codes", "custom"),
+    [
+        (["rg tools.openviking_search"], True),
+        (['text(await tools.exec_command({cmd:"rg tools.openviking_search"}))'], True),
+        (["text(await tools.openviking_missing({}))"], True),
+        (["text(await tools.openviking_search({}))", "pwd"], True),
+        (["text(await tools.openviking_search({}))"], False),
+    ],
+)
+async def test_client_code_goes_to_the_client_unless_every_call_needs_the_gateway(
+    running_gateway, codes, custom
+):
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin)
+    calls = [code_call(number, code, custom) for number, code in enumerate(codes)]
+    requests = code_backend(app, [calls], False)
+    headers = {"Authorization": "Bearer " + key["key"]}
+    body = request_body("responses", False)
+    response = await client.post("/v1/responses", headers=headers, json=body)
+    assert response.status_code == 200
+    assert len(requests) == 1
+    assert [i for i in response.json()["output"] if "call_id" in i] == calls
 
 
 @pytest.mark.parametrize("streaming", [False, True])

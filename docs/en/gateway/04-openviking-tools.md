@@ -108,6 +108,8 @@ OpenViking tools work with all three model APIs, streaming and non-streaming, as
 
 When the model calls OpenViking tools and client tools in the same reply, the gateway handles the OpenViking calls, and the client runs its own tools and returns their results as usual. Responses supports client function and custom tools; Anthropic Messages supports client tool_use calls.
 
+Some clients give the model one tool that runs code and offer their other tools inside that code, as Codex does with `exec` and its `tools` object. OpenViking tools exist only in the gateway, so code that calls `tools.openviking_search(...)` would fail at the client. The gateway does not pass such a call on: it tells the model to call the OpenViking tool directly and asks again. It does this once per request, and only when every client call in the reply reaches for an OpenViking tool this way; otherwise the calls go to the client as written.
+
 Responses requests that rely on state stored at the provider (`previous_response_id`, `conversation`, `background`), or that do not set `store: false`, are forwarded as they are: they get neither recalled memory nor OpenViking tools. Later lookups of those responses still go to the upstream that created them.
 
 ## When tools are not offered {#when-tools-are-not-offered}

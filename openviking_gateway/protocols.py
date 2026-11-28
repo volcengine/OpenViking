@@ -161,6 +161,11 @@ def canonical_arguments(value: Any) -> Any:
         return value
 
 
+# Keys that never count: clients drop them when they resend an item. cache_control is the
+# client's own; the others are bookkeeping some Responses providers add to output items.
+UNANCHORED = frozenset({"cache_control", "metadata", "internal_chat_message_metadata_passthrough"})
+
+
 def normalize(value: Any) -> Any:
     if isinstance(value, list):
         return [
@@ -181,7 +186,7 @@ def normalize(value: Any) -> Any:
         out = {
             k: (v if k in {"input", "arguments"} else normalize(v))
             for k, v in value.items()
-            if k != "cache_control"
+            if k not in UNANCHORED
         }
         if "arguments" in out:
             out["arguments"] = canonical_arguments(out["arguments"])
@@ -208,6 +213,9 @@ def normalize(value: Any) -> Any:
             out.pop("type", None)
             out.pop("status", None)
             out.pop("id", None)
+        # Codex resends a reasoning item without the empty content a provider gave it.
+        if out.get("type") == "reasoning" and out.get("content") == []:
+            del out["content"]
         return out
     return value
 

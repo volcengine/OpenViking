@@ -570,6 +570,24 @@ def test_normalization_client_equivalence():
     ) == normalize(b[1])
 
 
+def test_provider_bookkeeping_on_output_items_is_not_anchored():
+    """Codex resends output items without the fields it does not know."""
+    extra = {
+        "metadata": {"turn_id": "t"},
+        "internal_chat_message_metadata_passthrough": {"create_time": 1.5, "turn_id": "t"},
+    }
+    text = [{"type": "output_text", "text": "ok", "annotations": []}]
+    message = {"type": "message", "id": "msg_1", "role": "assistant", "content": text}
+    call = {"type": "custom_tool_call", "id": "ctc_1", "call_id": "c", "name": "exec", "input": "x"}
+    reasoning = {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "opaque"}
+    resent = [message, reasoning, call]
+    provided = [{**message, **extra}, {**reasoning, "content": [], **extra}, {**call, **extra}]
+    assert prefix_chain(provided) == prefix_chain(resent)
+    # Reasoning text a client can resend still tells two items apart.
+    spoken = {**reasoning, "content": [{"type": "reasoning_text", "text": "because"}]}
+    assert prefix_chain([spoken]) != prefix_chain([reasoning])
+
+
 @pytest.mark.parametrize(
     "raw",
     [
