@@ -73,6 +73,7 @@ class CodexVLM(OpenAIVLM):
             lambda: self._build_responses_client(*self._resolve_runtime_credentials()),
             self.model or "gpt-5.3-codex",
             auth_retry_client_factory=auth_retry_client_factory,
+            on_failed_response=self._update_token_usage_from_response,
         )
 
     def _build_refreshed_responses_client(self):
