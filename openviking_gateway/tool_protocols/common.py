@@ -360,7 +360,10 @@ class ToolProtocol(ABC):
             cls.field: [*messages, {"role": "user", "content": instruction}],
             "stream": False,
         }
-        if cls.tool_choice(body) not in ("auto", "none"):
+        # A compaction summary is a plain-text auxiliary request. Letting the
+        # model choose a tool here can turn a valid summary into a tool call,
+        # which leaves the original over-budget history unchanged.
+        if cls.tool_choice(body) != "none":
             cls.disable_tools(request)
         return request
 
