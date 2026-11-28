@@ -77,3 +77,27 @@ def test_oversized_header_and_row_stay_together_without_duplicate_header(header_
     row = "| " + "文" * 2500 + " | Y |"
     content = header + "\n" + row
     assert parser._smart_split_content(content, max_size=2000) == [content]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("levels", [(3, 3), (3, 2), (2, 2)])
+async def test_layout_keeps_subsection_body_with_heading_when_levels_are_skipped(levels):
+    parser = MarkdownParser(config=ParserConfig(max_section_chars=950))
+    guide = "# Guide\n\n" + ("Read these installation instructions carefully. " * 12).strip()
+    install = f"{'#' * levels[0]} Install\n\n" + (
+        "Complete this installation step and record the result. " * 15
+    ).strip()
+    verify = f"{'#' * levels[1]} Verify\n\n" + (
+        "Complete this verification step and record the result. " * 15
+    ).strip()
+
+    layout = await parser._compute_layout(
+        "\n\n".join([guide, install, verify]), "viking://temp/test", resource_name="doc"
+    )
+    writes = [op for op in layout.ops if op.kind == "write"]
+
+    assert [(op.uri.rsplit("/", 1)[-1], op.content) for op in writes] == [
+        ("Guide.md", guide),
+        ("Install.md", install),
+        ("Verify.md", verify),
+    ]

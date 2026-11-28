@@ -1724,27 +1724,23 @@ class MarkdownParser(BaseParser):
         start_pos, end_pos, title, level = headings[idx]
         section_name = self._sanitize_for_path(title)
 
-        # Find section end (next same or higher level heading)
         section_end = len(content)
-        next_same_level_idx = len(headings)
+        child_indices = []
+        child_level = None
         for j in range(idx + 1, len(headings)):
-            if headings[j][3] <= level:
-                section_end = headings[j][0]
-                next_same_level_idx = j
+            heading_start, _, _, heading_level = headings[j]
+            if heading_level <= level:
+                section_end = heading_start
                 break
 
-        # Find direct content end (first child heading)
-        direct_content_end = section_end
-        first_child_idx = None
-        child_indices = []
-        for j in range(idx + 1, next_same_level_idx):
-            if headings[j][3] == level + 1:
-                if first_child_idx is None:
-                    first_child_idx = j
-                    direct_content_end = headings[j][0]
+            # The first deeper heading starts a child even if levels were skipped.
+            # Deeper headings after a child belong to that child until a sibling starts.
+            if child_level is None or heading_level <= child_level:
                 child_indices.append(j)
+                child_level = heading_level
 
-        has_children = first_child_idx is not None
+        has_children = bool(child_indices)
+        direct_content_end = headings[child_indices[0]][0] if has_children else section_end
 
         # Build content
         heading_prefix = "#" * level
