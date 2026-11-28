@@ -115,7 +115,14 @@ def openviking_message_to_langchain(message: dict[str, Any]) -> list[BaseMessage
     parts = list(message.get("parts") or [])
     text = _parts_text(parts)
     if role == "user":
-        return [HumanMessage(content=text)]
+        # Sessions store tool results as tool-only user records, including older
+        # records without a message_kind. Explicit user queries take precedence.
+        if (
+            message.get("message_kind") == "user_query"
+            or not parts
+            or any(part.get("type") != "tool" for part in parts)
+        ):
+            return [HumanMessage(content=text)]
 
     tool_calls = []
     tool_call_ids: set[str] = set()
