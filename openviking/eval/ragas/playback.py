@@ -461,7 +461,10 @@ class IOPlayback:
                     limit = kwargs.get("top_k", kwargs.get("limit", 10))
                     where = kwargs.get("filter")
                 else:
-                    query_vector = kwargs.get("vector", kwargs.get("query_vector"))
+                    query_vector = kwargs.get(
+                        "vector",
+                        kwargs.get("query_vector", request.get("vector", request.get("query_vector"))),
+                    )
                     limit = kwargs.get("top_k", kwargs.get("limit", request.get("top_k", 10)))
                     where = kwargs.get("filter", request.get("filter"))
                 await self._vector_store.search(
