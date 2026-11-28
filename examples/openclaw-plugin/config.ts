@@ -114,6 +114,13 @@ export type MemoryOpenVikingConfig = {
   traceRecallIncludeRawUserPreview?: boolean;
   /** Auto-recall target resource types. Empty means the backward-compatible memory recall set. */
   recallTargetTypes?: Array<"resource" | "user" | "agent"> | string;
+  /**
+   * Event memories keep their score for this period ("7d", "12h") and decay
+   * afterwards, so superseded events stop outranking newer terminal-state
+   * events on status questions. Empty leaves decay off, as the server does
+   * by default. Sent as events_time_decay_protection.
+   */
+  recallEventsDecayProtection?: string;
   /** Agent-visible add_resource tool is disabled by default; manual /add-resource remains available. */
   enableAddResourceTool?: boolean;
   /** Agent-visible tool allowlist. Supports exact tool names or groups such as "memory" and "resource_query". */
@@ -572,6 +579,7 @@ export const memoryOpenVikingConfigSchema = {
         "traceRecallIncludeContentByDefault",
         "traceRecallIncludeRawUserPreview",
         "recallTargetTypes",
+        "recallEventsDecayProtection",
         "enableAddResourceTool",
         "enabledTools",
         "disabledTools",
@@ -649,6 +657,7 @@ export const memoryOpenVikingConfigSchema = {
       cfg.recallTargetTypes,
       !("recallTargetTypes" in cfg) && recallResources,
     );
+    const recallEventsDecayProtection = String(cfg.recallEventsDecayProtection ?? "").trim();
     const { enabledTools, disabledTools } = normalizeEnabledTools(cfg);
 
     return {
@@ -768,6 +777,7 @@ export const memoryOpenVikingConfigSchema = {
       traceRecallIncludeContentByDefault: cfg.traceRecallIncludeContentByDefault === true,
       traceRecallIncludeRawUserPreview: cfg.traceRecallIncludeRawUserPreview === true,
       recallTargetTypes,
+      recallEventsDecayProtection,
       recallCompress,
       enableAddResourceTool: cfg.enableAddResourceTool === true,
       enabledTools,
@@ -899,6 +909,12 @@ export const memoryOpenVikingConfigSchema = {
       label: "Recall Target Types",
       placeholder: "user,agent",
       help: "Comma-separated auto-recall and default memory_recall targets: user, agent, resource. Session history is available through ov_archive_search and ov_archive_expand.",
+      advanced: true,
+    },
+    recallEventsDecayProtection: {
+      label: "Recall Events Decay Protection",
+      placeholder: "7d",
+      help: "Event memories keep their score for this period (e.g. 7d, 12h) and decay afterwards, so superseded events stop outranking newer terminal-state events. Empty leaves decay off.",
       advanced: true,
     },
     recallLimit: {

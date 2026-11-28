@@ -55,6 +55,8 @@ Once installed, the plugin provides these agent tools:
 
 `add_resource` is hidden from agents by default (`enableAddResourceTool=false`), while manual `/add-resource` remains available. Configure `recallTargetTypes` to choose default recall targets (`user`, `agent`, `resource`); legacy `recallResources=true` appends `resource` only when `recallTargetTypes` is unset.
 
+Set `recallEventsDecayProtection` (e.g. `7d`, `12h`) so event memories keep their score inside the window and decay after it: superseded events stop outranking newer terminal-state events on "what is the current status?" recalls. Empty leaves decay off, as the server does by default.
+
 ## Data Flow & Privacy
 
 - **What is sent**: User/assistant message text from each turn (after stripping injected memory blocks and metadata noise).
