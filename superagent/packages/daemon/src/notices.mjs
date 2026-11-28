@@ -20,7 +20,7 @@ export function classifyRuntimeFailure(error, modelError) {
     return { blocked: true, recoverable: false };
   }
   const recoverable = classified.retryable
-    || /\b(?:timeout|timed out|rate[_ ]limit(?:ed)?|quota exceeded|too many requests|you(?:'|’)ve hit your (?:\d+[- ]hour|weekly) limit|(?:\d+[- ]hour|weekly|usage) limit(?: reached| exceeded)?|overloaded|temporarily unavailable|service unavailable|network|connection (?:lost|reset|refused)|ECONNRESET|ETIMEDOUT|bad gateway|upstream|empty (?:stream|response)|3083)\b|空流/i.test(message);
+    || /\b(?:timeout|timed out|rate[_ ]limit(?:ed)?|quota exceeded|too ?many ?requests|toomanyrequests|tpm|tokens per minute|you(?:'|’)ve hit your (?:\d+[- ]hour|weekly) limit|(?:\d+[- ]hour|weekly|usage) limit(?: reached| exceeded)?|overloaded|temporarily unavailable|service unavailable|network|connection (?:lost|reset|refused)|ECONNRESET|ETIMEDOUT|bad gateway|upstream|empty (?:stream|response)|3083)\b|空流/i.test(message);
   return { blocked: false, recoverable };
 }
 
@@ -302,7 +302,10 @@ export class FailurePolicy {
       return;
     }
     const chatMessage = inbound?.chatId && inbound?.messageId && inbound.kind?.startsWith('message.');
-    const notice = `⚠️ 这一轮处理异常：${error}`.slice(0, 600)
+    // The conversation gets a fixed line: provider text carries the model id and
+    // the provider request id, and a chat is not the place for either. The detail
+    // stays in the activity record for the owner (#8280).
+    const notice = '⚠️ 这一轮处理异常，详情已记录。'.slice(0, 600)
       + (chatMessage ? '\n（消息不会自动重试；可再发一次，或用 /effort、/model 调整后重试）'
         : '\n（事件不会自动重试，请检查运行状态后决定是否重试。）');
     this.recordActivity('agent.failure_notice', {
