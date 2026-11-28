@@ -43,6 +43,8 @@ impl GitService {
             .await?,
         );
         let filtered_paths = req.paths.as_deref();
+        // Tree OIDs are immutable; reuse decoded ancestors between comparisons.
+        let mut tree_cache = crate::git::tree_builder::TreeLookupCache::new();
         let mut next_meta: Option<CommitMeta> = None;
         let mut scanned = 0usize;
         let mut skipped = 0usize;
@@ -68,12 +70,14 @@ impl GitService {
                 None => true,
                 Some(paths) => {
                     scanned += 1;
+                    tree_cache.begin_batch();
                     commit_touches_any_path(
                         self.object_store.as_ref(),
                         &req.account,
                         meta.tree,
                         parent_meta.as_ref().map(|parent| parent.tree),
                         paths,
+                        &mut tree_cache,
                     )
                     .await?
                 }
@@ -321,6 +325,7 @@ impl GitService {
         latest_oid: ObjectId,
     ) -> Result<Option<Vec<LogEntry>>, GitError> {
         let paths = req.paths.as_ref().expect("filtered request");
+        let mut tree_cache = crate::git::tree_builder::TreeLookupCache::new();
         let mut next_oid = Some(head);
         let mut next_meta: Option<CommitMeta> = None;
         let mut out = Vec::new();
@@ -343,12 +348,14 @@ impl GitService {
                 None => None,
             };
 
+            tree_cache.begin_batch();
             if commit_touches_any_path(
                 self.object_store.as_ref(),
                 &req.account,
                 meta.tree,
                 parent_meta.as_ref().map(|parent| parent.tree),
                 paths,
+                &mut tree_cache,
             )
             .await?
             {
@@ -419,29 +426,16 @@ async fn commit_touches_any_path(
     current_tree: ObjectId,
     parent_tree: Option<ObjectId>,
     paths: &[String],
+    tree_cache: &mut crate::git::tree_builder::TreeLookupCache,
 ) -> Result<bool, GitError> {
-    let mut current_cache = crate::git::tree_builder::TreeLookupCache::new();
-    let mut parent_cache = crate::git::tree_builder::TreeLookupCache::new();
-
     for path in paths {
-        let current = crate::git::tree_builder::lookup_cached(
-            store,
-            account,
-            current_tree,
-            path,
-            &mut current_cache,
-        )
-        .await?;
+        let current =
+            crate::git::tree_builder::lookup_cached(store, account, current_tree, path, tree_cache)
+                .await?;
         let parent = match parent_tree {
             Some(tree) => {
-                crate::git::tree_builder::lookup_cached(
-                    store,
-                    account,
-                    tree,
-                    path,
-                    &mut parent_cache,
-                )
-                .await?
+                crate::git::tree_builder::lookup_cached(store, account, tree, path, tree_cache)
+                    .await?
             }
             None => None,
         };

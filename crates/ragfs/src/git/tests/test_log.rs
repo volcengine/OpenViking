@@ -215,7 +215,7 @@
     }
 
     #[tokio::test]
-    async fn test_filtered_log_reads_each_commit_object_at_most_once() {
+    async fn test_filtered_log_reads_each_history_object_at_most_once() {
         let dir = tempfile::tempdir().unwrap();
         let object_store = Arc::new(GetSpyObjectStore {
             inner: LocalObjectStore::new(dir.path()),
@@ -229,6 +229,7 @@
             ref_store as Arc<dyn RefStore>,
         );
 
+        vfs.put("resources/stable/target.md", b"unchanged");
         let mut commits = Vec::new();
         for version in 1..=4 {
             let content = format!("v{version}");
@@ -246,7 +247,7 @@
                     branch: "main".into(),
                     limit: 1,
                     offset: 0,
-                    paths: Some(vec!["resources/never-created.md".into()]),
+                    paths: Some(vec!["resources/stable/never-created.md".into()]),
                 },
                 3,
             )
@@ -259,7 +260,49 @@
 
         let commit_gets: usize = commits.iter().map(|oid| object_store.count_gets(oid)).sum();
         assert_eq!(commit_gets, 4, "three candidates plus one parent lookahead");
-        for oid in commits {
-            assert_eq!(object_store.count_gets(&oid), 1, "commit {oid} was re-read");
+        for oid in &commits {
+            assert_eq!(object_store.count_gets(oid), 1, "commit {oid} was re-read");
+        }
+        let gets = object_store.gets.lock().unwrap().clone();
+        let unique_gets: HashSet<_> = gets.iter().collect();
+        assert_eq!(
+            gets.len(),
+            unique_gets.len(),
+            "history objects were re-read"
+        );
+
+        for (paths, offset, expected) in [
+            (vec!["resources/stable/never-created.md"], 0, vec![]),
+            (
+                vec![
+                    "resources/stable/never-created.md",
+                    "resources/stable/target.md",
+                    "resources/stable",
+                ],
+                0,
+                vec![commits[0]],
+            ),
+            (vec!["resources/stable/target.md"], 1, vec![]),
+        ] {
+            object_store.reset();
+            let log = svc
+                .log(LogRequest {
+                    account: "acct_log_reads".into(),
+                    branch: "main".into(),
+                    limit: 10,
+                    offset,
+                    paths: Some(paths.into_iter().map(str::to_owned).collect()),
+                })
+                .await
+                .unwrap();
+            let oids: Vec<_> = log.into_iter().map(|entry| entry.oid).collect();
+            assert_eq!(oids, expected);
+            let gets = object_store.gets.lock().unwrap().clone();
+            let unique_gets: HashSet<_> = gets.iter().collect();
+            assert_eq!(
+                gets.len(),
+                unique_gets.len(),
+                "history objects were re-read"
+            );
         }
     }
