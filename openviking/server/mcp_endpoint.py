@@ -85,6 +85,7 @@ from openviking.server.local_input_guard import (
     is_remote_resource_source,
     looks_like_local_path,
 )
+from openviking.server.read_pagination import build_read_page
 from openviking.server.resource_ingest import ingest_temp_upload
 from openviking.server.routers.search import context_only_fields_error, resolve_search_filter
 from openviking.server.skill_ingest import install_skills
@@ -1254,9 +1255,55 @@ async def read(
     ] = None,
     offset: int = 0,
     limit: int = -1,
+    max_tokens: int | None = None,
+    cursor: str | None = None,
 ) -> str | list[ContentBlock] | CallToolResult:
-    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. A complete read of an OpenViking Live Context node returns its evaluated text content; paginated reads only return stored descriptor text. Text reads accept line-based offset/limit. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
+    """Read viking:// files. Pass uri for one file, or uris with a list to read several files in one call. A complete read of an OpenViking Live Context node returns its evaluated text content; line-based offset/limit reads only return stored descriptor text. Text reads accept line-based offset/limit. Opt-in max_tokens rejects Live Context and returns a bounded JSON text page; continue with cursor and the same budget. Requires a shared server read cursor key. Raster images and supported audio return native MCP content blocks. For directory listing, use the list tool instead."""
     import asyncio
+
+    if max_tokens is not None or cursor is not None:
+        from openviking_cli.exceptions import FailedPreconditionError
+
+        if not isinstance(uri, str) or not uri or uris is not None or offset != 0 or limit != -1:
+            raise InvalidArgumentError("Bounded read requires one uri and no uris/offset/limit")
+        if type(max_tokens) is not int or max_tokens <= 0:
+            raise InvalidArgumentError("Bounded read requires a positive max_tokens")
+        config = get_server_config()
+        if config is None or config.read_cursor_signing_key is None:
+            raise FailedPreconditionError(
+                "Configure server.read_cursor_signing_key for bounded read"
+            )
+        ctx = _get_ctx()
+        if ctx.data_access is not None or ctx.bypass_acl:
+            raise InvalidArgumentError(
+                "Bounded read does not support delegated or ACL-bypass reads"
+            )
+        service = get_service()
+        resolved = await service.fs._resolve_uri(_resolve_mcp_workspace_uri(uri, ctx), ctx)
+        if (
+            _is_mcp_image_uri(resolved)
+            or _is_mcp_audio_uri(resolved)
+            or _is_mcp_video_uri(resolved)
+        ):
+            raise InvalidArgumentError("Bounded read supports stored text only")
+        content = await service.fs.read_visible(resolved, ctx=ctx)
+        if service.mcps._parse_live_context_node(content) is not None:
+            raise InvalidArgumentError("Bounded read does not evaluate or paginate Live Context")
+        scope = (
+            ctx.account_id,
+            ctx.user.user_id,
+            str(ctx.role),
+            ctx.actor_peer_id or "",
+            *sorted(ctx.group_ids),
+        )
+        return build_read_page(
+            content,
+            resolved,
+            scope,
+            max_tokens,
+            cursor,
+            signing_key=config.read_cursor_signing_key.get_secret_value().encode("utf-8"),
+        )
 
     # `uri` matches every other tool. Both names accept a string or a list, so a
     # mismatched shape still reads instead of failing.

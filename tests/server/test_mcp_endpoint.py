@@ -1044,6 +1044,67 @@ async def test_mcp_middleware_rejects_invalid_actor_peer_header():
 # ---------------------------------------------------------------------------
 
 
+async def test_mcp_read_restarts_after_signing_key_rotation(service, monkeypatch):
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    from openviking.server import dependencies
+    from openviking.server.app import create_app
+    from openviking.server.config import ServerConfig
+
+    config = ServerConfig(read_cursor_signing_key="read-cursor-fixture-key-before-rotation")
+    rotated = ServerConfig(read_cursor_signing_key="read-cursor-fixture-key-after-rotation")
+    uri = "viking://resources/cursor-rotation.md"
+    content = "First page marker.\r\n" + "More stored text.\r\n" * 250
+    await service.viking_fs.write_file_bytes(uri, content.encode(), ctx=DEFAULT_CTX)
+
+    # Isolate this real MCP session-manager lifespan from other server tests.
+    monkeypatch.setattr(mcp_endpoint.mcp, "_session_manager", None)
+    monkeypatch.setattr(dependencies, "_server_config", config)
+    app = create_app(config=config, service=service)
+    app.state.auth_plugin = DevAuthPlugin()
+    transport = httpx.ASGITransport(app=app)
+    args = {"uri": uri, "max_tokens": 300}
+
+    def page(result):
+        assert not result.isError, result.content
+        assert result.structuredContent is None
+        assert len(result.content) == 1 and isinstance(result.content[0], TextContent)
+        return json.loads(result.content[0].text)
+
+    async with (
+        mcp_endpoint.mcp_lifespan(),
+        httpx.AsyncClient(transport=transport, base_url="http://ov.test") as http_client,
+        streamable_http_client("http://ov.test/mcp", http_client=http_client) as (rx, tx, _),
+        ClientSession(rx, tx) as client,
+    ):
+        await client.initialize()
+        before = page(await client.call_tool("read", args))
+        assert before["has_more"] and before["next_cursor"]
+        assert before["content"].startswith("First page marker.")
+
+        # Use the same normal config registration as bootstrap, with only the key changed.
+        dependencies.set_server_config(rotated)
+        rejected = await client.call_tool("read", {**args, "cursor": before["next_cursor"]})
+        assert rejected.isError is True
+        assert rejected.structuredContent is None
+        assert len(rejected.content) == 1 and isinstance(rejected.content[0], TextContent)
+        assert rejected.content[0].text.startswith("INVALID_ARGUMENT:")
+        assert "restart" in rejected.content[0].text.lower()
+        assert "First page marker." not in rejected.content[0].text
+
+        restarted = page(await client.call_tool("read", args))
+        assert restarted["content"] == before["content"]
+        assert restarted["version"] == before["version"]
+        assert restarted["has_more"] and restarted["next_cursor"] != before["next_cursor"]
+
+        continued = page(
+            await client.call_tool("read", {**args, "cursor": restarted["next_cursor"]})
+        )
+        assert continued["content"] and not continued["content"].startswith("First page marker.")
+        assert content.startswith(restarted["content"] + continued["content"])
+
+
 async def test_read_nonexistent_uri(service):
     result = await read("viking://user/test_user/memories/does_not_exist.md")
     assert "not found" in result.lower()

@@ -12,6 +12,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    SecretStr,
     StrictBool,
     StrictInt,
     StrictStr,
@@ -487,6 +488,15 @@ class ServerConfig(BaseModel):
         default=True,
         description="Periodically delete expired Task and Compile history on this node.",
     )
+    read_cursor_signing_key: SecretStr | None = Field(
+        default=None,
+        repr=False,
+        description=(
+            "Dedicated shared key for opt-in bounded MCP text reads. Configure the same "
+            "random key (at least 32 UTF-8 bytes) on every worker/replica. Changing the "
+            "key invalidates existing cursors. Unset disables only bounded read mode."
+        ),
+    )
     executor_threads: int = Field(
         default=64,
         ge=0,
@@ -541,6 +551,13 @@ class ServerConfig(BaseModel):
     tool_output_externalization: ToolOutputExternalizationConfig = Field(
         default_factory=ToolOutputExternalizationConfig
     )
+
+    @field_validator("read_cursor_signing_key")
+    @classmethod
+    def validate_read_cursor_signing_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and len(value.get_secret_value().encode("utf-8")) < 32:
+            raise ValueError("read_cursor_signing_key must contain at least 32 UTF-8 bytes")
+        return value
 
     @field_validator("user_config_defaults", mode="before")
     @classmethod
