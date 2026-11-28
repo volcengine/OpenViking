@@ -828,6 +828,10 @@ impl QueueBackend for SQLiteQueueBackend {
             }
         };
 
+        // A failed decode must roll back without claiming a delivery that no caller received.
+        let stored: StoredMessage =
+            serde_json::from_str(&raw_data).map_err(|e| Error::Serialization(e.to_string()))?;
+
         tx.execute(
             "UPDATE queue_messages
              SET status = 'processing', processing_started_at = ?1
@@ -839,8 +843,6 @@ impl QueueBackend for SQLiteQueueBackend {
         tx.commit()
             .map_err(|e| Error::internal(format!("sqlite transaction commit error: {}", e)))?;
 
-        let stored: StoredMessage =
-            serde_json::from_str(&raw_data).map_err(|e| Error::Serialization(e.to_string()))?;
         Ok(Some(stored.into_message()))
     }
 
@@ -1441,6 +1443,60 @@ mod tests {
 
         let dequeued = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(dequeued.data, payload);
+    }
+
+    fn assert_failed_sqlite_decode_remains_pending(raw: &str) {
+        let (_dir, db_path, mut backend) = sqlite_backend();
+        backend.create_queue("test").unwrap();
+        let original = keyed_message("original", true, "serial");
+        let saved = serde_json::to_string(&StoredMessage::from_message(&original)).unwrap();
+        backend.enqueue("test", original.clone()).unwrap();
+        let conn = Connection::open(db_path).unwrap();
+        conn.execute("UPDATE queue_messages SET data = ?1", params![raw])
+            .unwrap();
+
+        assert!(matches!(
+            backend.dequeue("test"),
+            Err(Error::Serialization(_))
+        ));
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 1,
+                processing: 0
+            }
+        );
+        let processing_started: Option<i64> = conn
+            .query_row(
+                "SELECT processing_started_at FROM queue_messages",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(processing_started.is_none());
+
+        // Repairing a legacy/corrupt record must not require recovering a phantom delivery.
+        conn.execute("UPDATE queue_messages SET data = ?1", params![saved])
+            .unwrap();
+        assert_eq!(backend.dequeue("test").unwrap().unwrap().id, original.id);
+        assert!(backend.ack("test", &original.id).unwrap());
+        assert_eq!(
+            backend.status("test").unwrap(),
+            QueueState {
+                pending: 0,
+                processing: 0
+            }
+        );
+    }
+
+    #[test]
+    fn test_sqlite_dequeue_invalid_json_does_not_claim_delivery() {
+        assert_failed_sqlite_decode_remains_pending("not json");
+    }
+
+    #[test]
+    fn test_sqlite_dequeue_invalid_bytes_does_not_claim_delivery() {
+        assert_failed_sqlite_decode_remains_pending(r#"{"id":"original","data":[256]}"#);
     }
 
     #[test]
