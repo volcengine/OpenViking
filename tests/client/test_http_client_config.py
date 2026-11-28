@@ -93,7 +93,10 @@ async def test_legacy_config_aliases_are_applied_to_requests(
     assert request.extensions["timeout"]["read"] == 12.5
 
 
-async def test_legacy_gateway_token_stays_bound_to_configured_server(isolated_config, requests):
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+async def test_legacy_gateway_token_stays_bound_to_configured_server(
+    isolated_config, requests, encoding
+):
     isolated_config.write_text(
         json.dumps(
             {
@@ -106,7 +109,8 @@ async def test_legacy_gateway_token_stays_bound_to_configured_server(isolated_co
                 "timeout": 12.5,
                 "profile": True,
             }
-        )
+        ),
+        encoding=encoding,
     )
     client = AsyncHTTPClient(url="http://explicit-host:1933")
     await client.initialize()

@@ -9,7 +9,8 @@ from openviking_sdk import AsyncHTTPClient
 
 
 @pytest.mark.asyncio
-async def test_explicit_arguments_win_over_env(tmp_path, monkeypatch, sdk_transport):
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+async def test_explicit_arguments_win_over_env(tmp_path, monkeypatch, sdk_transport, encoding):
     conf = tmp_path / "ovcli.conf"
     conf.write_text(
         json.dumps(
@@ -23,7 +24,8 @@ async def test_explicit_arguments_win_over_env(tmp_path, monkeypatch, sdk_transp
                 "profile": True,
                 "extra_headers": {"X-Custom": "file", "X-File-Only": "file"},
             }
-        )
+        ),
+        encoding=encoding,
     )
     monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(conf))
     requests = []
