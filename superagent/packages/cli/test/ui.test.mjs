@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { PassThrough, Writable } from 'node:stream';
 import test from 'node:test';
-import { BANNER_WIDTH, bannerLines, openingBanner, playBanner } from '../src/banner.mjs';
+import { BANNER_ROWS, BANNER_WIDTH, COMPACT_BANNER_WIDTH, bannerLines, openingBanner, playBanner } from '../src/banner.mjs';
 import { Prompter } from '../src/prompt.mjs';
 import { urlOpenCommand, qrLines, showScan } from '../src/qr.mjs';
 import { ansi256, box, colorDepth, flushOutput, mix, stripAnsi, width } from '../src/ui.mjs';
@@ -27,6 +27,7 @@ function rgbCells(line) {
     else {
       const params = match[1].split(';').map(Number);
       if (params[0] === 0) { fg = null; bg = null; }
+      else if (params[0] === 1 || params[0] === 22) continue;
       else {
         assert.equal(params[1], 2, 'RGB output on a truecolor terminal');
         if (params[0] === 38) fg = params.slice(2);
@@ -72,30 +73,44 @@ test('a box lines up its borders whatever the text is', () => {
   assert.equal(new Set(lines.map(width)).size, 1, lines.join('\n'));
 });
 
-test('the banner fits 80 columns and spells OpenViking SuperAgent, never VIKA', () => {
-  const lines = bannerLines({ depth: 24, version: '0.4.0-cdb22789fc75' });
-  assert.equal(lines.length, 6);
-  assert.ok(lines.every((line) => width(line) <= Math.min(80, BANNER_WIDTH)), lines.map(stripAnsi).join('\n'));
-  assert.equal(stripAnsi(lines[0]).trim(), 'O P E N V I K I N G');
-  assert.match(stripAnsi(lines.at(-1)), /v0\.4\.0-cdb22789fc75$/);
-  assert.doesNotMatch(lines.join('\n'), /VIKA/);
-  // No indigo / violet / blue: every colour leans red.
-  for (const line of lines) for (const cell of rgbCells(line)) for (const rgb of [cell.fg, cell.bg]) {
+test('the halftone banner renders 88 columns wide by default and 78 columns in compact mode', () => {
+  const wide = bannerLines({ depth: 24, version: '0.4.0-cdb22789fc75' });
+  assert.equal(wide.length, BANNER_ROWS);
+  assert.ok(wide.every((line) => width(line) <= BANNER_WIDTH), wide.map(stripAnsi).join('\n'));
+  assert.match(stripAnsi(wide[0]), /^OPENVIKING ━+ DAEMON SETUP$/);
+  assert.ok(wide.some((line) => /[█▓▒░]/.test(stripAnsi(line))));
+  assert.match(stripAnsi(wide.at(-1)), /v0\.4\.0-cdb22789fc75$/);
+  assert.doesNotMatch(wide.join('\n'), /VIKA/);
+  // Warm halftone colours lean red, never indigo/violet/blue.
+  for (const line of wide) for (const cell of rgbCells(line)) for (const rgb of [cell.fg, cell.bg]) {
     if (rgb && Math.max(...rgb) - Math.min(...rgb) > 40) assert.ok(rgb[0] > rgb[2], `${rgb}`);
   }
+
+  const compact = bannerLines({ depth: 24, version: '1.0.0', columns: 80 });
+  assert.equal(compact.length, BANNER_ROWS);
+  assert.ok(compact.every((line) => width(line) <= Math.min(80, COMPACT_BANNER_WIDTH)), compact.map(stripAnsi).join('\n'));
+  assert.match(stripAnsi(compact[0]), /^OPENVIKING ━+ DAEMON SETUP$/);
+  assert.match(stripAnsi(compact.at(-1)), /v1\.0\.0$/);
 });
 
-test('the full banner is drawn once at 80 columns with no tagline', async () => {
-  const { output, written } = screen({ columns: 80, rows: 30 });
-  const banner = await openingBanner({ output, input: new PassThrough(), env: {}, version: '1.0.0' });
-  assert.equal(banner.top(), null);
-  const plain = stripAnsi(written());
-  assert.match(plain, /O P E N V I K I N G/);
-  assert.ok(plain.split('\n').every((line) => width(line) <= 80));
-  assert.match(written(), /\x1b\[38;2;/);
-  assert.doesNotMatch(plain, /aboard|带上船/);
-  assert.match(plain, /v1\.0\.0/);
-  assert.doesNotMatch(written(), /VIKA/);
+test('openingBanner adapts cleanly across 80-col, 100-col, and 256-colour terminals', async () => {
+  for (const [cols, depth, expectedMax, ansiPattern] of [
+    [80, 24, 80, /\x1b\[38;2;/],
+    [100, 24, 88, /\x1b\[38;2;/],
+    [100, 8, 88, /\x1b\[38;5;/],
+  ]) {
+    const { output, written } = screen({ columns: cols, rows: 30, depth });
+    const banner = await openingBanner({ output, input: new PassThrough(), env: {}, version: '1.0.0' });
+    assert.equal(banner.top(), null);
+    const plain = stripAnsi(written());
+    assert.match(plain, /OPENVIKING/);
+    assert.match(plain, /DAEMON SETUP/);
+    assert.ok(plain.split('\n').every((line) => width(line) <= expectedMax));
+    assert.match(written(), ansiPattern);
+    assert.doesNotMatch(plain, /aboard|带上船/);
+    assert.match(plain, /v1\.0\.0/);
+    assert.doesNotMatch(written(), /VIKA/);
+  }
 });
 
 test('narrow, colourless, CI and short terminals get one title line', async () => {
@@ -103,6 +118,7 @@ test('narrow, colourless, CI and short terminals get one title line', async () =
   for (const [size, env, tag] of [
     [{ columns: 40 }, {}, false],
     [{ columns: 64 }, {}, false],
+    [{ columns: 74 }, {}, false],
     [{ columns: 100 }, { NO_COLOR: '1' }, true],
     [{ columns: 100 }, { CI: '1' }, true],
     [{ columns: 100, rows: 6 }, {}, true],
