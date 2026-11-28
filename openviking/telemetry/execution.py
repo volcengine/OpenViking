@@ -70,12 +70,20 @@ except ImportError:
     StatusCode = None
 
 
-def _fill_telemetry_summary_to_span(snapshot, span):
+def _fill_telemetry_summary_to_span(
+    snapshot: Optional[TelemetrySnapshot],
+    span: Any,
+    *,
+    operation: str,
+    status: str,
+) -> None:
     """fill OperationTelemetry summary into span
 
     Args:
         snapshot: TelemetrySnapshot object
         span: current OTel span
+        operation: operation name the span was opened for
+        status: final operation status
     """
     if snapshot is None or span is None:
         return
@@ -83,9 +91,9 @@ def _fill_telemetry_summary_to_span(snapshot, span):
     try:
         # Build OperationSpanAttributes from snapshot for consistent span attributes.
         op_attrs = OperationSpanAttributes.from_telemetry_snapshot(
-            operation=snapshot.operation,
+            operation=operation,
             telemetry_id=snapshot.telemetry_id,
-            status=snapshot.status,
+            status=status,
             summary=snapshot.summary,
         )
 
@@ -131,6 +139,7 @@ async def run_with_telemetry(
             logger.debug("failed to start operation span", exc_info=True)
             span_context_manager = None
 
+    snapshot: Optional[TelemetrySnapshot] = None
     try:
         try:
             with bind_telemetry(collector):
@@ -143,41 +152,48 @@ async def run_with_telemetry(
                                 "failed to set operation span attributes (initial)",
                                 exc_info=True,
                             )
-                        result = await fn()
+                        try:
+                            result = await fn()
+                        except Exception as exc:
+                            # The span must be enriched while it is still recording,
+                            # i.e. before this context manager exits.
+                            collector.set_error(operation, type(exc).__name__, str(exc))
+                            snapshot = collector.finish(status=error_status)
+                            _fill_telemetry_summary_to_span(
+                                snapshot,
+                                span,
+                                operation=operation,
+                                status=error_status,
+                            )
+                            try:
+                                # The span context manager records the exception
+                                # itself when it exits.
+                                span.set_status(Status(StatusCode.ERROR, description=str(exc)))
+                            except Exception:
+                                logger.debug(
+                                    "failed to record exception into operation span",
+                                    exc_info=True,
+                                )
+                            raise
+                        snapshot = collector.finish(status="ok")
+                        _fill_telemetry_summary_to_span(
+                            snapshot,
+                            span,
+                            operation=operation,
+                            status="ok",
+                        )
                 else:
                     result = await fn()
         except Exception as exc:
-            collector.set_error(operation, type(exc).__name__, str(exc))
-            snapshot = collector.finish(status=error_status)
+            if snapshot is None:
+                collector.set_error(operation, type(exc).__name__, str(exc))
+                snapshot = collector.finish(status=error_status)
             _log_telemetry_summary(snapshot)
-
-            # If a span exists, record exception and backfill summary (best-effort).
-            if otel_trace is not None:
-                try:
-                    current_span = otel_trace.get_current_span()
-                    if current_span is not None and current_span.is_recording():
-                        current_span.record_exception(exc)
-                        current_span.set_status(Status(StatusCode.ERROR, description=str(exc)))
-                        _fill_telemetry_summary_to_span(snapshot, current_span)
-                except Exception:
-                    logger.debug(
-                        "failed to record exception into operation span",
-                        exc_info=True,
-                    )
-
             raise
 
-        snapshot = collector.finish(status="ok")
+        if snapshot is None:
+            snapshot = collector.finish(status="ok")
         _log_telemetry_summary(snapshot)
-
-        # If a span exists, backfill summary (best-effort).
-        if otel_trace is not None:
-            try:
-                current_span = otel_trace.get_current_span()
-                if current_span is not None and current_span.is_recording():
-                    _fill_telemetry_summary_to_span(snapshot, current_span)
-            except Exception:
-                logger.debug("failed to backfill telemetry summary into span", exc_info=True)
 
         try:
             if snapshot is not None:
