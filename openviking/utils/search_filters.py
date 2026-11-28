@@ -213,9 +213,15 @@ def resolve_time_bounds(
     since_dt = None
     until_dt = None
     if normalized_since:
-        since_dt = _parse_time_value(normalized_since, current_time, is_upper_bound=False)
+        try:
+            since_dt = _parse_time_value(normalized_since, current_time, is_upper_bound=False)
+        except OverflowError as exc:
+            raise ValueError(f"{lower_label} is out of range") from exc
     if normalized_until:
-        until_dt = _parse_time_value(normalized_until, current_time, is_upper_bound=True)
+        try:
+            until_dt = _parse_time_value(normalized_until, current_time, is_upper_bound=True)
+        except OverflowError as exc:
+            raise ValueError(f"{upper_label} is out of range") from exc
 
     if (
         since_dt
