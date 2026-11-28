@@ -226,14 +226,29 @@ async def connect_mcp_servers(
             session = await stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
 
-            tools = await session.list_tools()
+            tool_defs = []
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            for _ in range(100):  # same page cap as MCPService._discover
+                page = await session.list_tools(cursor=cursor)
+                tool_defs.extend(page.tools)
+                cursor = page.nextCursor
+                if not cursor or cursor in seen_cursors:
+                    break
+                seen_cursors.add(cursor)
+            if cursor:
+                logger.warning(
+                    "MCP server '{}': tools/list pagination did not finish, some tools may be missing",
+                    name,
+                )
+
             enabled_tools = set(cfg.enabled_tools)
             allow_all_tools = "*" in enabled_tools
             registered_count = 0
             matched_enabled_tools: set[str] = set()
-            available_raw_names = [tool_def.name for tool_def in tools.tools]
-            available_wrapped_names = [f"mcp_{name}_{tool_def.name}" for tool_def in tools.tools]
-            for tool_def in tools.tools:
+            available_raw_names = [tool_def.name for tool_def in tool_defs]
+            available_wrapped_names = [f"mcp_{name}_{tool_def.name}" for tool_def in tool_defs]
+            for tool_def in tool_defs:
                 wrapped_name = f"mcp_{name}_{tool_def.name}"
                 if (
                     not allow_all_tools
