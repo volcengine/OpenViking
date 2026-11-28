@@ -23,6 +23,11 @@
       "type": "string",
       "description": "Free text for whoever reads the file. Not interpreted."
     },
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Master switch for memory in this workspace. `false` means its sessions take no part in memory: no OpenViking session is created, no profile or recall is injected, nothing new is captured or committed, and no automatic request carries its sessions. It is the one connection knob a workspace may name, because it decides whether anything is sent rather than where. OPENVIKING_MEMORY_ENABLED and the machine registry still outrank this file."
+    },
     "peer": {
       "type": "object",
       "additionalProperties": true,

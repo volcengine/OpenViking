@@ -42,7 +42,10 @@ export const KNOBS = [
   // Credentials resolve through `credentials.mjs`; these entries exist so the
   // doctor recognises them inside `plugin` and so ov.conf's harness section
   // keeps working.
-  { name: "enabled", type: "bool", default: true, env: "OPENVIKING_MEMORY_ENABLED", capability: "connection" },
+  // The one connection knob a workspace file may name: it does not say where
+  // data goes, it says whether any goes. A repository that must not be
+  // remembered opts out where it lives, rather than where the agent launches.
+  { name: "enabled", type: "bool", default: true, env: "OPENVIKING_MEMORY_ENABLED", workspace: "enabled", capability: "connection" },
   { name: "apiKey", type: "string", default: "", capability: "connection" },
   { name: "accountId", type: "string", default: "", capability: "connection" },
   { name: "userId", type: "string", default: "", capability: "connection" },
