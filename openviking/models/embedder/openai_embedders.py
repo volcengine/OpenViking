@@ -231,6 +231,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def _update_telemetry_token_usage(self, response) -> None:
         usage = getattr(response, "usage", None)
         if not usage:
+            self.record_call_without_usage()
             return
 
         def _usage_value(key: str, default: int = 0) -> int:
@@ -252,7 +253,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         # Update token tracker
         self.update_token_usage(
             model_name=self.model_name,
-            provider=self._provider,
+            provider=self.provider,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
@@ -322,7 +323,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def supports_multimodal(self) -> bool:
         return self._supports_multimodal
 
-    def _prepare_embedding_input(self, text: EmbeddingInput | List[str]) -> EmbeddingInput | List[str]:
+    def _prepare_embedding_input(
+        self, text: EmbeddingInput | List[str]
+    ) -> EmbeddingInput | List[str]:
         if isinstance(text, list) and all(isinstance(item, str) for item in text):
             if self.max_input_tokens is None:
                 return text
@@ -408,7 +411,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
     @model_error_boundary
-    async def embed_async(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, text: EmbeddingInput | List[str], is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
         embedding_input = self._prepare_embedding_input(text)
 

@@ -572,20 +572,36 @@ The most common labels you will use while investigating dashboards are:
 - To inspect why one specific request was slow, where tokens went, or which stage blocked resource processing, use `telemetry`
 - To inspect whether request volume, error rates, or latency are degrading over time, use `/metrics`
 
-## Optional Kafka event reporting
+## Optional event reporting
 
-Install `openviking[reporting]` and enable both `server.observability.reporting.enabled`
-and `server.observability.reporting.telemetry.enabled` in `ov.conf`.
-The exporter reads Kafka connection, authentication and topic settings from
-`reporting.kafka`, and queue and deployment settings from `reporting.telemetry`.
-Reporting is disabled by default and export failures do not interrupt business requests.
+Enable `server.observability.reporting.enabled` and
+`server.observability.reporting.telemetry.enabled` in `ov.conf`.
+Set `reporting.file_log.path` for local JSONL output. A non-empty
+`reporting.kafka` selects Kafka as the sole output, including when `file_log`
+is also configured. With `kafka` omitted or set to `{}`, the exporter uses the
+configured file output. If both outputs are missing, the exporter logs a
+configuration error and stays off. For Kafka output, install
+`openviking[reporting]` and specify the broker, topic, and required authentication
+settings. Reporting is disabled by default.
 
-The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
-integer (default `1024`). Full queues, exhausted delivery retries and process
-termination can lose events. Delivery failures and dropped events produce sampled
-warnings containing counts only. This exporter is suitable for best-effort analytics;
-it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
-drain the queue before stopping the process.
+The exporter uses an in-memory queue. `telemetry.queue_capacity` must be a positive
+integer (default `1024`). Space and member changes enter the same queue as other
+events. The file worker handles JSONL writes and rotation in the background.
+The Kafka worker submits a batch to the producer before waiting for individual
+acknowledgments. It retries failures to enqueue a send with the producer and
+counts failed or timed-out acknowledgments as delivery failures. Full queues,
+write failures, and process termination can lose events. Business requests can
+continue. The exporter records failed and dropped event counts and surfaces known
+delivery failures on flush and shutdown. Allow a graceful shutdown to drain the
+queue before stopping the process. Use this exporter for best-effort analytics.
+
+For `space_change` and `membership_change`, `change_type=deleted` marks the first
+recorded deletion. Background cleanup and its retries reuse this deletion state,
+so the event is generated once. A VLM call that returns a result without usage
+still reports `call_count=1` and leaves the unknown token fields as `null`.
+Sum known usage values and keep the aggregate `null` when all values are unknown.
+New files in the `resources` and `agent` scopes record the creating user as
+`first_contributor_user_id`.
 
 Deployments may set `account_id`, `resource_id` and `region` in `reporting.telemetry.deployment`.
 `OV_METRICS_ACCOUNT_ID`, `OV_RESOURCE_ID` and `OV_REGION` remain fallback values.
@@ -615,24 +631,48 @@ When ROOT provisions or rotates account model credentials through the configurat
 client. Model sections remain ROOT-only; account admins and members cannot set billing
 ownership through the configuration API.
 
-Example value for `server.observability.reporting` in `ov.conf`:
+Example Kafka reporting section in `ov.conf`:
 
 ```json
 {
-  "enabled": true,
-  "kafka": {
-    "bootstrap_servers": "broker.example:9092",
-    "topic": "metric-log"
-  },
-  "telemetry": {
-    "enabled": true
+  "server": {
+    "observability": {
+      "reporting": {
+        "enabled": true,
+        "kafka": {
+          "bootstrap_servers": "broker.example:9092",
+          "topic": "metric-log",
+          "security_protocol": "PLAINTEXT"
+        },
+        "telemetry": {
+          "enabled": true,
+          "queue_capacity": 1024,
+          "deployment": {
+            "account_id": "cloud-account",
+            "resource_id": "library",
+            "region": "cn-beijing"
+          }
+        }
+      }
+    }
   }
 }
 ```
 
-To migrate from Nacos or an external reporting JSON file, move its `kafka` and
-`telemetry` sections into `ov.conf` and restart the kernel. Supply literal strings
-in `reporting`, including any Kafka credentials.
+For local output, replace the `kafka` object in the example with this `file_log` object:
+
+```json
+{
+  "file_log": {
+    "path": "/var/log/metric_logs/metric.log",
+    "rotation_interval_hours": 1,
+    "backup_count": 168
+  }
+}
+```
+
+Each line contains one JSON event. Point your log collector at the active file and
+its rotated copies. Restart OpenViking after updating the reporting configuration.
 
 ## Related Documentation
 

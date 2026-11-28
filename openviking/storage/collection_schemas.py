@@ -1025,6 +1025,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     return self._embedding_failed(embedding_msg, error_msg)
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
+                from openviking.observability.reporting.facts import (
+                    report_initialized_directory_summary,
+                )
+
+                report_initialized_directory_summary(embedding_msg, ctx)
                 return ProcessResult.success({"vector_written": True})
 
         except asyncio.CancelledError:

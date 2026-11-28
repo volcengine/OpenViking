@@ -195,6 +195,41 @@ def test_model_calls_report_metrics_and_tokens(
         assert samples(f"{model_type}_tokens_total", **failed_labels) is None
 
 
+@pytest.mark.parametrize(
+    ("model_type", "source", "prompt_tokens", "completion_tokens", "total_tokens"),
+    [
+        ("embedding", EmbeddingEventDataSource, None, None, None),
+        ("vlm", VLMEventDataSource, 9, None, 9),
+        ("vlm", VLMEventDataSource, None, 4, 4),
+        ("vlm", VLMEventDataSource, None, None, None),
+    ],
+    ids=["embedding-no-usage", "vlm-input-only", "vlm-output-only", "vlm-no-usage"],
+)
+def test_model_calls_record_known_tokens(
+    samples, model_type, source, prompt_tokens, completion_tokens, total_tokens
+):
+    source.record_call(
+        provider="volcengine",
+        model_name="test-model",
+        duration_seconds=0.1,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        source_type="document",
+    )
+    labels = {"account_id": "__unknown__", "provider": "volcengine", "model_name": "test-model"}
+    assert samples(f"{model_type}_calls_total", **labels, error_code="OK") == 1
+    assert samples(f"{model_type}_call_duration_seconds_count", **labels, error_code="OK") == 1
+    assert samples(f"{model_type}_tokens_input_total", **labels) == prompt_tokens
+    assert samples(f"{model_type}_tokens_output_total", **labels) == completion_tokens
+    assert samples(f"{model_type}_tokens_total", **labels) == total_tokens
+    assert (
+        samples(
+            f"{model_type}_ingestion_tokens_total", account_id="__unknown__", source_type="document"
+        )
+        == total_tokens
+    )
+
+
 def test_embedding_collector_records_success_volume_and_latency(samples):
     EmbeddingEventDataSource.record_success(latency_seconds=0.2)
     EmbeddingEventDataSource.record_error(error_code="rate_limit")

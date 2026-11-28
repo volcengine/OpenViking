@@ -285,14 +285,25 @@ async def _attempt(
             request["extra_body"] = dict(vlm.extra_request_body)
 
         started = time.monotonic()
-        response = await client.responses.create(**request)
-        if getattr(response, "status", None) != "completed":
-            raise RuntimeError("Ark media response did not complete")
-        text = _extract_response_text(response)
-        if not text:
-            raise RuntimeError("Ark media response contained no output text")
-        _record_usage(vlm, response, time.monotonic() - started)
-        return text
+        response = None
+        call_error = None
+        try:
+            response = await client.responses.create(**request)
+            if getattr(response, "status", None) != "completed":
+                raise RuntimeError("Ark media response did not complete")
+            text = _extract_response_text(response)
+            if not text:
+                raise RuntimeError("Ark media response contained no output text")
+            return text
+        except BaseException as error:
+            call_error = error
+            raise
+        finally:
+            duration_seconds = time.monotonic() - started
+            if response is None:
+                vlm.record_failed_call(duration_seconds=duration_seconds, error=call_error)
+            else:
+                _record_usage(vlm, response, duration_seconds, error=call_error)
     finally:
         if file_id:
             await _delete_remote_file(vlm, file_id)
@@ -346,19 +357,26 @@ def _record_usage(
     vlm: VolcEngineVLM,
     response: Any,
     duration_seconds: float,
+    *,
+    error: BaseException | None = None,
 ) -> None:
     try:
+        from openviking.models.vlm.base import bind_vlm_usage_error
+
         usage = getattr(response, "usage", None)
         input_details = getattr(usage, "input_tokens_details", None)
         output_details = getattr(usage, "output_tokens_details", None)
-        vlm.update_token_usage(
-            model_name=vlm.model,
-            provider=vlm.provider,
-            prompt_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-            completion_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-            duration_seconds=duration_seconds,
-            prompt_cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
-            completion_reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
-        )
+        with bind_vlm_usage_error(error):
+            vlm.update_token_usage(
+                model_name=vlm.model,
+                provider=vlm.provider,
+                prompt_tokens=getattr(usage, "input_tokens", None),
+                completion_tokens=getattr(usage, "output_tokens", None),
+                duration_seconds=duration_seconds,
+                prompt_cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
+                completion_reasoning_tokens=int(
+                    getattr(output_details, "reasoning_tokens", 0) or 0
+                ),
+            )
     except Exception as error:
         _log_sanitized_exception("usage", error, logging.INFO)

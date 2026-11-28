@@ -56,7 +56,9 @@ class EmbeddingCollector(EventMetricCollector):
     TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "tokens", unit="total")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_ingestion_tokens_total
     # e.g.: openviking_embedding_ingestion_tokens_total
-    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "ingestion_tokens", unit="total")
+    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "ingestion_tokens", unit="total"
+    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_requests_total
     # e.g.: openviking_embedding_requests_total
     REQUESTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "requests", unit="total")
@@ -92,8 +94,8 @@ class EmbeddingCollector(EventMetricCollector):
                 provider=str(payload["provider"]),
                 model_name=str(payload["model_name"]),
                 duration_seconds=float(payload["duration_seconds"]),
-                prompt_tokens=int(payload["prompt_tokens"]),
-                completion_tokens=int(payload["completion_tokens"]),
+                prompt_tokens=payload.get("prompt_tokens"),
+                completion_tokens=payload.get("completion_tokens"),
                 error_code=str(payload.get("error_code") or "OK"),
                 account_id=(
                     None if payload.get("account_id") is None else str(payload.get("account_id"))
@@ -126,8 +128,8 @@ class EmbeddingCollector(EventMetricCollector):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
@@ -151,25 +153,30 @@ class EmbeddingCollector(EventMetricCollector):
             label_names=("provider", "model_name", "error_code"),
             account_id=account_id,
         )
+        if labels["error_code"] != "OK":
+            return
+
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
-        if labels["error_code"] == "OK" and int(prompt_tokens) > 0:
+        input_tokens = int(prompt_tokens or 0)
+        output_tokens = int(completion_tokens or 0)
+        if input_tokens > 0:
             registry.inc_counter(
                 self.TOKENS_INPUT_TOTAL,
                 labels=token_labels,
                 label_names=("provider", "model_name"),
-                amount=int(prompt_tokens),
+                amount=input_tokens,
                 account_id=account_id,
             )
-        if labels["error_code"] == "OK" and int(completion_tokens) > 0:
+        if output_tokens > 0:
             registry.inc_counter(
                 self.TOKENS_OUTPUT_TOTAL,
                 labels=token_labels,
                 label_names=("provider", "model_name"),
-                amount=int(completion_tokens),
+                amount=output_tokens,
                 account_id=account_id,
             )
-        total_tokens = int(prompt_tokens) + int(completion_tokens)
-        if labels["error_code"] == "OK" and total_tokens > 0:
+        total_tokens = input_tokens + output_tokens
+        if total_tokens > 0:
             registry.inc_counter(
                 self.TOKENS_TOTAL,
                 labels=token_labels,
@@ -177,7 +184,7 @@ class EmbeddingCollector(EventMetricCollector):
                 amount=total_tokens,
                 account_id=account_id,
             )
-        if labels["error_code"] == "OK" and total_tokens > 0 and source_type:
+        if total_tokens > 0 and source_type:
             registry.inc_counter(
                 self.INGESTION_TOKENS_TOTAL,
                 labels={"source_type": str(source_type)},

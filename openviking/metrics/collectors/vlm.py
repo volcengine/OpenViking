@@ -55,7 +55,9 @@ class VLMCollector(EventMetricCollector):
     TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "tokens", unit="total")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_ingestion_tokens_total
     # e.g.: openviking_vlm_ingestion_tokens_total
-    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "ingestion_tokens", unit="total")
+    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "ingestion_tokens", unit="total"
+    )
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"vlm.call"})
 
@@ -80,8 +82,8 @@ class VLMCollector(EventMetricCollector):
             provider=str(payload["provider"]),
             model_name=str(payload["model_name"]),
             duration_seconds=float(payload["duration_seconds"]),
-            prompt_tokens=int(payload["prompt_tokens"]),
-            completion_tokens=int(payload["completion_tokens"]),
+            prompt_tokens=payload.get("prompt_tokens"),
+            completion_tokens=payload.get("completion_tokens"),
             error_code=str(payload.get("error_code") or "OK"),
             account_id=(
                 None if payload.get("account_id") is None else str(payload.get("account_id"))
@@ -96,8 +98,8 @@ class VLMCollector(EventMetricCollector):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
@@ -105,8 +107,8 @@ class VLMCollector(EventMetricCollector):
         """
         Record one VLM call as counters for calls and tokens plus a latency histogram sample.
 
-        Input, output, and total token counters are all emitted because different dashboards care
-        about cost attribution at different levels of granularity.
+        Input and output counters track each known direction independently. The total uses the
+        known counts.
         """
         labels = {
             "provider": str(provider),
@@ -128,24 +130,23 @@ class VLMCollector(EventMetricCollector):
         )
         # A failed attempt has no reliable usage payload. Keep token families
         # success-only and avoid multiplying their cardinality by ``result``.
-        if labels["error_code"] != "OK":
+        if labels["error_code"] != "OK" or (prompt_tokens is None and completion_tokens is None):
             return
+
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
-        registry.inc_counter(
-            self.TOKENS_INPUT_TOTAL,
-            labels=token_labels,
-            label_names=("provider", "model_name"),
-            amount=int(prompt_tokens),
-            account_id=account_id,
-        )
-        registry.inc_counter(
-            self.TOKENS_OUTPUT_TOTAL,
-            labels=token_labels,
-            label_names=("provider", "model_name"),
-            amount=int(completion_tokens),
-            account_id=account_id,
-        )
-        total_tokens = int(prompt_tokens) + int(completion_tokens)
+        for metric, token_count in (
+            (self.TOKENS_INPUT_TOTAL, prompt_tokens),
+            (self.TOKENS_OUTPUT_TOTAL, completion_tokens),
+        ):
+            if token_count is not None:
+                registry.inc_counter(
+                    metric,
+                    labels=token_labels,
+                    label_names=("provider", "model_name"),
+                    amount=int(token_count),
+                    account_id=account_id,
+                )
+        total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
         registry.inc_counter(
             self.TOKENS_TOTAL,
             labels=token_labels,

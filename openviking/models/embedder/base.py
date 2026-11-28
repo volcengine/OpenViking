@@ -467,12 +467,21 @@ class EmbedderBase(ABC):
             return 0.0
         return max(time.monotonic() - self._active_call_started_at, 0.0)
 
+    def record_call_without_usage(self) -> None:
+        """Record a successful provider call whose response omitted token usage."""
+        self.update_token_usage(
+            model_name=self.model_name,
+            provider=self.provider,
+            prompt_tokens=None,
+            completion_tokens=None,
+        )
+
     def update_token_usage(
         self,
         model_name: str,
         provider: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage
@@ -480,15 +489,15 @@ class EmbedderBase(ABC):
         Args:
             model_name: Model name
             provider: Provider name (openai, volcengine, etc.)
-            prompt_tokens: Number of input tokens
-            completion_tokens: Number of output tokens
+            prompt_tokens: Number of input tokens, or None if unknown
+            completion_tokens: Number of output tokens, or None if unknown
             duration_seconds: Wall-clock duration of the embedding provider call in seconds
         """
         self._token_tracker.update(
             model_name=model_name,
             provider=provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
         )
         try:
             from openviking.metrics.datasources import EmbeddingEventDataSource
@@ -501,8 +510,8 @@ class EmbedderBase(ABC):
                 provider=str(provider),
                 model_name=str(model_name),
                 duration_seconds=self._resolve_metrics_duration_seconds(duration_seconds),
-                prompt_tokens=int(prompt_tokens),
-                completion_tokens=int(completion_tokens),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 account_id=getattr(self, "_account_id", None)
                 or (root_context.account_id if root_context is not None else None),
                 source_type=get_ingestion_source_type(),

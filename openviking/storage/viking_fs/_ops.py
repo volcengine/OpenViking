@@ -19,7 +19,14 @@ from openviking.core.namespace import (
     uri_parts,
 )
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log, short_hash
-from openviking.observability.reporting.facts import emit_file_change, file_exists_before
+from openviking.observability.reporting.facts import (
+    emit_file_change,
+    file_exists_before,
+    observe_copy_targets,
+    record_existing_copy_target,
+    report_copied_files,
+    report_indexed_descendant_moves,
+)
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -491,9 +498,10 @@ class _OpsMixin:
         try:
             if is_dir:
                 await self._ensure_descendant_access(old_uri, ctx, action=AclAction.READ)
-            manifest = await self._prepare_transfer_entries(
-                old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
-            )
+            with observe_copy_targets() as observed_targets:
+                manifest = await self._prepare_transfer_entries(
+                    old_uri, new_uri, is_dir=is_dir, move=False, ctx=ctx
+                )
             prepared_vectors = None
             if maintain_vectors:
                 prepared_vectors = await self._prepare_vector_store_uris(
@@ -560,6 +568,9 @@ class _OpsMixin:
                     "restored": vector_result.restored,
                     "batches": vector_result.batches,
                 }
+            report_copied_files(
+                manifest, observed_targets, ctx, copy_semantic_sidecars=copy_semantic_sidecars
+            )
             logger.debug(
                 "Filesystem transfer completed: operation_id=%s operation=copy object_type=%s recursive=%s result=success",
                 short_hash(str(operation_id)),
@@ -583,6 +594,7 @@ class _OpsMixin:
             raise
         if bool(stat.get("isDir", False)) != is_dir:
             raise InvalidArgumentError(f"transfer source and target types differ: {uri}")
+        record_existing_copy_target(uri)
 
     async def _prepare_transfer_entries(
         self,
@@ -969,6 +981,8 @@ class _OpsMixin:
             emit_file_change(
                 new_uri, ctx, "modified", old_uri=old_uri, is_dir=is_dir, operation="move"
             )
+            if is_dir and vector_result is not None:
+                report_indexed_descendant_moves(manifest, old_uri, ctx)
             return result
         finally:
             await self._async_agfs.pathlock_release(lease)

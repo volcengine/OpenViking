@@ -10,6 +10,8 @@ from typing import Optional, Tuple, TypeGuard
 
 from typing_extensions import deprecated
 
+from openviking.observability.events import try_publish_event
+from openviking.observability.reporting.runtime import is_reporting_enabled
 from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import DeletionRecord, UserSummary
 from openviking.server.identity import ResolvedIdentity, Role
@@ -20,6 +22,14 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
     UnauthenticatedError,
 )
+
+
+def _report_registry_change(event: str, account_id: str, user_id: str, change: str, **fields):
+    if is_reporting_enabled():
+        try_publish_event(
+            event,
+            {"account_id": account_id, "user_id": user_id, "change_type": change, **fields},
+        )
 
 
 def _encode_segment(data: str) -> str:
@@ -176,16 +186,21 @@ class APIKeyManager:
     ) -> str | None:
         if not self._issue_user_keys:
             await self._store.create_account(account_id, admin_user_id, lease_ref=lease_ref)
-            return None
-
-        key = generate_api_key(account_id, admin_user_id, seed)
-        await self._store.create_account_with_api_key(
-            account_id, admin_user_id, key, lease_ref=lease_ref
+            key = None
+        else:
+            key = generate_api_key(account_id, admin_user_id, seed)
+            await self._store.create_account_with_api_key(
+                account_id, admin_user_id, key, lease_ref=lease_ref
+            )
+        _report_registry_change("space_change", account_id, "", "created")
+        _report_registry_change(
+            "membership_change", account_id, admin_user_id, "created", role="admin"
         )
         return key
 
     async def delete_account(self, account_id: str) -> None:
         await self._store.delete_account(account_id)
+        _report_registry_change("space_change", account_id, "", "deleted")
 
     async def register_user(
         self,
@@ -196,10 +211,11 @@ class APIKeyManager:
     ) -> str | None:
         if not self._issue_user_keys:
             await self._store.create_user(account_id, user_id, role)
-            return None
-
-        key = generate_api_key(account_id, user_id, seed)
-        await self._store.create_user_with_api_key(account_id, user_id, role, key)
+            key = None
+        else:
+            key = generate_api_key(account_id, user_id, seed)
+            await self._store.create_user_with_api_key(account_id, user_id, role, key)
+        _report_registry_change("membership_change", account_id, user_id, "created", role=str(role))
         return key
 
     async def regenerate_key(self, account_id, user_id, seed=None, *, expected_api_key=None):
@@ -263,7 +279,13 @@ class APIKeyManager:
         return await self._store.ensure_trusted_identities(identities)
 
     async def begin_deletion(self, account_id, user_id, **owner):
-        return await self._store.begin_deletion(account_id, user_id, **owner)
+        deletion, created = await self._store.begin_deletion(account_id, user_id, **owner)
+        if created:
+            if user_id is None:
+                _report_registry_change("space_change", account_id, "", "deleted")
+            else:
+                _report_registry_change("membership_change", account_id, user_id, "deleted")
+        return deletion, created
 
     async def replace_deletion_task(self, account_id, user_id, **owner):
         return await self._store.replace_deletion_task(account_id, user_id, **owner)
@@ -389,6 +411,7 @@ class APIKeyManager:
 
     async def set_role(self, account_id, user_id, role):
         await self._store.set_role(account_id, user_id, role)
+        _report_registry_change("membership_change", account_id, user_id, "updated", role=str(role))
 
     async def create_group(self, account_id, group_id):
         return await self._store.create_group(account_id, group_id)
