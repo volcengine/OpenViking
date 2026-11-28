@@ -740,6 +740,17 @@ export class PersonalAgentDaemon {
   handleConnectorStatus(status) {
     if (this.shuttingDown) return;
     const { connector, failures } = status;
+    // Windows ends a session by terminating its processes. A Connector that
+    // went down that way is not unavailable, and no retry can start while the
+    // session logs off: stop instead of recording an error and reconnecting.
+    if (status.status === 'session_end') {
+      this.logger.info('connector_session_ended', {
+        connector, code: status.code, signal: status.signal,
+        reportedCode: status.reportedCode, reportedSignal: status.reportedSignal,
+      });
+      void this.shutdown('session_end', 0);
+      return;
+    }
     if (status.status === 'recovered') {
       this.logger.info('connector_recovered', { connector, failures });
       this.recordSystemActivity('system.connector_recovered', {
@@ -752,11 +763,16 @@ export class PersonalAgentDaemon {
     const error = safeError(status.error || `exit ${status.code ?? status.signal ?? 'unknown'}`);
     this.logger.error('connector_failed', {
       connector, code: status.code, signal: status.signal, failures, retryInMs: status.retryInMs, error,
+      ...(status.stderr ? { stderr: status.stderr } : {}),
     });
+    // The summary is read at a glance; the whole reason stays in the log and in
+    // the activity detail.
+    const brief = error.length > 300 ? `${error.slice(0, 300)}…` : error;
     this.recordSystemActivity('system.connector_failed', {
-      summary: `${connector} Connector 不可用，${Math.ceil(status.retryInMs / 1000)} 秒后重连：${error}`,
+      summary: `${connector} Connector 不可用，${Math.ceil(status.retryInMs / 1000)} 秒后重连：${brief}`,
       status: 'FAILED',
-      metadata: { connector, code: status.code, signal: status.signal, failures, retryInMs: status.retryInMs },
+      metadata: { connector, code: status.code, signal: status.signal, failures, retryInMs: status.retryInMs, error,
+        ...(status.stderr ? { stderr: status.stderr } : {}) },
     });
   }
 
