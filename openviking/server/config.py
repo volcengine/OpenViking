@@ -463,6 +463,10 @@ class AccountStoreConfig(BaseModel):
 
     provider: str = "file"
     params: Dict[str, Any] = Field(default_factory=dict)
+    bootstrap_default_account: bool = Field(
+        default=True,
+        description="Create the default account record on startup when cluster resources are valid.",
+    )
 
     @field_validator("provider")
     @classmethod

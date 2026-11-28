@@ -3,6 +3,7 @@
 
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -72,6 +73,34 @@ async def make_request(
         if root is None:
             request.app.state.api_key_manager = None
     return request
+
+
+@pytest.mark.parametrize("plugin_type", [ApiKeyAuthPlugin, TrustedAuthPlugin])
+@pytest.mark.parametrize(
+    ("account_store", "valid_resources", "expected"),
+    [({}, True, ["default"]), ({}, False, []), ({"bootstrap_default_account": False}, True, [])],
+)
+async def test_default_account_bootstrap_opt_out(
+    plugin_type, account_store, valid_resources, expected, monkeypatch
+):
+    module = sys.modules[plugin_type.__module__]
+    monkeypatch.setattr(module, "get_openviking_config", object)
+    monkeypatch.setattr(module, "has_valid_cluster_resources", lambda _: valid_resources)
+    service = SimpleNamespace(viking_fs=SimpleNamespace(agfs=InMemoryAGFS(), acl_manager=None))
+    app = SimpleNamespace(state=SimpleNamespace(service_name="deployment"))
+    config = ServerConfig(
+        root_api_key="root", account_store=account_store, trusted_identity_flush_interval_seconds=0
+    )
+    plugin = plugin_type()
+    await plugin.initialize(app, service, config)
+    try:
+        manager = app.state.api_key_manager
+        assert [item["account_id"] for item in await manager.list_accounts()] == expected
+        if not expected:
+            await manager.create_account("default", "admin")
+            assert [item["account_id"] for item in await manager.list_accounts()] == ["default"]
+    finally:
+        await plugin.shutdown()
 
 
 @pytest.mark.parametrize("groups", [(), ("team",)])

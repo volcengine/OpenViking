@@ -186,7 +186,10 @@ class ApiKeyAuthPlugin(AuthPlugin):
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,
             account_store_watch_interval_seconds=config.api_key_watch_interval_seconds,
-            bootstrap_default_account=has_valid_cluster_resources(get_openviking_config()),
+            bootstrap_default_account=(
+                config.account_store.bootstrap_default_account
+                and has_valid_cluster_resources(get_openviking_config())
+            ),
             issue_user_keys=True,
         )
         await manager.load()
