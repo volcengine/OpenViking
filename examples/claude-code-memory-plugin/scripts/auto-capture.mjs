@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
+import { readCaptureTurns, sanitizeCapturedText } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -242,21 +242,14 @@ async function main({ cfg, input, cwd }) {
     return;
   }
 
-  let transcriptContent;
+  let allTurns;
   try {
-    transcriptContent = await readFile(transcriptPath, "utf-8");
+    allTurns = await readCaptureTurns(transcriptPath, cfg);
   } catch (err) {
     logError("transcript_read", err);
     return;
   }
 
-  if (!transcriptContent.trim()) {
-    log("skip", { stage: "transcript_read", reason: "empty transcript" });
-    return;
-  }
-
-  const messages = parseTranscript(transcriptContent);
-  const allTurns = extractCaptureTurns(messages, cfg);
   if (allTurns.length === 0) {
     log("skip", { stage: "transcript_parse", reason: "no user/assistant turns found" });
     return;

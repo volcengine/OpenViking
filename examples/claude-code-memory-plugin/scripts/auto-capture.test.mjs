@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { readRequestBody, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { extractCaptureTurns } from "./cc-transcript.mjs";
@@ -369,6 +369,57 @@ test("tool output is reported verbatim so the server can externalize it", async 
     const result = toolParts.find((part) => part.tool_status === "completed");
     assert.equal(result.tool_name, "Read");
     assert.equal(result.tool_output, output);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop streams JSONL and preserves tool result names across lines", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-stream-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const preload = join(root, "reject-whole-transcript.mjs");
+
+  try {
+    await writeToolTranscript(transcriptPath, "résultat");
+    // Keep the usual regression small while exercising the real Stop hook
+    // when a single string cannot represent the transcript.
+    await writeFile(preload, `
+      import fs from "node:fs/promises";
+      import { syncBuiltinESMExports } from "node:module";
+      const readFile = fs.readFile;
+      fs.readFile = (path, ...args) => {
+        if (path === ${JSON.stringify(transcriptPath)}) {
+          return Promise.reject(Object.assign(new Error("transcript is too large"), {
+            code: "ERR_STRING_TOO_LONG",
+          }));
+        }
+        return readFile(path, ...args);
+      };
+      syncBuiltinESMExports();
+    `);
+    const parts = await captureToolResult(root, transcriptPath, "capture-stream", {
+      NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+    });
+    const result = parts.find((part) => part.tool_status === "completed");
+    assert.equal(result?.tool_name, "Read");
+    assert.equal(result?.tool_output, "résultat");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop still reads a legacy pretty-printed transcript array", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-legacy-array-"));
+  const transcriptPath = join(root, "transcript.json");
+  try {
+    await writeToolTranscript(transcriptPath, "legacy output");
+    const lines = await readFile(transcriptPath, "utf-8");
+    const messages = lines.split("\n").map((line) => JSON.parse(line));
+    await writeFile(transcriptPath, "\n" + JSON.stringify(messages, null, 2));
+    const parts = await captureToolResult(root, transcriptPath, "capture-legacy-array");
+    const result = parts.find((part) => part.tool_status === "completed");
+    assert.equal(result?.tool_name, "Read");
+    assert.equal(result?.tool_output, "legacy output");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
