@@ -109,9 +109,19 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       await fs.promises.writeFile(tempPath, JSON.stringify({ version: 2, sessions: persisted, lastSaved: Date.now() }, null, 2), "utf8")
       await fs.promises.rename(tempPath, statePath)
       log("DEBUG", "persistence", "Session state saved", { count: sessions.size })
+      return true
     } catch (error) {
       log("ERROR", "persistence", "Failed to save session state", { error: error?.message })
+      return false
     }
+  }
+
+  function checkpointCapture() {
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    return enqueueSave()
   }
 
   function debouncedSaveState() {
@@ -373,6 +383,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     getMappedSessionId,
     getCompactedAt,
     takeHistoryPointer,
+    checkpointCapture,
     commitSession,
     flushAll,
     flushSession,

@@ -300,8 +300,13 @@ export async function captureV2Context(ctx, sessionManager, cursors, sessionID) 
     lastCaptured = message.id
   }
   if (!lastCaptured) return
+  if (lastCaptured !== cursor) {
+    // If the host drops the old context after compaction, the pending
+    // messages must survive a restart even when the ended event never runs.
+    if (!(await sessionManager.checkpointCapture())) return
+    await writeCursor(ctx, sessionID, lastCaptured)
+  }
   cursors.set(sessionID, lastCaptured)
-  if (lastCaptured !== cursor) await writeCursor(ctx, sessionID, lastCaptured)
 }
 
 async function readCursor(ctx, sessionID) {

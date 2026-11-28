@@ -1,6 +1,11 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { createMemorySessionManager } from "../lib/memory-session.mjs"
+import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs"
 import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
 
@@ -15,6 +20,7 @@ function runtimeFixture(overrides = {}) {
       config: { mcp: { enabled: true }, recall: { enabled: true } },
       sessionManager: {
         handleEvent: async (event) => events.push(event),
+        checkpointCapture: async () => true,
         flushSession: async () => {},
         flushAll: async () => {},
       },
@@ -256,7 +262,10 @@ test("captureV2Context advances a per-session cursor and preserves tool parts", 
     },
   ]
   const ctx = { session: { context: async () => messages } }
-  const manager = { handleEvent: async (event) => events.push(event) }
+  const manager = {
+    handleEvent: async (event) => events.push(event),
+    checkpointCapture: async () => true,
+  }
   const cursors = new Map()
 
   await captureV2Context(ctx, manager, cursors, "ses_1")
@@ -274,7 +283,10 @@ test("a trailing assistant message can be captured when its content becomes avai
   const assistant = { id: "msg_assistant", type: "assistant", content: [] }
   const messages = [{ id: "msg_user", type: "user", text: "question" }, assistant]
   const ctx = { session: { context: async () => messages }, storage: new Map() }
-  const manager = { handleEvent: async (event) => events.push(event) }
+  const manager = {
+    handleEvent: async (event) => events.push(event),
+    checkpointCapture: async () => true,
+  }
 
   await captureV2Context(ctx, manager, new Map(), "ses_1")
   assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_user"])
@@ -360,6 +372,89 @@ test("event loop handles only sessions that belong to this location", async () =
     ["session.created", "session.idle", "session.idle"],
   )
   assert.equal(handled.filter((event) => event.type === "message.updated").length, 2)
+})
+
+test("v2 leaves the cursor retryable when the local checkpoint fails", async () => {
+  const { ctx } = contextFixture(conversation)
+  ctx.storage = new Map()
+  const cursors = new Map()
+  const { runtime } = runtimeFixture()
+  const manager = runtime.sessionManager
+  manager.checkpointCapture = async () => false
+  await captureV2Context(ctx, manager, cursors, "ses_1")
+  assert.equal(cursors.has("ses_1"), false)
+  assert.equal(ctx.storage.size, 0)
+
+  manager.checkpointCapture = async () => true
+  await captureV2Context(ctx, manager, cursors, "ses_1")
+  assert.equal(cursors.get("ses_1"), "msg_assistant")
+  assert.deepEqual([...ctx.storage.values()], ["msg_assistant"])
+})
+
+test("v2 compaction preserves captured messages across a restart before the ended event", async () => {
+  const beforeRestart = await mkdtemp(join(tmpdir(), "ov-oc-cursor-before-"))
+  const afterRestart = await mkdtemp(join(tmpdir(), "ov-oc-cursor-after-"))
+  const stateFile = "openviking-session-state.json"
+  const sessionID = "session-compacts"
+  const received = []
+
+  try {
+    await withMockOpenViking(async (req, res) => {
+      if (req.url === "/health") return writeJson(res, { status: "ok" })
+      if (req.url?.endsWith("/messages/batch")) {
+        received.push(...(await readRequestBody(req)).messages)
+        return writeJson(res, { status: "ok", result: { accepted: true } })
+      }
+      writeJson(res, { status: "ok", result: { pending_tokens: 0 } })
+    }, async (endpoint) => {
+      const config = {
+        endpoint,
+        autoCapture: true,
+        captureAssistantTurns: true,
+        captureMode: "semantic",
+        commitTokenThreshold: 0,
+        mcp: { enabled: false },
+        recall: { enabled: false },
+      }
+      const first = createMemorySessionManager({ config, pluginRoot: beforeRestart })
+      const { runtime } = runtimeFixture({ config, sessionManager: first })
+      const { ctx, hooks } = contextFixture(conversation)
+      const storage = new Map()
+      ctx.storage = {
+        get: (key) => storage.get(key),
+        set: async (key, value) => {
+          storage.set(key, value)
+          // A restart is only entitled to see bytes written when the host
+          // cursor was published, with no debounced save or cleanup afterward.
+          const snapshot = await readFile(join(beforeRestart, stateFile)).catch((error) => {
+            if (error.code !== "ENOENT") throw error
+          })
+          if (snapshot) await writeFile(join(afterRestart, stateFile), snapshot)
+        },
+      }
+      const dispose = await startV2Plugin(ctx, runtime, { pluginRoot })
+      try {
+        await hooks.compaction({ sessionID })
+        assert.deepEqual([...storage.values()], ["msg_assistant"])
+        assert.deepEqual(received, [], "compaction hook should not do network writes")
+
+        const restarted = createMemorySessionManager({ config, pluginRoot: afterRestart })
+        await restarted.init()
+        // Host context no longer contains the pre-compaction conversation.
+        await restarted.handleEvent({ type: "session.idle", sessionID })
+        await restarted.flushAll()
+        assert.deepEqual(received.map(({ role, content }) => ({ role, content })), [
+          { role: "user", content: "question" },
+          { role: "assistant", content: "answer" },
+        ])
+      } finally {
+        await dispose()
+        await first.flushAll()
+      }
+    })
+  } finally {
+    await Promise.all([beforeRestart, afterRestart].map((dir) => rm(dir, { recursive: true, force: true })))
+  }
 })
 
 test("a new plugin instance resumes from the stored capture cursor", async () => {
