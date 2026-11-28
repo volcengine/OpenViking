@@ -148,6 +148,37 @@ def _render_directory_overview(
     return render("\n".join(lines), partial=partial, summary=directory_summary)
 
 
+_PARTIAL_SUMMARY_SEP = "\n"
+
+def _partition_partial_summaries(partials: list[str], budget: int) -> list[list[str]]:
+    """Group consecutive partials so each join stays within *budget*.
+
+    A group always has at least one partial. If no neighbor fits, pairs are
+    forced so a later merge level still reduces the list.
+    """
+    if len(partials) <= 1:
+        return [partials] if partials else []
+
+    groups: list[list[str]] = []
+    current: list[str] = []
+    current_size = 0
+    sep_len = len(_PARTIAL_SUMMARY_SEP)
+    for partial in partials:
+        extra = len(partial) if not current else sep_len + len(partial)
+        if current and current_size + extra > budget:
+            groups.append(current)
+            current = [partial]
+            current_size = len(partial)
+        else:
+            current.append(partial)
+            current_size += extra
+    if current:
+        groups.append(current)
+    if len(groups) == len(partials):
+        return [partials[i : i + 2] for i in range(0, len(partials), 2)]
+    return groups
+
+
 async def generate_directory_semantics(
     dir_uri: str,
     entries: Mapping[str, Mapping[str, str]],
@@ -210,7 +241,25 @@ async def generate_directory_semantics(
             partials = [partial for partial in results if partial]
             summary = partials[0] if partials else ""
             if len(partials) > 1:
-                summary = await summarize(partials) or summary
+                remaining = list(partials)
+                while len(remaining) > 1:
+                    groups = _partition_partial_summaries(remaining, budget)
+                    if len(groups) == 1:
+                        remaining = [await summarize(groups[0]) or groups[0][0]]
+                        break
+                    logger.info(
+                        "Merging %s partial directory summaries for %s in %s budgeted groups",
+                        len(remaining),
+                        safe_uri_for_log(dir_uri),
+                        len(groups),
+                    )
+                    remaining = [
+                        group[0]
+                        if len(group) == 1
+                        else (await summarize(group) or group[0])
+                        for group in groups
+                    ]
+                summary = remaining[0] if remaining else ""
         else:
             if over_budget:
                 child_material = "\n".join(
