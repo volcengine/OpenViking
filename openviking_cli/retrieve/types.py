@@ -289,6 +289,10 @@ class MatchedContext:
     # Recall-stage vector score and time factor, retained after model rerank.
     origin_score: Optional[float] = None
     time_score: Optional[float] = None
+    # Populated only for declared Item roots; ordinary hits keep their protocol.
+    item_uuid: Optional[str] = None
+    item_attrs: Optional[Dict[str, str]] = None
+    item_extra_info: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -386,6 +390,11 @@ class FindResult:
         if ctx.origin_score is not None:
             result["origin_score"] = ctx.origin_score
             result["time_score"] = ctx.time_score
+        if ctx.item_uuid is not None:
+            result["item_uuid"] = ctx.item_uuid
+            result["item_attrs"] = ctx.item_attrs or {}
+            if ctx.item_extra_info is not None:
+                result["item_extra_info"] = ctx.item_extra_info
         return result
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:
@@ -440,6 +449,9 @@ class FindResult:
                 time_score=d.get("time_score"),
                 match_reason=d.get("match_reason", ""),
                 search_tags=list(d.get("tags") or d.get("search_tags") or []),
+                item_uuid=d.get("item_uuid"),
+                item_attrs=d.get("item_attrs"),
+                item_extra_info=d.get("item_extra_info"),
             )
 
         return cls(

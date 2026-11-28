@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 from openviking.observability.log_safety import safe_path_for_log
@@ -23,10 +24,13 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
 from openviking.utils.search_filters import VALID_TIME_FIELDS
 from openviking_cli.utils.logger import get_logger
 
+from .vikingdb_catalog import is_account_sharded
+from .vikingdb_item_collection import VikingDBItemCollectionMixin
+
 logger = get_logger(__name__)
 
 
-class VolcengineApiKeyCollection(ICollection):
+class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
     """VikingDB data-plane collection implementation using Bearer API key."""
 
     def __init__(
@@ -42,10 +46,16 @@ class VolcengineApiKeyCollection(ICollection):
         if not resolved_host:
             raise ValueError("host or region is required for Volcengine API key data-plane access")
         self.data_client = ClientForDataApiWithApiKey(api_key, resolved_host)
-        self.meta_data = meta_data if meta_data is not None else {}
+        self.meta_data = deepcopy(meta_data) if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
         self.index_name = self.meta_data.get("IndexName", "default")
+        self._initialize_item_collection()
+
+    def _item_metadata(self) -> None:
+        # The API-key data plane validates the pre-created schema itself.
+        # Do not require control-plane metadata to issue Item operations.
+        return None
 
     @staticmethod
     def _build_response_error(response: Any, action: str) -> ConnectionError:
@@ -176,7 +186,20 @@ class VolcengineApiKeyCollection(ICollection):
         safe_data = self._sanitize_payload(data)
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
+        has_explicit_partition = "partition" in safe_data
+        safe_data = self._prepare_data_request(path, safe_data)
         response = self.data_client.do_req("POST", path, req_body=safe_data)
+        if (
+            response.status_code == 400
+            and not has_explicit_partition
+            and "partition" in safe_data
+            and not is_account_sharded(self.meta_data)
+            and "partition_by not found" in response.text
+        ):
+            # The data-plane API key cannot describe an existing index. Its
+            # unsharded endpoint may reject an inferred partition.
+            safe_data = {key: value for key, value in safe_data.items() if key != "partition"}
+            response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)
         try:
@@ -257,6 +280,8 @@ class VolcengineApiKeyCollection(ICollection):
         )
 
     def get_meta_data(self, *, raise_on_error: bool = False):
+        if self.meta_data.get("Fields"):
+            return deepcopy(self.meta_data)
         from openviking.storage.collection_schemas import CollectionSchemas
 
         schema = CollectionSchemas.context_collection(
@@ -268,7 +293,11 @@ class VolcengineApiKeyCollection(ICollection):
             "CollectionName": self.collection_name,
             "IndexName": self.index_name,
             "Description": "data-plane only backend",
-            "Fields": schema.get("Fields", []),
+            "Fields": [
+                *schema.get("Fields", []),
+                {"FieldName": "item_uuids", "FieldType": "list<string>"},
+                {"FieldName": "item_attrs", "FieldType": "list<string>"},
+            ],
             "ScalarIndex": schema.get("ScalarIndex", []),
             "FullText": schema.get("FullText", []),
         }
@@ -324,35 +353,47 @@ class VolcengineApiKeyCollection(ICollection):
             **self._base_data_payload(),
             "data": data_list,
             "ttl": ttl,
-            "ignore_unknown_fields": True,
+            # Explicit declarations require Item fields. Automatic Skill declarations
+            # are optional for older API-key collections without schema metadata.
+            "ignore_unknown_fields": not any(
+                row.get("item_uuids") and row.get("context_type") != "skill" for row in data_list
+            ),
         }
         return self._data_post(path, data)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/update"
         data = {
             **self._base_data_payload(),
             "data": data_list,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None:
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
-    def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
+    def fetch_data(
+        self, primary_keys: List[Any], *, partition_by: str | None = None
+    ) -> FetchDataInCollectionResult:
         path = "/api/vikingdb/data/fetch_in_collection"
         data = {
             **self._base_data_payload(),
             "ids": primary_keys,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None:
+            data["partition_by"] = partition_by
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/delete"
         data = {
             **self._base_data_payload(),
             "ids": primary_keys,
         }
+        if partition_by is not None:
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
     def delete_all_data(self):

@@ -6,6 +6,10 @@ from volcengine.base.Request import Request
 
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
+from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+    VolcengineApiKeyCollection,
+)
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
@@ -22,6 +26,100 @@ from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
     VolcengineConfig,
 )
+
+
+@pytest.mark.parametrize(
+    ("backend", "shard_by"),
+    [
+        ("private", "account_id"),
+        ("private", None),
+        ("api_key", None),
+        ("signed", "account_id"),
+        ("signed", None),
+    ],
+)
+def test_vikingdb_ordinary_queries_route_by_schema_and_preserve_filters(backend, shard_by):
+    meta = {"CollectionName": "context"}
+    if shard_by is not None:
+        meta["ShardBy"] = shard_by
+    if backend == "private":
+        collection = VikingDBCollection("https://unused.invalid", meta_data=meta)
+    elif backend == "api_key":
+        collection = VolcengineApiKeyCollection("test-key", host="unused.invalid", meta_data=meta)
+    else:
+        collection = VolcengineCollection("test-ak", "test-sk", "cn-beijing", meta_data=meta)
+
+    calls = []
+
+    def record(method, path, *, req_body):
+        calls.append((method, path, req_body))
+        return SimpleNamespace(status_code=200, json=lambda: {"result": {}})
+
+    if backend == "private":
+        collection.client = SimpleNamespace(do_req=record)
+    else:
+        collection.data_client = SimpleNamespace(do_req=record)
+
+    account = {"op": "must", "field": "account_id", "conds": ["tenant-a"]}
+    other_filter = {"op": "must_not", "field": "level", "conds": [0]}
+    filters = {"op": "and", "conds": [account, other_filter]}
+    collection.search_by_vector("index", dense_vector=[1.0], filters=filters)
+    collection.search_by_id("index", id="record", filters=filters)
+    collection.search_by_multimodal("index", text="match", filters=filters)
+    collection.search_by_random("index", filters=filters)
+    collection.search_by_keywords("index", query="match", filters=filters)
+    collection.search_by_scalar("index", field="level", filters=filters)
+    collection.aggregate_data("index", filters=filters)
+
+    assert [path.rsplit("/", 1)[-1] for _, path, _ in calls] == [
+        "vector",
+        "id",
+        "multi_modal",
+        "random",
+        "keywords",
+        "scalar",
+        "agg",
+    ]
+    for _, _, body in calls:
+        if shard_by == "account_id" or backend == "api_key":
+            assert body["partition"] == "tenant-a"
+        else:
+            assert "partition" not in body
+        assert "partition_by" not in body
+        assert body["filter"] == filters
+
+    if not (backend == "private" and shard_by == "account_id"):
+        cross_account = {
+            "op": "or",
+            "conds": [account, {"op": "must", "field": "account_id", "conds": ["tenant-b"]}],
+        }
+        collection.aggregate_data("index", filters=cross_account)
+        assert "partition" not in calls[-1][2]
+
+
+def test_api_key_retries_ordinary_query_when_unsharded_index_rejects_inferred_partition():
+    collection = VolcengineApiKeyCollection(
+        "test-key", host="unused.invalid", meta_data={"CollectionName": "context"}
+    )
+    calls = []
+
+    def record(method, path, *, req_body):
+        calls.append(req_body)
+        if "partition" in req_body:
+            return SimpleNamespace(status_code=400, text="invalid request, partition_by not found")
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"result": {"data": [{"id": "existing", "score": 1}]}},
+        )
+
+    collection.data_client = SimpleNamespace(do_req=record)
+    account = {"op": "must", "field": "account_id", "conds": ["tenant-a"]}
+    result = collection.search_by_vector("index", dense_vector=[1.0], filters=account)
+
+    assert [item.id for item in result.data] == ["existing"]
+    assert len(calls) == 2
+    assert calls[0] == {**calls[1], "partition": "tenant-a"}
+    assert calls[1]["filter"] == account
 
 
 def test_console_client_prepare_request_includes_session_token():

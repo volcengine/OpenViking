@@ -125,6 +125,14 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     viking_fs.read = AsyncMock(side_effect=NotFoundError("history", "file"))
     viking_fs.tree = AsyncMock(return_value=[])
     viking_fs.write_file = AsyncMock()
+    viking_fs._ensure_access = AsyncMock()
+    viking_fs._get_vector_store.return_value.catalog_execute = AsyncMock(
+        return_value={
+            "item_uuid": "uuid-skill",
+            "uri": "viking://agent/skills/dict-skill",
+            "item_attrs": [],
+        }
+    )
     viking_fs._async_agfs.pathlock_acquire_tree = AsyncMock(return_value={"lease_ref": "test"})
     viking_fs._async_agfs.pathlock_release = AsyncMock()
 

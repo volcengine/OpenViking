@@ -477,6 +477,11 @@ async def vectorize_directory_meta(
             )
             _apply_ingest_options(msg_abstract, ingest_options)
             if msg_abstract:
+                item_root = ingest_options.item_root if ingest_options else None
+                if item_root and item_root["uri"].rstrip("/") == uri.rstrip("/"):
+                    msg_abstract.context_data.update(
+                        item_uuids=item_root["item_uuids"], item_attrs=item_root["item_attrs"]
+                    )
                 try:
                     enqueued = await _enqueue_embedding_message(
                         embedding_queue,

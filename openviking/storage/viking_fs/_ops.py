@@ -307,7 +307,10 @@ class _OpsMixin:
 
         async def _finish_missing_delete() -> Dict[str, Any]:
             """Clean orphan index records for an idempotent delete."""
+            from openviking.storage.catalog import delete_catalog_subtree
+
             estimated_count = await _delete_vectors()
+            await delete_catalog_subtree(self, target_uri, ctx)
             logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
 
@@ -384,6 +387,9 @@ class _OpsMixin:
                 raise
             # Add estimated_deleted_count to the result
             emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
+            from openviking.storage.catalog import delete_catalog_subtree
+
+            await delete_catalog_subtree(self, target_uri, ctx)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:
@@ -758,6 +764,12 @@ class _OpsMixin:
             recursive=is_dir,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
         )
+        if is_dir:
+            from openviking.storage.catalog import delete_catalog_subtree
+
+            await delete_catalog_subtree(
+                self, self._path_to_uri(path, ctx=ctx), self._ctx_or_default(ctx)
+            )
 
     async def mv(
         self,
@@ -911,7 +923,15 @@ class _OpsMixin:
                 raise
 
             # Update or remove source VectorDB records before deleting the source.
+            catalog_undo = None
             try:
+                from openviking.storage.catalog import (
+                    move_catalog_subtree,
+                )
+
+                catalog_undo = await move_catalog_subtree(
+                    self, old_uri, new_uri, self._ctx_or_default(ctx)
+                )
                 vector_result = None
                 if vector_mode == "transfer":
                     if prepared_vectors is not None:
@@ -925,6 +945,18 @@ class _OpsMixin:
                 elif vector_mode != "none":
                     raise ValueError(f"unsupported move vector mode: {vector_mode}")
             except Exception:
+                if catalog_undo is not None:
+                    try:
+                        from openviking.storage.catalog import restore_catalog_move
+
+                        await restore_catalog_move(self, catalog_undo, self._ctx_or_default(ctx))
+                    except Exception as _log_error:
+                        logger.warning(
+                            "Failed to restore Catalog after move failure: %s -> %s error_type=%s",
+                            safe_uri_for_log(str(old_uri)),
+                            safe_uri_for_log(str(new_uri)),
+                            type(_log_error).__name__,
+                        )
                 try:
                     await self._cleanup_transfer_target(
                         new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease

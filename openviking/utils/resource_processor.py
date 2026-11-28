@@ -23,6 +23,7 @@ from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
     VECTORS_ONLY,
@@ -31,6 +32,13 @@ from openviking.resource.processing_mode import (
 )
 from openviking.server.identity import RequestContext
 from openviking.storage.acl import AclAction, AclSpec, AclUpdate
+from openviking.storage.catalog import (
+    ITEM_ATTRS_OMITTED,
+    declare_item,
+    require_existing_item_root,
+    validate_item_declaration,
+    validate_resource_item_update,
+)
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.expr import And, Eq, PathScope
 from openviking.storage.index_action import FieldPatch
@@ -51,7 +59,7 @@ from openviking.utils.git_auth import is_git_https_url
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.log_correlation import log_correlation
 from openviking.utils.summarizer import Summarizer
-from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import VikingURI, get_logger
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.storage import StoragePath
@@ -423,10 +431,13 @@ class ResourceProcessor:
         source_metadata: Optional[Dict[str, str]],
         source_complete: bool = True,
         target_was_reserved: bool = False,
+        as_item: bool = False,
+        item_attrs: Any = ITEM_ATTRS_OMITTED,
     ) -> Any:
         """Resolve and commit one artifact through the canonical update plan."""
         from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
         from openviking.storage.context_update_plan import (
+            ContentTreeOperation,
             build_context_update_plan_from_snapshot,
             execute_content_tree_actions,
         )
@@ -569,6 +580,23 @@ class ResourceProcessor:
                     ingest_options=ingest_options,
                     source_metadata=source_metadata,
                     root_is_file=root_is_file,
+                )
+            removed_directories = [
+                root_uri.rstrip("/") + "/" + action.relative_path
+                for action in context_plan.content_tree_actions
+                if action.old_kind == "directory"
+                and action.operation
+                in {ContentTreeOperation.DELETE, ContentTreeOperation.REPLACE_KIND}
+            ]
+            if target_preexisting and (as_item or removed_directories):
+                await validate_resource_item_update(
+                    self.vikingdb,
+                    root_uri,
+                    ctx,
+                    as_item=as_item,
+                    item_attrs=item_attrs,
+                    is_dir=not root_is_file,
+                    directory_uris=removed_directories,
                 )
         except Exception:
             telemetry.set(
@@ -853,6 +881,8 @@ class ResourceProcessor:
         acl: AclSpec | Dict[str, Any] | None = None,
         target_validator: Optional[Callable[[str, RequestContext], Awaitable[None]]] = None,
         target_was_reserved: bool = False,
+        as_item: bool = False,
+        item_attrs: Any = ITEM_ATTRS_OMITTED,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -870,6 +900,7 @@ class ResourceProcessor:
         """
         strict = bool(kwargs.get("strict", False))
         parse_failures = []
+        validate_item_declaration(as_item, item_attrs)
         result = {
             "status": "success",
             "errors": [],
@@ -1116,25 +1147,37 @@ class ResourceProcessor:
                                 root_is_file=root_is_file,
                                 target_validator=target_validator,
                             )
-                            newly_reserved = True
                             result["root_uri"] = root_uri
                             if root_uri != candidate_uri:
                                 result.setdefault("warnings", []).append(
                                     f"'{candidate_uri}' already exists. Creating '{root_uri}'. "
                                     f"Tip: Use --to <path> to specify exact target."
                                 )
-                    else:
-                        if target_validator is not None:
-                            await target_validator(root_uri, ctx)
+                    elif target_validator is not None:
+                        await target_validator(root_uri, ctx)
+                    dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                    if resource_lock is None:
+                        resource_lock = await self.acquire_resource_lock(
+                            dst_path,
+                            uri=root_uri,
+                            root_is_file=root_is_file,
+                        )
+                    if as_item:
+                        # The first declaration needs a fresh existence check under the lease.
+                        try:
+                            await viking_fs._async_agfs.stat(dst_path, bypass_cache=True)
+                        except AGFSNotFoundError:
+                            pass
+                        else:
+                            if candidate_uri:
+                                raise AGFSAlreadyExistsError(
+                                    f"Auto-named resource target is already occupied: {root_uri}"
+                                )
+                            target_preexisting = True
+                    elif not candidate_uri:
                         target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
-                        if resource_lock is None:
-                            newly_reserved = not target_preexisting
-                            dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                            resource_lock = await self.acquire_resource_lock(
-                                dst_path,
-                                uri=root_uri,
-                                root_is_file=root_is_file,
-                            )
+                    if preacquired_lock is None:
+                        newly_reserved = not target_preexisting
                     if acl is not None:
                         ingest_options = replace(
                             ingest_options,
@@ -1145,6 +1188,28 @@ class ResourceProcessor:
                         artifact_ref, output_store=output_store, viking_fs=viking_fs, ctx=ctx
                     )
                     local_artifact_doc_rel = self._artifact_doc_rel(artifact_ref, temp_uri)
+                    if as_item and target_preexisting:
+                        await require_existing_item_root(self.vikingdb, root_uri, ctx)
+                    # A declaration failure must leave a new target available to retry.
+                    declaration = await declare_item(
+                        viking_fs,
+                        root_uri,
+                        ctx,
+                        as_item=as_item,
+                        item_attrs=item_attrs,
+                        is_dir=not root_is_file,
+                    )
+                    item_root = declaration.get("_item_root") if declaration else None
+                    if item_root:
+                        if (
+                            not kwargs.get("build_index", True)
+                            or normalize_processing_mode(kwargs.get("processing_mode"))
+                            == VECTORS_ONLY
+                        ):
+                            raise InvalidArgumentError(
+                                "A new Item requires indexing its directory root"
+                            )
+                        ingest_options = replace(ingest_options, item_root=item_root)
                     context_update_plan = await self._commit_directory_artifact_with_plan(
                         output_store=artifact_store,
                         artifact_ref=artifact_ref,
@@ -1166,6 +1231,8 @@ class ResourceProcessor:
                         ),
                         source_complete=not bool(parse_failures),
                         target_was_reserved=newly_reserved,
+                        as_item=as_item,
+                        item_attrs=item_attrs,
                     )
                     incremental_noop = target_preexisting and context_update_plan.is_noop()
                     temp_uri = root_uri
@@ -1226,6 +1293,7 @@ class ResourceProcessor:
                 "acl_update": ingest_options.acl_update.model_dump(mode="json")
                 if ingest_options.acl_update
                 else None,
+                **({"item_root": ingest_options.item_root} if ingest_options.item_root else {}),
                 "context_update_plan": (
                     context_update_plan.to_dict() if context_update_plan is not None else None
                 ),
@@ -1298,6 +1366,8 @@ class ResourceProcessor:
             ingest_options = replace(
                 ingest_options, acl_update=AclUpdate.model_validate(prepared["acl_update"])
             )
+        if prepared.get("item_root") is not None:
+            ingest_options = replace(ingest_options, item_root=prepared["item_root"])
         semantic_source = prepared.get("semantic_source")
         context_update_plan_data = prepared.get("context_update_plan")
         context_update_plan = None

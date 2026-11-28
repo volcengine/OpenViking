@@ -42,6 +42,10 @@ class VolcengineConfig(BaseModel):
     data_host: Optional[str] = Field(
         default=None, description="Optional AK/SK data API hostname, without a URL scheme"
     )
+    collection_meta: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Pre-created collection schema supplied by the provisioning service",
+    )
 
 
 class VikingDBConfig(BaseModel):

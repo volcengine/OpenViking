@@ -15,6 +15,11 @@ class IndexManager {
 
   virtual int search(const SearchRequest& req, SearchResult& result) = 0;
 
+  // The native-only visitor runs under the index read lock.
+  virtual void visit_filtered_labels(
+      const std::string& dsl,
+      const std::function<void(uint64_t)>& visitor) = 0;
+
   virtual int search_with_filter_token(const SearchRequest& req,
                                        uint64_t filter_token,
                                        SearchResult& result,

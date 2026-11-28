@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Dict, List
 
 from openviking.storage.vectordb.collection.collection import Collection
@@ -45,6 +46,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         index_name: str,
         console_host: str | None = None,
         data_host: str | None = None,
+        collection_meta: Dict[str, Any] | None = None,
     ):
         super().__init__(collection_name=collection_name, index_name=index_name)
         self._collection: Collection | None = None
@@ -58,6 +60,11 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         self._console_host = console_host
         self._data_host = data_host
         self._project_name = project_name
+        self._collection_meta = deepcopy(collection_meta) if collection_meta is not None else {}
+        for field, expected in (("ProjectName", project_name), ("CollectionName", collection_name)):
+            if self._collection_meta.get(field, expected) != expected:
+                raise ValueError(f"Volcengine collection_meta {field} does not match configuration")
+        self.supports_partition_scope = bool(api_key)
 
     @classmethod
     def from_config(cls, config: Any):
@@ -83,6 +90,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             index_name=config.index_name or "default",
             console_host=cfg.console_host,
             data_host=cfg.data_host,
+            collection_meta=cfg.collection_meta,
         )
 
     def _meta(self) -> Dict[str, Any]:
@@ -92,7 +100,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         }
 
     def _data_plane_meta(self) -> Dict[str, Any]:
-        meta = self._meta()
+        meta = {**deepcopy(self._collection_meta), **self._meta()}
         meta["IndexName"] = self._index_name
         return meta
 
@@ -196,10 +204,12 @@ class VolcengineCollectionAdapter(CollectionAdapter):
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return super()._normalize_record_for_read(record)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         data_list = [self._normalize_record_for_write(item) for item in data_list]
         collection = self.get_collection()
-        result = collection.update_data(data_list)
+        result = collection.update_data(
+            data_list, **({"partition_by": partition_by} if partition_by is not None else {})
+        )
         if isinstance(result, dict):
             updated = result.get("updated")
             primary_keys = result.get("primary_keys")

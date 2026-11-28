@@ -13,8 +13,14 @@ const SEARCH_MIN_TEXT_WIDTH: usize = 32;
 const SEARCH_MAX_ABSTRACT_LINES: usize = 2;
 const SEARCH_MAX_URI_LINES: usize = 2;
 const SEARCH_INDENT: &str = "   ";
-const SEARCH_RESULT_COLLECTION_KEYS: &[&str] =
-    &["memories", "resources", "skills", "tools", "results", "items"];
+const SEARCH_RESULT_COLLECTION_KEYS: &[&str] = &[
+    "memories",
+    "resources",
+    "skills",
+    "tools",
+    "results",
+    "items",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchRenderMode {
@@ -153,9 +159,12 @@ pub async fn find(
     time_field: Option<&str>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    filter: Option<Value>,
     tags: Option<Vec<String>>,
     read_content: bool,
     events_time_decay_protection: Option<String>,
+    search_as_item: bool,
+    aggregation: Option<String>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -171,9 +180,12 @@ pub async fn find(
             time_field.map(|s| s.to_string()),
             level,
             context_type,
+            filter,
             tags,
             read_content,
             events_time_decay_protection,
+            search_as_item,
+            aggregation,
         )
         .await?;
     output_search_results(
@@ -200,9 +212,12 @@ pub async fn search(
     time_field: Option<&str>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    filter: Option<Value>,
     tags: Option<Vec<String>>,
     read_content: bool,
     events_time_decay_protection: Option<String>,
+    search_as_item: bool,
+    aggregation: Option<String>,
     args: Option<Map<String, Value>>,
     output_format: OutputFormat,
     compact: bool,
@@ -222,9 +237,12 @@ pub async fn search(
             time_field.map(|s| s.to_string()),
             level,
             context_type,
+            filter,
             tags,
             read_content,
             events_time_decay_protection,
+            search_as_item,
+            aggregation,
             args.as_ref(),
         )
         .await?;
@@ -568,6 +586,10 @@ fn render_search_result_card(
         }
     }
 
+    if render_item_search_details(object, text_width, lines) {
+        return;
+    }
+
     if split_name_and_description && render_skill_name_and_description(object, text_width, lines) {
         return;
     }
@@ -596,6 +618,74 @@ fn render_search_result_card(
             lines.push(format!("{SEARCH_INDENT}{}", theme::body(line)));
         }
     }
+}
+
+fn render_item_search_details(
+    object: Option<&serde_json::Map<String, Value>>,
+    text_width: usize,
+    lines: &mut Vec<String>,
+) -> bool {
+    let Some(object) = object.filter(|object| object.contains_key("item_uuid")) else {
+        return false;
+    };
+
+    if let Some(item_uuid) = object
+        .get("item_uuid")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!(
+            "{SEARCH_INDENT}{} {}",
+            theme::heading("item_uuid:").bold(),
+            theme::body(item_uuid)
+        ));
+    }
+
+    let attrs = object
+        .get("item_attrs")
+        .and_then(Value::as_object)
+        .map(|attrs| {
+            let mut entries = attrs
+                .iter()
+                .map(|(key, value)| {
+                    let value = value
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value.to_string());
+                    format!("{key}={value}")
+                })
+                .collect::<Vec<_>>();
+            entries.sort();
+            entries.join(", ")
+        })
+        .unwrap_or_default();
+    let label = theme::heading("item_attrs:").bold().to_string();
+    if attrs.is_empty() {
+        lines.push(format!("{SEARCH_INDENT}{label} {}", theme::muted("{}")));
+    } else {
+        let wrapped = wrap_display_text(&attrs, text_width, SEARCH_MAX_ABSTRACT_LINES);
+        if let Some((first, rest)) = wrapped.split_first() {
+            lines.push(format!("{SEARCH_INDENT}{label} {}", theme::body(first)));
+            for line in rest {
+                lines.push(format!("{SEARCH_INDENT}{}", theme::body(line)));
+            }
+        }
+    }
+
+    if let Some(count) = object
+        .get("item_extra_info")
+        .and_then(Value::as_object)
+        .and_then(|extra| extra.get("candidate_members_count"))
+        .and_then(Value::as_u64)
+    {
+        lines.push(format!(
+            "{SEARCH_INDENT}{} {}",
+            theme::heading("candidate_members:").bold(),
+            theme::body(count.to_string())
+        ));
+    }
+    true
 }
 
 fn render_skill_name_and_description(
@@ -1012,12 +1102,10 @@ pub async fn glob(
     tags: &[String],
 ) -> Result<()> {
     let has_fields = fields.is_some();
-    let extra: Option<&[String]> = if has_fields {
-        fields.as_deref()
-    } else {
-        None
-    };
-    let include_tags = fields.as_ref().is_some_and(|items| items.iter().any(|item| item == "tags"))
+    let extra: Option<&[String]> = if has_fields { fields.as_deref() } else { None };
+    let include_tags = fields
+        .as_ref()
+        .is_some_and(|items| items.iter().any(|item| item == "tags"))
         || !tags.is_empty();
     let result = client
         .glob(pattern, uri, node_limit, extra, tags, include_tags)
@@ -1063,7 +1151,9 @@ mod tests {
         let rendered = strip_ansi(&render_search_results_for_table(&results).expect("cards"));
 
         assert!(rendered.starts_with("1 result\nRanked by relevance\n\n"));
-        assert!(rendered.contains("1. memory · Level 1 · semantic 0.800 · time 0.500 · final 0.381"));
+        assert!(
+            rendered.contains("1. memory · Level 1 · semantic 0.800 · time 0.500 · final 0.381")
+        );
         assert!(rendered.contains("viking://user/default/memories/entities/.overview.md"));
         assert!(rendered.contains("Entity memories from user's world."));
         assert!(!rendered.contains("peop\n   le"));
@@ -1351,6 +1441,38 @@ mod tests {
         ));
         assert!(rendered.contains("- 8 major individual awards - 35 career trophies"));
         assert!(!rendered.contains("context_type  uri"));
+    }
+
+    #[test]
+    fn item_search_cards_show_protocol_fields_without_fake_abstract() {
+        let results = json!({
+            "memories": [],
+            "skills": [],
+            "resources": [{
+                "context_type": "resource",
+                "level": 0,
+                "item_uuid": "019a-item-a",
+                "uri": "viking://resources/A",
+                "score": 0.625,
+                "item_attrs": {"kind": "video", "asset_id": "V1"},
+                "item_extra_info": {
+                    "candidate_members_count": 2,
+                    "candidate_members_uri": [
+                        "viking://resources/A/a.md",
+                        "viking://resources/A/b.md"
+                    ]
+                }
+            }],
+            "total": 1
+        });
+
+        let rendered = strip_ansi(&render_search_results_for_table(&results).expect("cards"));
+        assert!(rendered.contains("1. resource · Level 0 · score 0.625"));
+        assert!(rendered.contains("viking://resources/A"));
+        assert!(rendered.contains("item_uuid: 019a-item-a"));
+        assert!(rendered.contains("item_attrs: asset_id=V1, kind=video"));
+        assert!(rendered.contains("candidate_members: 2"));
+        assert!(!rendered.contains("No abstract available."));
     }
 
     #[test]

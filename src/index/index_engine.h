@@ -30,6 +30,9 @@ class IndexEngine {
 
   SearchResult search(const SearchRequest& req);
 
+  void visit_filtered_labels(const std::string& dsl,
+                             const std::function<void(uint64_t)>& visitor);
+
   std::optional<SearchResult> search_with_filter_token(
       const SearchRequest& req, uint64_t filter_token);
 

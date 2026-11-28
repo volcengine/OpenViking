@@ -32,6 +32,8 @@ pub(super) async fn dispatch(
             wait,
             tags,
             tag_mode,
+            as_item,
+            item_attrs,
             acl,
             strict_mode,
             ignore_dirs,
@@ -87,6 +89,8 @@ pub(super) async fn dispatch(
                     resource_args,
                     tags,
                     tag_mode,
+                    as_item,
+                    item_attrs,
                     acl,
                     ctx,
                 )
@@ -539,8 +543,10 @@ pub(super) async fn dispatch(
         Commands::Mkdir {
             uri,
             description,
+            as_item,
+            item_attrs,
             acl,
-        } => handlers::handle_mkdir(uri, description, acl, ctx).await,
+        } => handlers::handle_mkdir(uri, description, as_item, item_attrs, acl, ctx).await,
         Commands::Rm {
             uri,
             recursive,
@@ -768,9 +774,12 @@ pub(super) async fn dispatch(
             before,
             level,
             context_type,
+            filter,
             tags,
             read_content,
             events_time_decay_protection,
+            search_as_item,
+            aggregation,
         } => {
             handlers::handle_find(
                 query,
@@ -782,9 +791,12 @@ pub(super) async fn dispatch(
                 before,
                 level,
                 context_type,
+                filter,
                 tags,
                 read_content,
                 events_time_decay_protection,
+                search_as_item,
+                aggregation,
                 ctx,
             )
             .await
@@ -802,9 +814,12 @@ pub(super) async fn dispatch(
             before,
             level,
             context_type,
+            filter,
             tags,
             read_content,
             events_time_decay_protection,
+            search_as_item,
+            aggregation,
             args,
         } => {
             handlers::handle_search(
@@ -820,9 +835,12 @@ pub(super) async fn dispatch(
                 before,
                 level,
                 context_type,
+                filter,
                 tags,
                 read_content,
                 events_time_decay_protection,
+                search_as_item,
+                aggregation,
                 args,
                 ctx,
             )

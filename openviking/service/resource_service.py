@@ -69,6 +69,7 @@ from openviking.server.user_config import (
 )
 from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
 from openviking.storage.acl import AclAction, AclSpec
+from openviking.storage.catalog import ITEM_ATTRS_OMITTED, validate_item_declaration
 from openviking.storage.expr import And, Eq, In, Or, PathScope
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
@@ -99,6 +100,7 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotInitializedError,
     OpenVikingError,
+    UnimplementedError,
 )
 from openviking_cli.utils import get_logger
 
@@ -155,6 +157,8 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "tags",
         "tag_mode",
         "acl",
+        "as_item",
+        "item_attrs",
         "internal_task",
         "target_validator",
         "on_task_created",
@@ -347,6 +351,8 @@ class ResourceService:
                 "git_head_sha_hint",
                 "resource_lock",
                 "target_was_reserved",
+                "as_item",
+                "item_attrs",
             }:
                 continue
             try:
@@ -927,6 +933,9 @@ class ResourceService:
                 internal_kwargs["create_parent"] = True
             if msg.source_name is not None:
                 internal_kwargs["source_name"] = msg.source_name
+            internal_kwargs["as_item"] = msg.as_item
+            if msg.item_attrs is not None:
+                internal_kwargs["item_attrs"] = msg.item_attrs
             if msg.git_head_sha_hint:
                 # One-shot SHA resolved by the add_resource preflight; lets
                 # the accessor download an immutable revision without a second
@@ -1487,6 +1496,12 @@ class ResourceService:
                 skip_watch_management=not manage_watch,
                 tags=tags,
                 tag_mode=tag_mode,
+                as_item=bool(processor_kwargs.get("as_item", False)),
+                item_attrs=(
+                    dict(processor_kwargs["item_attrs"])
+                    if isinstance(processor_kwargs.get("item_attrs"), dict)
+                    else None
+                ),
                 allow_local_path_resolution=(
                     True
                     if (plan.staged_source is not None or plan.shared_source is not None)
@@ -1805,9 +1820,15 @@ class ResourceService:
         connector_auth_config: Optional[Dict[str, Any]] = None,
         shared_source: Optional["SharedSource"] = None,
         acl: AclSpec | dict[str, Any] | None = None,
+        as_item: bool = False,
+        item_attrs: Any = ITEM_ATTRS_OMITTED,
         **kwargs,
     ) -> Dict[str, Any]:
         """Accept and route a new resource-add request."""
+        normalized_item_attrs = validate_item_declaration(as_item, item_attrs)
+        kwargs["as_item"] = as_item
+        if normalized_item_attrs is not None:
+            kwargs["item_attrs"] = normalized_item_attrs
         internal_fields = sorted(set(kwargs).intersection(_INTERNAL_INGESTION_FIELDS))
         if internal_fields:
             raise InvalidArgumentError(
@@ -2100,6 +2121,11 @@ class ResourceService:
                     "parameters did not route to the Connector integration."
                 )
         if delegate_to_connector:
+            if kwargs.get("as_item", False):
+                raise UnimplementedError(
+                    "Connector-backed add_resource does not support as_item until the "
+                    "platform ingestion protocol is adapted"
+                )
             resolved = connector.resolve_add_type(path, add_type)
             if resolved is None:  # pragma: no cover - should_delegate already resolved it
                 raise InvalidArgumentError(f"'{path}' does not match any Connector source type.")

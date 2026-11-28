@@ -32,6 +32,7 @@ from openviking.core.namespace import (
     uri_parts,
     visible_roots,
 )
+from openviking.core.search_args import keyword_recall_options
 from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log, short_hash
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
@@ -48,6 +49,7 @@ from openviking.storage.acl import (
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, Range, RawDSL
 from openviking.storage.scope_filter import build_scope_filter, merge_filters
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -64,7 +66,11 @@ from openviking.utils.tags import (
 )
 from openviking.utils.time_decay import parse_duration_ms
 from openviking.utils.time_utils import get_current_timestamp
-from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    PermissionDeniedError,
+    UnimplementedError,
+)
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
@@ -166,6 +172,7 @@ class _PreparedVectorTransfer:
     batches: int
     affected_target_ids: tuple[str, ...] = ()
     target_acl_fields: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    target_item_fields: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -405,6 +412,11 @@ class _SingleAccountBackend:
             self._mode,
         )
 
+    def _partition_kwargs(self) -> Dict[str, Any]:
+        if getattr(self._adapter, "supports_partition_scope", False) is True:
+            return {"partition_by": self._bound_account_id}
+        return {}
+
     @asynccontextmanager
     async def operation(self):
         """Borrow across every I/O step, including nested backend operations."""
@@ -460,7 +472,11 @@ class _SingleAccountBackend:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
         self._validate_vector_dimension(data.get("vector"))
         payload = {k: v for k, v in data.items() if v is not None}
+        if payload.get("item_uuids"):
+            payload.setdefault("item_attrs", [])
         filtered = self._filter_known_fields(payload)
+        if payload.get("item_uuids") and not {"item_uuids", "item_attrs"} <= filtered.keys():
+            raise ValueError("Item root indexing requires item_uuids and item_attrs fields")
         result = {k: v for k, v in filtered.items() if v is not None}
         # Raw writes (including transfer rollback) also encode explicit empty grants.
         for grant_field in ACL_GRANT_FIELDS:
@@ -698,7 +714,9 @@ class _SingleAccountBackend:
 
         if options.partial_update:
             try:
-                existing_records = await self._async_adapter.call("get", [payload["id"]])
+                existing_records = await self._async_adapter.call(
+                    "get", [payload["id"]], **self._partition_kwargs()
+                )
                 if self._bound_account_id:
                     existing_records = [
                         record
@@ -791,7 +809,9 @@ class _SingleAccountBackend:
                 raise ValueError(f"Invalid context_type: {context_type}. Must be one of {allowed}")
 
             payload = await self._async_adapter.run(self._prepare_update_payload, payload)
-            ids = await self._async_adapter.call("update_data", [payload])
+            ids = await self._async_adapter.call(
+                "update_data", [payload], **self._partition_kwargs()
+            )
             normalized_ids = [str(item) for item in (ids or []) if item is not None]
             return UpdateResult(
                 ok=bool(normalized_ids),
@@ -827,7 +847,7 @@ class _SingleAccountBackend:
     @_backend_operation
     async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            records = await self._async_adapter.call("get", ids)
+            records = await self._async_adapter.call("get", ids, **self._partition_kwargs())
             if self._bound_account_id:
                 records = [r for r in records if r.get("account_id") == self._bound_account_id]
             return records
@@ -852,7 +872,7 @@ class _SingleAccountBackend:
     @_backend_operation
     async def get_strict(self, ids: List[str]) -> List[Dict[str, Any]]:
         """Fetch records without converting backend errors to misses."""
-        records = await self._async_adapter.call("get", ids)
+        records = await self._async_adapter.call("get", ids, **self._partition_kwargs())
         if self._bound_account_id:
             records = [r for r in records if r.get("account_id") == self._bound_account_id]
         return records
@@ -871,7 +891,9 @@ class _SingleAccountBackend:
             ids = valid_ids
         if not ids:
             return 0
-        return int(await self._async_adapter.call("delete", ids=ids) or 0)
+        return int(
+            await self._async_adapter.call("delete", ids=ids, **self._partition_kwargs()) or 0
+        )
 
     @_backend_operation
     async def strict_query(
@@ -914,7 +936,7 @@ class _SingleAccountBackend:
                     logger.warning("Attempted to delete records outside bound account")
                 ids = valid_ids
 
-            return await self._async_adapter.call("delete", ids=ids)
+            return await self._async_adapter.call("delete", ids=ids, **self._partition_kwargs())
         except Exception as e:
             logger.debug("Error deleting records: %s", type(e).__name__)
             raise
@@ -923,7 +945,9 @@ class _SingleAccountBackend:
     async def delete_by_filter(self, filter: FilterExpr) -> int:
         """Root-only: 直接通过 filter 删除"""
         try:
-            return await self._async_adapter.call("delete", filter=filter)
+            return await self._async_adapter.call(
+                "delete", filter=filter, **self._partition_kwargs()
+            )
         except Exception as e:
             logger.debug("Error deleting by filter: %s", type(e).__name__)
             raise
@@ -990,6 +1014,34 @@ class _SingleAccountBackend:
         except Exception as e:
             logger.debug("Error querying collection: %s", type(e).__name__)
             raise
+
+    @_backend_operation
+    async def search_item_groups(
+        self,
+        *,
+        query_vector: Optional[List[float]] = None,
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        max_groups: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+        keywords_query: Optional[str] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        self._validate_vector_dimension(query_vector)
+        return await self._async_adapter.call(
+            "search_item_groups",
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=self._with_account_filter(filter),
+            max_groups=max_groups,
+            aggregation=aggregation,
+            score_threshold=score_threshold,
+            filter_only=filter_only,
+            keywords_query=keywords_query,
+            keywords_args=keywords_args,
+        )
 
     @_backend_operation
     async def search_by_random(
@@ -1324,6 +1376,19 @@ class VikingVectorIndexBackend:
     async def _get_backend_for_context(self, ctx: RequestContext) -> _SingleAccountBackend:
         """根据上下文获取 backend"""
         return await self.get_account_backend(ctx.account_id)
+
+    async def catalog_execute(
+        self, request: Dict[str, Any], *, ctx: RequestContext
+    ) -> Dict[str, Any]:
+        backend = await self._get_backend_for_context(ctx)
+        try:
+            return await backend._async_adapter.call(
+                "catalog_execute", {**request, "scope": ctx.account_id}
+            )
+        except NotImplementedError as exc:
+            raise UnimplementedError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
 
     def set_vector_config_resolver(self, resolver) -> None:
         self._vector_config_resolver = resolver
@@ -2045,6 +2110,50 @@ class VikingVectorIndexBackend:
     # Tenant-Aware 方法（保持向后兼容）
     # =========================================================================
 
+    async def search_items_in_tenant(
+        self,
+        ctx: RequestContext,
+        *,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        level: Optional[List[int]] = None,
+        limit: int = 10,
+        aggregation: str = "max",
+        score_threshold: Optional[float] = None,
+        filter_only: bool = False,
+        keywords_query: Optional[str] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        acl_enabled = await self._acl_enabled(ctx)
+        scope_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+            level=level,
+            acl_enabled=acl_enabled,
+        )
+        backend = await self._get_backend_for_context(ctx)
+        try:
+            return await backend.search_item_groups(
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                filter=scope_filter,
+                max_groups=limit,
+                aggregation=aggregation,
+                score_threshold=score_threshold,
+                filter_only=filter_only,
+                keywords_query=keywords_query,
+                keywords_args=keywords_args,
+            )
+        except NotImplementedError as exc:
+            raise UnimplementedError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidArgumentError(str(exc)) from exc
+
     async def search_in_tenant(
         self,
         ctx: RequestContext,
@@ -2116,17 +2225,6 @@ class VikingVectorIndexBackend:
             acl_enabled=acl_enabled,
         )
         backend = await self._get_backend_for_context(ctx)
-        bm25_k1 = None
-        bm25_b = None
-        advance = None
-        if keywords_args:
-            bm25_k1 = keywords_args.get("bm25_k1")
-            bm25_b = keywords_args.get("bm25_b")
-            post_process_input_limit = keywords_args.get("post_process_input_limit")
-            if post_process_input_limit is not None:
-                # Rerank multiplies the recall limit; keep the engine-side input
-                # limit at least as large as what this call actually asks for.
-                advance = {"post_process_input_limit": max(post_process_input_limit, limit)}
         return await backend.search_by_keywords(
             query=query,
             mode="bm25",
@@ -2135,9 +2233,7 @@ class VikingVectorIndexBackend:
             limit=limit,
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
-            bm25_k1=bm25_k1,
-            bm25_b=bm25_b,
-            advance=advance,
+            **keyword_recall_options(keywords_args, limit),
         )
 
     async def filter_in_tenant(
@@ -2804,7 +2900,16 @@ class VikingVectorIndexBackend:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
         self._check_root_role(ctx)
         root_backend = await self.get_account_backend(account_id)
-        return await root_backend.delete_by_filter(Eq("account_id", account_id))
+        deleted = await root_backend.delete_by_filter(Eq("account_id", account_id))
+        try:
+            # The native Catalog is separate from vector records.
+            await root_backend._async_adapter.call(
+                "catalog_execute", {"op": "delete_subtree", "scope": account_id, "uri": "/"}
+            )
+        except NotImplementedError:
+            # VikingDB stores Item declarations in the records already deleted above.
+            pass
+        return deleted
 
     async def delete_user_data(
         self,
@@ -2821,7 +2926,12 @@ class VikingVectorIndexBackend:
         )
 
     async def delete_uris(
-        self, ctx: RequestContext, uris: List[str], *, recursive: bool = False
+        self,
+        ctx: RequestContext,
+        uris: List[str],
+        *,
+        recursive: bool = False,
+        preserve_item_root: str | None = None,
     ) -> int:
         """Return the number of records submitted for URI-scoped deletion."""
         deleted_count = 0
@@ -2837,8 +2947,13 @@ class VikingVectorIndexBackend:
                 Eq("account_id", ctx.account_id),
                 Or([Eq("uri", uri), In("uri", [f"{uri}/"])]),
             ]
-
             backend = await self._get_backend_for_context(ctx)
+            if uri == preserve_item_root and backend._mode in {"vikingdb", "volcengine"}:
+                # The point read sees the declaration stored on L0, without inherited UUIDs.
+                root_id = vector_record_id(ctx.account_id, uri, 0)
+                rows = await backend.get_strict([root_id])
+                if any(row.get("item_uuids") for row in rows):
+                    conds.append(RawDSL({"op": "must_not", "field": "level", "conds": [0]}))
             deleted_count += await backend.delete_by_filter(And(conds))
         return deleted_count
 
@@ -3378,6 +3493,39 @@ class VikingVectorIndexBackend:
                 str(record["uri"])
             ):
                 affected_target_ids.append(str(record["id"]))
+        target_item_fields: Dict[str, Dict[str, Any]] = {}
+        if affected_target_ids:
+            backend = await self._get_backend_for_context(ctx)
+            if getattr(backend, "_mode", None) in {"vikingdb", "volcengine"}:
+                affected_ids = set(affected_target_ids)
+                root_ids = [
+                    str(record["id"])
+                    for record in target_records
+                    if str(record["id"]) in affected_ids
+                    and record["id"] == vector_record_id(ctx.account_id, str(record["uri"]), 0)
+                ]
+                for start in range(0, len(root_ids), 100):
+                    # Only a point read gives the target's own UUID, without inheritance.
+                    for row in await self._strict_transfer_get(ctx, root_ids[start : start + 100]):
+                        if row.get("item_uuids"):
+                            target_item_fields[str(row["id"])] = {
+                                "item_uuids": row["item_uuids"],
+                                "item_attrs": row.get("item_attrs") or [],
+                            }
+                replaced_roots = {
+                    vector_record_id(
+                        ctx.account_id,
+                        rewrite_transfer_uri(str(record["uri"]), source_uri, target_uri),
+                        0,
+                    )
+                    for record in source_records
+                    if record.get("level") == 0
+                }
+                affected_target_ids = [
+                    record_id
+                    for record_id in affected_target_ids
+                    if record_id not in target_item_fields or record_id in replaced_roots
+                ]
         target_acl_fields: Dict[str, Dict[str, Any]] = {}
         if self.acl_manager is not None and replacement_target_uris:
             acl_target_uris = {uri for uri in replacement_target_uris if is_acl_uri(uri)}
@@ -3396,6 +3544,7 @@ class VikingVectorIndexBackend:
             batches=batches,
             affected_target_ids=tuple(affected_target_ids),
             target_acl_fields=target_acl_fields,
+            target_item_fields=target_item_fields,
         )
 
     async def copy_uri_mapping(
@@ -3444,6 +3593,8 @@ class VikingVectorIndexBackend:
             )
             for record in source_records
         ]
+        for payload in target_payloads:
+            payload.update(prepared.target_item_fields.get(str(payload["id"]), {}))
         if target_acl_fields:
             for payload in target_payloads:
                 acl_fields = target_acl_fields.get(
@@ -3554,6 +3705,8 @@ class VikingVectorIndexBackend:
                 mode="move",
                 timestamp=timestamp,
             )
+            if not payload.get("item_uuids"):
+                payload.update(prepared.target_item_fields.get(str(payload["id"]), {}))
             acl_fields = target_acl_fields.get(
                 self._vector_entry_uri(str(payload["uri"]), target_acl_fields)
             )

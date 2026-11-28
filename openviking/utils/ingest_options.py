@@ -24,6 +24,7 @@ class IngestOptions:
     search_tags: Optional[list[str]] = None
     search_tag_mode: str = "replace"
     acl_update: AclUpdate | None = None
+    item_root: dict[str, Any] | None = None
 
     @staticmethod
     def vector_search_tag_mode(mode: str) -> str:
@@ -57,6 +58,7 @@ class IngestOptions:
             return replace(
                 cls.from_search_tags(value.search_tags, mode=value.search_tag_mode),
                 acl_update=value.acl_update,
+                item_root=value.item_root,
             )
         return replace(
             cls.from_search_tags(
@@ -68,6 +70,7 @@ class IngestOptions:
                 if value.get("acl_update") is not None
                 else None
             ),
+            item_root=value.get("item_root"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -75,4 +78,5 @@ class IngestOptions:
             "search_tags": list(self.search_tags) if self.search_tags is not None else None,
             "search_tag_mode": self.search_tag_mode,
             "acl_update": self.acl_update.model_dump(mode="json") if self.acl_update else None,
+            **({"item_root": self.item_root} if self.item_root else {}),
         }

@@ -21,6 +21,132 @@ Reranking applies per path:
 
 Score thresholds follow one rule: a request `score_threshold` overrides everything and filters whatever scores the path produces. Without it, `rerank.threshold` (default `0.1`) filters only scores the reranker produced; vector-only paths, including `find()` and a failed rerank fallback, default to `0`.
 
+## Item Search (preview)
+
+Item Search returns declared Item directories. Declare an Item through `mkdir` or `add_resource`. The `write` and `batch_write` operations do not accept Item declaration fields.
+
+Declare an Item with `as_item=true` and optional flat string metadata:
+
+**CLI**
+
+```bash
+ov mkdir viking://resources/videos/V1 \
+  --as-item --item-attrs '{"asset_id":"V1","kind":"video"}'
+ov add-resource ./video.mp4 --parent viking://resources/videos \
+  --as-item --item-attrs '{"asset_id":"V2"}'
+```
+
+**HTTP API**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/fs/mkdir \
+  -H 'Content-Type: application/json' \
+  -d '{"uri":"viking://resources/videos/V1","as_item":true,"item_attrs":{"asset_id":"V1"}}'
+```
+
+**Python SDK**
+
+```python
+client.mkdir(
+    "viking://resources/videos/V1",
+    as_item=True,
+    item_attrs={"asset_id": "V1"},
+)
+client.add_resource(
+    "./video.mp4",
+    parent="viking://resources/videos",
+    options={"as_item": True, "item_attrs": {"asset_id": "V2"}},
+)
+```
+
+The MCP `add_resource` tool exposes the same `as_item` and `item_attrs` arguments. Omitting `as_item` is equivalent to `false`; when it is false, `item_attrs` must also be omitted (even an empty object is rejected). `item_uuid` is generated and maintained by OpenViking and cannot be supplied by callers. Attributes belong only to the declared root and are not inherited or merged. Moving an Item preserves its UUID and attributes, copying it does not copy the declaration, and removing it deletes the declaration.
+
+Merging an ordinary directory into an Item preserves the destination's declaration. Reimport uses the existing resource update flow and preserves the root UUID; independent child Items and immutable attribute conflicts are checked before committing content.
+
+Existing ordinary directories and resource roots cannot be promoted to Items; import their original inputs into a new Item root. Existing Items support same-root updates and retries. New Skill packages declare Items automatically; updates preserve an existing declaration or its absence for legacy packages.
+
+VikingDB stores the Item UUID and attributes on the directory's level-0 record. A first declaration through resource import requires `build_index=true` and `processing_mode=semantic_and_vectors`.
+
+An explicit `mkdir` retry on an existing Item resumes initialization: it creates a missing abstract, preserves an existing abstract verbatim, and retries the existing directory L0 indexing enqueue. Failures remain errors. The UUID, attributes, and member files are preserved; other Items are not scanned or backfilled.
+
+The HTTP success result for `mkdir(as_item=true)` includes `uri`, `item_uuid`, and `item_attrs` to confirm the declaration. Ordinary `mkdir` still returns only `uri`, and the Python SDK still returns `None`. The SDK and CLI raise `FAILED_PRECONDITION` if an older server returns no UUID. That server may already have created an ordinary directory; check the target URI and upgrade the server. The client does not delete it automatically. Confirmation reuses the declaration result without another probe or storage read. Ordinary `mkdir` continues to ignore extra fields. In Item creation requests, `item_uuid` and `item_uuids` are reserved for the server.
+
+Use matching open-source Python and native-engine versions. Item Search is unreleased; early draft data formats have no compatibility reader or migration path.
+
+Enable Item Search by passing an empty `search_as_item` object. Set `aggregation` to `sum` only when needed; the default is `max`:
+
+**CLI**
+
+```bash
+ov find "boy on the beach" --uri viking://resources/videos --search-as-item
+ov search "boy on the beach" --uri viking://resources/videos \
+  --search-as-item --aggregation sum
+
+# Filter-only Item lookup (score is 0.0)
+ov find --search-as-item \
+  --filter '{"op":"must","field":"item_attrs","conds":["asset_id=V1"]}'
+```
+
+```json
+// POST /api/v1/search/find or /api/v1/search/search
+{
+  "query": "boy on the beach",
+  "target_uri": "viking://resources/videos",
+  "search_as_item": {"aggregation": "max"},
+  "filter": {
+    "op": "must",
+    "field": "item_attrs",
+    "conds": ["asset_id=V1"]
+  }
+}
+```
+
+**Python SDK**
+
+```python
+items = client.find(
+    "boy on the beach",
+    target_uri="viking://resources/videos",
+    options={"search_as_item": {}},
+)
+```
+
+For MCP, pass `search_as_item: {}` to either the `find` or `search` tool; the optional object accepts `{"aggregation":"sum"}`. MCP keeps its existing classified text format, showing Item roots, aggregate scores, and optional Item metadata without reading summaries or content.
+
+One `must` node follows the existing list-string filter semantics: multiple values in its `conds` array are alternatives. To require multiple attributes, combine single-value predicates with `and`:
+
+```json
+{
+  "op": "and",
+  "conds": [
+    {"op": "must", "field": "item_attrs", "conds": ["asset_id=V1"]},
+    {"op": "must", "field": "item_attrs", "conds": ["kind=video"]}
+  ]
+}
+```
+
+HTTP/SDK responses keep `memories`, `resources`, `skills`, and `total`, without a separate `items` array. Each Item UUID appears once, and its declaration root URI determines its `context_type` and result array. A Peer root declared as an Item goes into `resources`. Each Item returns the root `uri`, aggregate `score`, and root `level=0`. The `abstract` is currently an empty string. Optional extensions are `item_uuid`, `item_attrs`, and `item_extra_info` with only this request's `candidate_members_count` and `candidate_members_uri`. Each array preserves engine order; `limit` bounds the total Items before classification and `total` is the sum of the three array lengths. Empty results have three empty arrays. Ordinary hits do not gain Item fields.
+
+When member evidence is truncated, `item_extra_info.candidate_members_truncated` is `true`; the count still includes every candidate used in aggregation and may exceed the URI list length. Backends without complete candidate statistics omit `item_extra_info` rather than treating displayed members as the aggregation total. Returning a root URI does not grant access to its contents. The local engine defaults to union: it filters members before scoring every effective ancestor Item, each with its own attributes. Explicit shadow configuration assigns each hit only to its nearest Item. Internal `item_uuids` and `item_attrs` are both `list<string>`; the OV API continues to expose `item_attrs` as a string map.
+
+The inheritance mode is configured once for the `item_uuids` field within a collection and applies to every account in that collection; declarations and attributes remain account scoped. The local engine counts and scores each candidate input row without deduplicating member IDs. VikingDB performs candidate deduplication and evidence selection on the platform; selection and ordering are not guaranteed to match across backends.
+
+The local union implementation currently expands each `item_attrs` predicate to member ranges before combining AND/OR, so different ancestor Items can satisfy different predicates. Matching members still contribute to every effective ancestor UUID, and each group returns its own attributes.
+
+Local Item queries apply the request filters to members that belong to an Item. Filter-only queries give each matching member a score of `0.0`. Semantic queries score the filtered members with the local vector index. `limit` controls how many Item groups are returned. Each group includes at most 1000 evidence members, while its count and `max`/`sum` score cover all scored members.
+
+Item mode does not load the session named by `session_id`, perform intent analysis/query planning or reranking, or pre-read target abstracts, overviews, or content. Complete root metadata from the engine requires no additional UUID lookup. Filter-only Item queries do not initialize an embedder; semantic queries still need query vectors. Member authorization and grouping queries still run.
+
+Item mode supports list results only. It rejects `read_content`, `include_provenance`, event-time decay, and `mode="context"`; it supports only `max` and `sum` aggregation and does not run custom/JEV reranking. Keyword Item queries use the backend's ordinary keyword-search capability: VikingDB uses native BM25 grouping without embeddings; the local engine's native keyword search remains unavailable. A configured storage backend without the required Item interfaces returns `501 UNIMPLEMENTED`.
+
+### VikingDB integration
+
+`VikingDBCollection` maps Catalog declaration management to existing record APIs and semantic Item queries to the platform `group_by` API. It reads `item_id`, `item_score`, `item_uri`, and root-owned `item_attrs` from `result.groups`. OV does not call engine UDFs directly or aggregate ordinary TopK results. It applies `score_threshold` to aggregate scores while preserving platform group order.
+
+Pre-create a collection with the standard OV fields, `ShardBy="account_id"`, a `path`-typed `uri`, a `list<string>` `item_uuids` mounted on `uri`, and an ordinary, non-inherited `list<string>` `item_attrs`; include both Item fields in the scalar index. Modes cannot be changed per find/search request, and OV does not reconfigure existing collections. Declaration management supports shadow and union. The platform `group_by` contract currently requires union, so VikingDB shadow grouping remains unavailable. Filter-only Item queries enumerate all scalar-result pages, deduplicate effective Item identities, and read each declaration root's own metadata. Their scores are zero, similarity thresholds are ignored, and ties are ordered by UUID string before the global Item limit is applied.
+
+Ordinary queries add no Item probes or storage calls. VikingDB search and aggregate requests on account-sharded collections send the account ID as a `partition` string and retain account and permission filters. Point operations use `partition_by`. Semantic and keyword Item queries make one grouping request, with no UUID lookup or member-content read. OV forwards `item_attrs` predicates as ordinary `list<string>` conditions, preserving the filter tree; the engine selects matching members and returns each group's own attributes. The current platform contract omits candidate totals and truncation, so OV omits `item_extra_info` and does not request unused member fields. Filter-only enumeration costs grow with the number of matching members.
+
 ## Retrieval Pipeline
 
 The core retrieval pipeline is as follows:
@@ -64,6 +190,7 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | query | str | No | "" | Search query string. May be omitted for an image query or a filter-only lookup |
 | image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
+| search_as_item | object \| null | No | null | Omit or pass `null` for ordinary retrieval; `{}` enables Item Search. Optional `aggregation`: `max` (default) or `sum`. List results only; see [Item Search](#item-search-preview) |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
@@ -78,6 +205,8 @@ The `find()` method runs one global vector similarity search in QUICK mode for s
 | include_provenance | bool | No | False | Include provenance/query-plan details in serialized result |
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
+
+In Item mode, `level` filters member tiers. See [Item Search](#item-search-preview) for root result fields and incompatible options.
 
 **Target resolution notes**:
 - With empty `target_uri`, non-ROOT retrieval searches the current user root (`viking://user/{user}`) and shared `viking://resources`.
@@ -115,6 +244,9 @@ class MatchedContext:
     category: str                    # Category
     score: float                     # Relevance score; scale depends on the retrieval pipeline
     match_reason: str                # Why this matched
+    item_uuid: Optional[str]         # Returned only for Item hits
+    item_attrs: Optional[Dict[str, str]]  # Item root attributes
+    item_extra_info: Optional[Dict]  # Candidate evidence for this aggregation
 ```
 
 `score` is not universally bounded to `[0, 1]`: its scale depends on the backend, metric and postprocessing. See [observer.vikingdb](18-observer.md#observer-vikingdb) for the runtime metric, pure-dense scale and its scope.
@@ -401,18 +533,19 @@ Semantic retrieval with optional session-aware query planning.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| query | str | No | "" | Search query string. Required unless `image_url` is provided |
+| query | str | No | "" | Search query string; may be omitted for image queries or list queries with a filter, including Item queries |
 | image_url | str or list[str] | No | None | One image URI or an ordered list of image URIs, each as a `data:image/...;base64,...`, `http(s)://`, or `viking://` URI. Requires a multimodal embedding model |
 | search_type | `"semantic"` \| `"keywords"` | No | `"semantic"` | Retrieval type. `semantic` uses embeddings and vector recall; `keywords` uses BM25 keyword recall |
 | mode | `"list"` \| `"context"` | No | `"list"` | Return ranked hits or assembled context. CLI `--mode` maps to this field; context-specific parameters are described below |
 | target_uri | str \| List[str] | No | "" | Limit search to specific URI prefix |
 | session | Session | No | None | Session for context-aware search (SDK) |
-| session_id | str | No | None | Session ID for context-aware search (HTTP) |
+| session_id | str | No | None | Session ID for context-aware search (HTTP); ignored without loading the session in Item mode |
+| search_as_item | object \| null | No | null | Omit or pass `null` for ordinary retrieval; `{}` enables Item Search. Optional `aggregation`: `max` (default) or `sum`. List results only; see [Item Search](#item-search-preview) |
 | events_time_decay_protection | str \| null | No | null | Omit or pass `null` to disable decay. Pass `"0"` to decay immediately, or a duration such as `"7d"` to preserve the original score during that period and decay afterward. Supports non-negative integer `Xm`/`Xh`/`Xd` |
 | args | Dict | No | null | Advanced engine options for `search_type="keywords"` in `mode="list"`. Supported keys: `bm25_k1` (float > 0), `bm25_b` (float in `[0, 1]`), `post_process_input_limit` (int from the effective `limit`/`node_limit` up to `2000000`). Unknown keys are rejected |
 | context_type | str \| List[str] | No | None | Limit results to one or more `ContextType` values: `memory`, `resource`, or `skill` |
 | tags | List[str] | No | None | Explicit retrieval tags in strict `k=v` form. Multiple tags are combined with AND; a result must contain every requested tag |
-| limit | int | No | 10 | Maximum results per planned query; list mode concatenates the results, so its total may exceed this value |
+| limit | int | No | 10 | Ordinary list retrieval: maximum per planned query, so the total may exceed it. Item mode: maximum total Items before classification |
 | node_limit | int | No | None | Optional HTTP alias; overrides `limit` when provided |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filter |
@@ -424,7 +557,11 @@ Semantic retrieval with optional session-aware query planning.
 | read_content | bool | No | False | Read each final matched URI with the visible-content read semantics and inline the result as `content`. Individual read failures leave the hit unchanged. Only supported by `mode="list"`. |
 | telemetry | bool \| object | No | False | Attach telemetry data to response |
 
-`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query, does not support images, and requires a remote VikingDB backend with a full-text index. `args` is accepted only with `search_type="keywords"` in `mode="list"`; it keeps engine tuning options in one map instead of adding a top-level parameter per knob.
+In Item mode, `level` filters member tiers. See [Item Search](#item-search-preview) for root result fields and incompatible options.
+
+Ordinary `search()` requires a text query or image. Use `find()` for filter-only content retrieval.
+
+`search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query and a remote VikingDB backend with a full-text index. `args` accepts engine tuning options for `search_type="keywords"` in `mode="list"`. Keyword queries reject image input.
 
 Event time decay applies to results tagged `memory_type=events` in semantic `find()` and both `search(mode="list")` and `search(mode="context")`. Memory extraction writes this tag on user/peer event L2 records; retrieval identifies events by the tag rather than inferring the type from a URI or level. Untagged/non-event results, query-less filter-only `find()`, `recall`, `grep`, and `glob` are unaffected. During event recall, the vector engine multiplies the original vector score by `time_score`. List responses expose this recall-stage vector score as `origin_score` and the factor as `time_score`; `score` is the final retrieval score, which may come from model rerank. Context mode assembles its candidates with vector scores, or with the model score when `retrieval.apply_rerank_to_context` is on. The CLI labels list-result scores as semantic, time, and final scores. Inside the protection period `time_score` is 1, so the original score is unchanged. Time distance follows the VikingDB exponential decay operator, using the absolute difference from the request time. Time is read from the existing indexed `updated_at` field; no reindex or timestamp rewrite is required. Local fusion preserves the original score for missing or invalid timestamps; cloud fusion uses the indexed date-time field and the backend operator. The curve is owned by the server; callers only provide the per-request protection period. No `ov.conf` or `ovcli.conf` change is required.
 

@@ -1,4 +1,6 @@
+use crate::CliContext;
 use crate::cli::PrivacyCommands;
+use crate::cli::{SkillAddArgs, UploadCliOptions};
 use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
@@ -9,8 +11,6 @@ use crate::terminal_ui::{
 };
 use crate::theme;
 use crate::tui;
-use crate::CliContext;
-use crate::cli::{SkillAddArgs, UploadCliOptions};
 use colored::Colorize;
 use serde_json::{Map, Value};
 
@@ -33,9 +33,12 @@ pub async fn handle_add_resource(
     resource_args: Option<String>,
     tags: Vec<String>,
     tag_mode: String,
+    as_item: bool,
+    item_attrs: Option<Value>,
     acl: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
+    validate_cli_item_declaration(as_item, item_attrs.as_ref())?;
     let is_url =
         path.starts_with("http://") || path.starts_with("https://") || path.starts_with("git@");
     validate_watch_source(is_url, watch_interval)?;
@@ -118,6 +121,8 @@ pub async fn handle_add_resource(
         add_resource_args,
         tags,
         tag_mode,
+        as_item,
+        item_attrs,
         acl,
         ctx.output_format,
         ctx.compact,
@@ -1633,17 +1638,33 @@ pub async fn handle_find(
     before: Option<String>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    filter: Option<Value>,
     tags: Option<Vec<String>>,
     read_content: bool,
     events_time_decay_protection: Option<String>,
+    search_as_item: bool,
+    aggregation: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
-    if query.trim().is_empty() && image.is_none() {
+    let has_item_filter = search_as_item
+        && (filter.is_some()
+            || context_type
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || tags.as_ref().is_some_and(|values| !values.is_empty()));
+    if query.trim().is_empty() && image.is_none() && !has_item_filter {
         return Err(Error::Client(
             "Search query or --image must not be empty.".to_string(),
         ));
     }
+    validate_cli_item_search(
+        search_as_item,
+        aggregation.as_deref(),
+        "list",
+        read_content,
+        events_time_decay_protection.as_deref(),
+    )?;
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if let Some(ref img) = image {
         params.push(format!("--image {}", img));
@@ -1664,6 +1685,9 @@ pub async fn handle_find(
     if let Some(ref context_types) = context_type {
         params.push(format!("--context-type {}", context_types.join(",")));
     }
+    if let Some(ref value) = filter {
+        params.push(format!("--filter {}", value));
+    }
     if let Some(ref t) = tags {
         params.push(format!("--tags {}", t.join(",")));
     }
@@ -1672,6 +1696,12 @@ pub async fn handle_find(
     }
     if let Some(ref protection) = events_time_decay_protection {
         params.push(format!("--events-time-decay-protection {}", protection));
+    }
+    if search_as_item {
+        params.push("--search-as-item".to_string());
+    }
+    if let Some(ref value) = aggregation {
+        params.push(format!("--aggregation {}", value));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
@@ -1688,9 +1718,12 @@ pub async fn handle_find(
         None,
         level,
         context_type,
+        filter,
         tags,
         read_content,
         events_time_decay_protection,
+        search_as_item,
+        aggregation,
         ctx.output_format,
         ctx.compact,
     )
@@ -1710,14 +1743,23 @@ pub async fn handle_search(
     before: Option<String>,
     level: Option<Vec<i32>>,
     context_type: Option<Vec<String>>,
+    filter: Option<Value>,
     tags: Option<Vec<String>>,
     read_content: bool,
     events_time_decay_protection: Option<String>,
+    search_as_item: bool,
+    aggregation: Option<String>,
     args: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
-    if query.trim().is_empty() && image.is_none() {
+    let has_item_filter = search_as_item
+        && (filter.is_some()
+            || context_type
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || tags.as_ref().is_some_and(|values| !values.is_empty()));
+    if query.trim().is_empty() && image.is_none() && !has_item_filter {
         return Err(Error::Client(
             "Search query or --image must not be empty.".to_string(),
         ));
@@ -1729,6 +1771,13 @@ pub async fn handle_search(
     }
     let args = commands::compile::parse_args(args.as_deref())?;
     validate_search_mode_options(&mode, &uri, read_content)?;
+    validate_cli_item_search(
+        search_as_item,
+        aggregation.as_deref(),
+        &mode,
+        read_content,
+        events_time_decay_protection.as_deref(),
+    )?;
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if search_type != "semantic" {
         params.push(format!("--search-type {}", search_type));
@@ -1758,6 +1807,9 @@ pub async fn handle_search(
     if let Some(ref context_types) = context_type {
         params.push(format!("--context-type {}", context_types.join(",")));
     }
+    if let Some(ref value) = filter {
+        params.push(format!("--filter {}", value));
+    }
     if let Some(ref t) = tags {
         params.push(format!("--tags {}", t.join(",")));
     }
@@ -1772,6 +1824,12 @@ pub async fn handle_search(
             "--args '{}'",
             serde_json::Value::Object(args.clone())
         ));
+    }
+    if search_as_item {
+        params.push("--search-as-item".to_string());
+    }
+    if let Some(ref value) = aggregation {
+        params.push(format!("--aggregation {}", value));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
@@ -1791,9 +1849,12 @@ pub async fn handle_search(
         None,
         level,
         context_type,
+        filter,
         tags,
         read_content,
         events_time_decay_protection,
+        search_as_item,
+        aggregation,
         args,
         ctx.output_format,
         ctx.compact,
@@ -1815,6 +1876,39 @@ fn validate_search_mode_options(mode: &str, uri: &str, read_content: bool) -> Re
                     .to_string(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_cli_item_search(
+    search_as_item: bool,
+    aggregation: Option<&str>,
+    mode: &str,
+    read_content: bool,
+    events_time_decay_protection: Option<&str>,
+) -> Result<()> {
+    if aggregation.is_some() && !search_as_item {
+        return Err(Error::Client(
+            "--aggregation requires --search-as-item.".to_string(),
+        ));
+    }
+    if !search_as_item {
+        return Ok(());
+    }
+    if mode != "list" {
+        return Err(Error::Client(
+            "--search-as-item requires --mode list.".to_string(),
+        ));
+    }
+    if read_content {
+        return Err(Error::Client(
+            "--read-content is not supported with --search-as-item.".to_string(),
+        ));
+    }
+    if events_time_decay_protection.is_some() {
+        return Err(Error::Client(
+            "--events-time-decay-protection is not supported with --search-as-item.".to_string(),
+        ));
     }
     Ok(())
 }
@@ -2041,19 +2135,58 @@ pub async fn handle_tree(
 pub async fn handle_mkdir(
     uri: String,
     description: Option<String>,
+    as_item: bool,
+    item_attrs: Option<Value>,
     acl: Option<Value>,
     ctx: CliContext,
 ) -> Result<()> {
+    validate_cli_item_declaration(as_item, item_attrs.as_ref())?;
     let client = ctx.get_client();
     commands::filesystem::mkdir(
         &client,
         &uri,
         description.as_deref(),
+        as_item,
+        item_attrs,
         acl,
         ctx.output_format,
         ctx.compact,
     )
     .await
+}
+
+fn validate_cli_item_declaration(as_item: bool, item_attrs: Option<&Value>) -> Result<()> {
+    let Some(item_attrs) = item_attrs else {
+        return Ok(());
+    };
+    if !as_item {
+        return Err(Error::Client(
+            "--item-attrs requires --as-item.".to_string(),
+        ));
+    }
+    let Some(attrs) = item_attrs.as_object() else {
+        return Err(Error::Client(
+            "--item-attrs must be a flat JSON string map.".to_string(),
+        ));
+    };
+    if attrs.iter().any(|(key, value)| {
+        key.is_empty() || key.contains('=') || key.contains('\0') || !value.is_string()
+    }) {
+        return Err(Error::Client(
+            "--item-attrs must be a flat JSON string map with non-empty keys that do not contain '=' or NUL."
+                .to_string(),
+        ));
+    }
+    if attrs
+        .values()
+        .filter_map(Value::as_str)
+        .any(|value| value.contains('\0'))
+    {
+        return Err(Error::Client(
+            "--item-attrs values must not contain NUL.".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn handle_rm(

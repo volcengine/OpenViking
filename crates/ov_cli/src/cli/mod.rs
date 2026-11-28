@@ -177,7 +177,7 @@ pub(crate) enum Commands {
                 "add_type", "to", "parent", "parent_auto_create",
                 "strict_mode", "ignore_dirs", "include", "exclude",
                 "no_directly_upload_media", "tags", "tag_mode", "acl",
-                "reason", "instruction"
+                "reason", "instruction", "as_item", "item_attrs"
             ]
         )]
         manifest: Option<String>,
@@ -283,6 +283,23 @@ pub(crate) enum Commands {
             help_heading = "Common options"
         )]
         tag_mode: String,
+        /// Declare the imported resource root as an Item
+        #[arg(
+            long = "as-item",
+            conflicts_with = "manifest",
+            help_heading = "Common options"
+        )]
+        as_item: bool,
+        /// Immutable Item attributes as a flat JSON string map
+        #[arg(
+            long = "item-attrs",
+            value_name = "json",
+            requires = "as_item",
+            conflicts_with = "manifest",
+            value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s),
+            help_heading = "Common options"
+        )]
+        item_attrs: Option<serde_json::Value>,
         #[command(flatten)]
         upload_options: UploadCliOptions,
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
@@ -529,6 +546,18 @@ pub(crate) enum Commands {
         /// Initial directory description
         #[arg(long, value_name = "text", help_heading = "Common options")]
         description: Option<String>,
+        /// Declare this directory as an Item
+        #[arg(long = "as-item", help_heading = "Common options")]
+        as_item: bool,
+        /// Immutable Item attributes as a flat JSON string map
+        #[arg(
+            long = "item-attrs",
+            value_name = "json",
+            requires = "as_item",
+            value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s),
+            help_heading = "Common options"
+        )]
+        item_attrs: Option<serde_json::Value>,
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
@@ -752,6 +781,14 @@ pub(crate) enum Commands {
             help_heading = "Common options"
         )]
         context_type: Option<Vec<String>>,
+        /// Metadata filter as JSON; Item attributes use field=item_attrs
+        #[arg(
+            long,
+            value_name = "json",
+            value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s),
+            help_heading = "Advanced options"
+        )]
+        filter: Option<serde_json::Value>,
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
@@ -766,6 +803,22 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         events_time_decay_protection: Option<String>,
+        /// Group matching chunks by their declared Item root
+        #[arg(
+            long = "search-as-item",
+            conflicts_with_all = ["read_content", "events_time_decay_protection"],
+            help_heading = "Common options"
+        )]
+        search_as_item: bool,
+        /// Item score aggregation (default: max)
+        #[arg(
+            long,
+            value_parser = ["max", "sum"],
+            requires = "search_as_item",
+            value_name = "max|sum",
+            help_heading = "Common options"
+        )]
+        aggregation: Option<String>,
     },
     /// [Experimental][Data] Run context-aware retrieval
     Search {
@@ -849,6 +902,14 @@ pub(crate) enum Commands {
             help_heading = "Advanced options"
         )]
         context_type: Option<Vec<String>>,
+        /// Metadata filter as JSON; Item attributes use field=item_attrs
+        #[arg(
+            long,
+            value_name = "json",
+            value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s),
+            help_heading = "Advanced options"
+        )]
+        filter: Option<serde_json::Value>,
         /// Only include results matching all of these explicit tags
         #[arg(long = "tags", value_delimiter = ',')]
         tags: Option<Vec<String>>,
@@ -866,6 +927,22 @@ pub(crate) enum Commands {
         /// JSON args for keyword search: {"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":1000}
         #[arg(long, value_name = "json", help_heading = "Advanced options")]
         args: Option<String>,
+        /// Group matching chunks by their declared Item root
+        #[arg(
+            long = "search-as-item",
+            conflicts_with_all = ["read_content", "events_time_decay_protection"],
+            help_heading = "Common options"
+        )]
+        search_as_item: bool,
+        /// Item score aggregation (default: max)
+        #[arg(
+            long,
+            value_parser = ["max", "sum"],
+            requires = "search_as_item",
+            value_name = "max|sum",
+            help_heading = "Common options"
+        )]
+        aggregation: Option<String>,
     },
     /// [Data] Run content pattern search
     Grep {

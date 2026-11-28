@@ -605,7 +605,11 @@ Create a directory.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
 | description | str | No | `null` | Initial directory description. When omitted, the directory name is used as the default L0; when provided, this description is used. Both forms write `.abstract.md` and queue L0 vectorization. |
+| as_item | bool | No | False | Declare the new directory as an Item; existing Items support retries, while ordinary directories cannot be promoted |
+| item_attrs | object | No | omitted | Optional flat string map; requires `as_item=true`. Attributes belong only to the declaration root and are not inherited or merged |
 
+
+See [Item Search](06-retrieval.md#item-search-preview) for declaration examples, UUID lifecycle, and attribute restrictions. Item-mode HTTP success results additionally contain `item_uuid` and `item_attrs`; Python SDK `mkdir()` still returns `None`.
 
 **Python SDK (HTTP)**
 

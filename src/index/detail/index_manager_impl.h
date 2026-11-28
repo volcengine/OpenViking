@@ -32,6 +32,10 @@ class IndexManagerImpl : public IndexManager {
 
   int search(const SearchRequest& req, SearchResult& result) override;
 
+  void visit_filtered_labels(
+      const std::string& dsl,
+      const std::function<void(uint64_t)>& visitor) override;
+
   int search_with_filter_token(const SearchRequest& req,
                                uint64_t filter_token,
                                SearchResult& result,

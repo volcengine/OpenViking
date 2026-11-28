@@ -13,16 +13,21 @@ from openviking.storage.vectordb.collection.result import (
     SearchResult,
     parse_remote_search_result,
 )
+from openviking.storage.vectordb.collection.vikingdb_catalog import (
+    is_account_sharded,
+)
 from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
 )
 from openviking_cli.utils.logger import get_logger
 
+from .vikingdb_item_collection import VikingDBItemCollectionMixin
+
 logger = get_logger(__name__)
 
 
-class VikingDBCollection(ICollection):
+class VikingDBCollection(VikingDBItemCollectionMixin, ICollection):
     """
     VikingDB collection implementation for private deployment.
 
@@ -41,6 +46,7 @@ class VikingDBCollection(ICollection):
         self.meta_data = meta_data if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
+        self._initialize_item_collection()
 
     @staticmethod
     def _build_response_error(response: Any, action: str) -> VikingDBException:
@@ -116,6 +122,7 @@ class VikingDBCollection(ICollection):
             return {}
 
     def _data_post(self, path: str, data: Dict[str, Any]):
+        data = self._prepare_data_request(path, data)
         response = self.client.do_req("POST", path, req_body=data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)
@@ -221,7 +228,7 @@ class VikingDBCollection(ICollection):
         }
         return self._data_post(path, data)
 
-    def update_data(self, data_list: List[Dict[str, Any]]):
+    def update_data(self, data_list: List[Dict[str, Any]], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/update"
         data = {
             "project": self.project_name,
@@ -229,9 +236,13 @@ class VikingDBCollection(ICollection):
             "data": data_list,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None and is_account_sharded(self.meta_data):
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
-    def fetch_data(self, primary_keys: List[Any]) -> FetchDataInCollectionResult:
+    def fetch_data(
+        self, primary_keys: List[Any], *, partition_by: str | None = None
+    ) -> FetchDataInCollectionResult:
         path = "/api/vikingdb/data/fetch_in_collection"
         data = {
             "project": self.project_name,
@@ -239,16 +250,20 @@ class VikingDBCollection(ICollection):
             "ids": primary_keys,
             "ignore_unknown_fields": True,
         }
+        if partition_by is not None and is_account_sharded(self.meta_data):
+            data["partition_by"] = partition_by
         resp_data = self._data_post(path, data)
         return self._parse_fetch_result(resp_data)
 
-    def delete_data(self, primary_keys: List[Any]):
+    def delete_data(self, primary_keys: List[Any], *, partition_by: str | None = None):
         path = "/api/vikingdb/data/delete"
         data = {
             "project": self.project_name,
             "collection_name": self.collection_name,
             "ids": primary_keys,
         }
+        if partition_by is not None and is_account_sharded(self.meta_data):
+            data["partition_by"] = partition_by
         return self._data_post(path, data)
 
     def delete_all_data(self):

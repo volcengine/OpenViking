@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import time
-from typing import Iterator, List, Optional, Tuple
+from typing import Callable, Iterator, List, Optional, Tuple
 
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.store.local_store import create_store_engine_proxy
@@ -52,7 +52,12 @@ class StoreManager:
         self.storage = storage_engine
 
     def add_cands_data(
-        self, cands_list: List[CandidateData], ttl: int = 0, need_delta: bool = True
+        self,
+        cands_list: List[CandidateData],
+        ttl: int = 0,
+        need_delta: bool = True,
+        *,
+        before_write: Callable[[List[DeltaRecord]], None] | None = None,
     ) -> List[DeltaRecord]:
         """Add candidate data to the store.
 
@@ -60,6 +65,7 @@ class StoreManager:
             cands_list (List[CandidateData]): List of candidate data objects to add.
             ttl (int): Time-To-Live in seconds. 0 means no expiration.
             need_delta (bool): Whether to record delta changes.
+            before_write: Called with the deltas before committing candidate changes.
 
         Returns:
             List[DeltaRecord]: List of generated delta records.
@@ -123,18 +129,25 @@ class StoreManager:
                 )
             )
 
+        if before_write is not None:
+            before_write(delta_list)
         self.storage.exec_sequence_batch_op(batch_op_list)
 
         return delta_list
 
     def delete_data(
-        self, label_list: List[int], need_record_delta: bool = True
+        self,
+        label_list: List[int],
+        need_record_delta: bool = True,
+        *,
+        before_write: Callable[[List[DeltaRecord]], None] | None = None,
     ) -> List[DeltaRecord]:
         """Delete data by labels.
 
         Args:
             label_list (List[int]): List of labels to delete.
             need_record_delta (bool): Whether to record delta changes.
+            before_write: Called with the deltas before committing candidate changes.
 
         Returns:
             List[DeltaRecord]: List of generated delta records (for deletions).
@@ -176,6 +189,8 @@ class StoreManager:
                 [b"" for _ in range(len(label_list))],
             )
         )
+        if before_write is not None:
+            before_write(delta_list)
         self.storage.exec_sequence_batch_op(batch_op_list)
         return delta_list
 
@@ -252,9 +267,7 @@ class StoreManager:
     def get_delta_data_after_ts(self, ns_ts: int) -> Iterator[DeltaRecord]:
         """Lazily deserialize delta records so a large delta table can be replayed on
         memory-constrained hosts without materializing the whole list."""
-        for _, bytes_data in self.storage.iter_seek_to_end(
-            str(ns_ts), StoreManager.DeltaTable
-        ):
+        for _, bytes_data in self.storage.iter_seek_to_end(str(ns_ts), StoreManager.DeltaTable):
             yield DeltaRecord.from_bytes(data=bytes_data)
 
     def delete_delta_data_before_ts(self, ns_ts: int) -> int:
@@ -278,8 +291,17 @@ class StoreManager:
             self.storage.delete(delta_keys, StoreManager.DeltaTable)
         return len(delta_keys)
 
-    def expire_data(self) -> List[DeltaRecord]:
+    def expire_data(
+        self,
+        *,
+        before_read: Callable[[List[str]], None] | None = None,
+        before_write: Callable[[List[DeltaRecord]], None] | None = None,
+    ) -> List[DeltaRecord]:
         """Process expired data based on TTL.
+
+        Args:
+            before_read: Called with candidate keys before reading their current values.
+            before_write: Called with the deltas before committing candidate changes.
 
         Returns:
             List[DeltaRecord]: List of delta records for expired data.
@@ -291,6 +313,8 @@ class StoreManager:
         )
 
         label_list = [str(data[1].decode("utf-8")) for data in ttl_kv_list]
+        if before_read is not None:
+            before_read(label_list)
 
         cands_bytes_list = self.storage.read(
             label_list,
@@ -353,5 +377,7 @@ class StoreManager:
                 )
             )
 
+        if before_write is not None:
+            before_write(delta_list)
         self.storage.exec_sequence_batch_op(batch_op_list)
         return delta_list

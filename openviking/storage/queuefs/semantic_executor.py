@@ -1686,7 +1686,10 @@ class SemanticTreeExecutor:
                             overview=overview or "",
                             ctx=self._ctx,
                             ingest_options=(
-                                IngestOptions(acl_update=self._ingest_options.acl_update)
+                                IngestOptions(
+                                    acl_update=self._ingest_options.acl_update,
+                                    item_root=self._ingest_options.item_root,
+                                )
                                 if self._semantic_plan is not None
                                 else self._ingest_options_for_directory()
                             ),

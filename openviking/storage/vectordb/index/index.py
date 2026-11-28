@@ -127,6 +127,10 @@ class IIndex(ABC):
         """
         raise NotImplementedError
 
+    def aggregate_items(self, catalog: Any, store: Any, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Aggregate a scalar-filtered Item snapshot entirely inside the native engine."""
+        raise NotImplementedError("This index does not support native Item filter scans")
+
     @abstractmethod
     def aggregate(
         self,

@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,6 +14,7 @@ async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
     fs = VikingFS.__new__(VikingFS)
     fs.acl_manager = None
     fs._async_agfs = AsyncMock()
+    fs.vector_store = SimpleNamespace(catalog_execute=AsyncMock(return_value={}))
 
     async def stat(path):
         if path.endswith("/peers/vaka/memories/profile.md"):
@@ -46,6 +48,14 @@ async def test_mv_preserves_canonical_user_uris_for_vector_update(monkeypatch):
     )
     fs._update_vector_store_uris.assert_awaited_once_with(
         fs._prepare_vector_store_uris.return_value,
+        ctx=ctx,
+    )
+    fs.vector_store.catalog_execute.assert_awaited_once_with(
+        {
+            "op": "move_subtree",
+            "from_uri": "viking://user/default/peers/vaka/memories/profile.md",
+            "to_uri": "viking://user/default/memories/profile.md",
+        },
         ctx=ctx,
     )
 

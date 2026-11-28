@@ -135,6 +135,29 @@ class IndexEngineProxy:
         )
         self.normalize_vector_flag = normalize_vector_flag
 
+    def build_search_request(
+        self,
+        query_vector: List[float],
+        limit: int,
+        filters: Optional[Dict[str, Any]],
+        sparse_raw_terms: Optional[List[str]],
+        sparse_values: Optional[List[float]],
+        time_decay: Optional[Dict[str, Any]] = None,
+    ) -> "engine.SearchRequest":
+        req = engine.SearchRequest()
+        if query_vector:
+            req.query = (
+                normalize_vector(query_vector) if self.normalize_vector_flag else query_vector
+            )
+        req.topk = limit
+        req.dsl = json.dumps(filters if filters is not None else {})
+        if time_decay is not None:
+            req.time_decay = json.dumps(time_decay)
+        if sparse_raw_terms and sparse_values:
+            req.sparse_raw_terms = sparse_raw_terms
+            req.sparse_values = sparse_values
+        return req
+
     def search(
         self,
         query_vector: List[float],
@@ -151,24 +174,9 @@ class IndexEngineProxy:
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
 
-        req = engine.SearchRequest()
-        if query_vector:
-            # If normalization is enabled, normalize the query vector
-            if self.normalize_vector_flag:
-                query_vector = normalize_vector(query_vector)
-            req.query = query_vector
-        req.topk = limit
-        if time_decay is not None:
-            req.time_decay = json.dumps(time_decay)
-
-        if filters is None:
-            filters = {}
-        req.dsl = json.dumps(filters)
-
-        if sparse_raw_terms and sparse_values:
-            req.sparse_raw_terms = sparse_raw_terms
-            req.sparse_values = sparse_values
-
+        req = self.build_search_request(
+            query_vector, limit, filters, sparse_raw_terms, sparse_values, time_decay
+        )
         search_result = self.index_engine.search(req)
         labels = search_result.labels
         scores = search_result.scores
@@ -1164,6 +1172,44 @@ class LocalIndex(IIndex):
             logger.info(
                 "Failed to record cuVS search telemetry error_type=%s", type(_log_error).__name__
             )
+
+    def aggregate_items(self, catalog: Any, store: Any, request: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.engine_proxy or not self.engine_proxy.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        request = dict(request)
+        if self.field_type_converter:
+            request["filter"] = self.field_type_converter.convert_filter_for_index(
+                request["filter"]
+            )
+        return catalog.aggregate_filter(
+            self.engine_proxy.index_engine, store.storage_engine, CandidateData.bytes_row, request
+        )
+
+    def search_items(
+        self,
+        catalog: Any,
+        store: Any,
+        request: Dict[str, Any],
+        dense_vector: Optional[List[float]],
+        sparse_vector: Optional[Dict[str, float]],
+        filters: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if not self.engine_proxy or not self.engine_proxy.index_engine:
+            raise RuntimeError("Index engine not initialized")
+        if self.field_type_converter and filters is not None:
+            filters = self.field_type_converter.convert_filter_for_index(filters)
+        sparse = sparse_vector if isinstance(sparse_vector, dict) else {}
+        # The engine determines topk from the eligible member count.
+        query = self.engine_proxy.build_search_request(
+            dense_vector or [], 0, filters, list(sparse), list(sparse.values())
+        )
+        return catalog.search_items(
+            self.engine_proxy.index_engine,
+            store.storage_engine,
+            CandidateData.bytes_row,
+            query,
+            request,
+        )
 
     def aggregate(
         self,

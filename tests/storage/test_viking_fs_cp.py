@@ -237,6 +237,39 @@ def _viking_fs(monkeypatch, agfs: _CopyAGFS) -> VikingFS:
     return fs
 
 
+class _CatalogMoveBackend:
+    """Minimal Catalog lifecycle model for move-compensation ordering."""
+
+    def __init__(self):
+        self.roots = {"viking://resources/source.md"}
+
+    async def catalog_execute(self, request, *, ctx):
+        del ctx
+        operation = request["op"]
+        if operation == "move_subtree":
+            source = request["from_uri"]
+            target = request["to_uri"]
+            if target in self.roots:
+                raise ValueError("Catalog move target already exists")
+            if source not in self.roots:
+                return {"moved_nodes": 0}
+            self.roots.remove(source)
+            self.roots.add(target)
+            return {
+                "moved_nodes": 1,
+                "undo": {"source": source, "target": target},
+            }
+        if operation == "restore_move":
+            undo = request["undo"]
+            self.roots.discard(undo["target"])
+            self.roots.add(undo["source"])
+            return {"restored_nodes": 1}
+        if operation == "delete_subtree":
+            self.roots.discard(request["uri"])
+            return {}
+        raise AssertionError(operation)
+
+
 @pytest.mark.parametrize(
     "uri",
     ["viking://", "viking://user", "viking://resources", "viking://temp"],
@@ -548,6 +581,35 @@ async def test_cp_removes_target_file_when_vector_copy_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "vector_method"),
+    [("cp", "_copy_vector_store_uris"), ("mv", "_update_vector_store_uris")],
+)
+async def test_transfer_cleans_preexisting_target_when_vector_write_fails(
+    monkeypatch, operation, vector_method
+):
+    agfs = _CopyAGFS(target_exists=True)
+    fs = _viking_fs(monkeypatch, agfs)
+    monkeypatch.setattr(
+        fs,
+        vector_method,
+        AsyncMock(side_effect=RuntimeError("injected vector write failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected vector write failure"):
+        await getattr(fs, operation)(
+            "viking://resources/source.md",
+            "viking://resources/target.md",
+            ctx=_ctx(),
+        )
+
+    assert not agfs.target_exists
+    assert any(
+        event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
+    )
+
+
+@pytest.mark.asyncio
 async def test_mv_keeps_target_when_source_delete_fails(monkeypatch):
     agfs = _MoveRollbackAGFS()
     fs = _viking_fs(monkeypatch, agfs)
@@ -637,6 +699,73 @@ async def test_mv_preserves_original_error_when_vector_failure_cleanup_fails(mon
     assert not any(
         event[0:3] == ("rm", "/local/acct/resources/source.md", False) for event in agfs.events
     )
+
+
+@pytest.mark.asyncio
+async def test_mv_restores_catalog_after_vector_compensation_recreates_source(monkeypatch):
+    agfs = _CopyAGFS()
+    fs = _viking_fs(monkeypatch, agfs)
+    catalog = _CatalogMoveBackend()
+    fs.vector_store = catalog
+
+    async def fail_after_source_compensation(*_args, **_kwargs):
+        # update_uri_mapping restores source records before it re-raises a
+        # source-deletion failure; local vector upsert recreates Catalog nodes.
+        catalog.roots.add("viking://resources/source.md")
+        raise RuntimeError("vector move failed after source compensation")
+
+    monkeypatch.setattr(fs, "_update_vector_store_uris", fail_after_source_compensation)
+
+    with pytest.raises(RuntimeError, match="vector move failed after source compensation"):
+        await fs.mv(
+            "viking://resources/source.md",
+            "viking://resources/target.md",
+            ctx=_ctx(),
+        )
+
+    assert catalog.roots == {"viking://resources/source.md"}
+    assert not agfs.target_exists
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "target", "source_is_dir"),
+    [
+        ("viking://resources/source.md", "viking://resources/source.md", False),
+        ("viking://resources/source", "viking://resources/source/child", True),
+    ],
+)
+async def test_mv_rejects_same_path_and_source_subtree(monkeypatch, source, target, source_is_dir):
+    agfs = _CopyAGFS(source_is_dir=source_is_dir)
+    fs = _viking_fs(monkeypatch, agfs)
+    monkeypatch.setattr(fs, "_update_vector_store_uris", AsyncMock())
+
+    with pytest.raises(InvalidArgumentError):
+        await fs.mv(source, target, ctx=_ctx())
+
+    assert not any(event[0] == "acquire-batch" for event in agfs.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["cp", "mv"])
+async def test_transfer_merges_directory_preserving_target_only_files(monkeypatch, operation):
+    agfs = _DirectoryCopyAGFS()
+    agfs.directories.update({"/local/acct/resources/target", "/local/acct/resources/target/empty"})
+    agfs.files.update(
+        {
+            "/local/acct/resources/target/data.bin": b"old",
+            "/local/acct/resources/target/only.txt": b"keep",
+        }
+    )
+    fs = _viking_fs(monkeypatch, agfs)
+    kwargs = {"recursive": True} if operation == "cp" else {}
+    await getattr(fs, operation)(
+        "viking://resources/source", "viking://resources/target", ctx=_ctx(), **kwargs
+    )
+    assert agfs.files["/local/acct/resources/target/data.bin"] == b"\x00\xff"
+    assert agfs.files["/local/acct/resources/target/only.txt"] == b"keep"
+    assert agfs.files["/local/acct/resources/target/.hidden"] == b"hidden"
+    assert ("/local/acct/resources/source" in agfs.directories) == (operation == "cp")
 
 
 @pytest.mark.asyncio

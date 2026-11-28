@@ -54,6 +54,7 @@ from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.telemetry import get_current_telemetry, register_telemetry
+from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.path_safety import safe_join_viking_uri
 from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError, ResourceExhaustedError
@@ -77,6 +78,7 @@ class SkillProcessingPreparation:
     base_path: Optional[Path]
     cleanup_path: Optional[Path]
     privacy: SkillPrivacyPreparation | None
+    is_update: bool = False
 
 
 def validate_skill_name(name: Any) -> str:
@@ -253,6 +255,7 @@ class SkillProcessor:
                 before_hash = (previous_history or {}).get("current_revision")
                 if before_hash is None and skill_exists:
                     before_hash = await skill_package_hash(viking_fs, ctx, skill_dir_uri)
+            new_package = not preparation.is_update and not skill_exists
             # Privacy changes finish under the package lease even if installation is cancelled.
             if apply_privacy:
                 skill_dict = await run_to_completion(
@@ -263,6 +266,24 @@ class SkillProcessor:
                         change_reason=privacy_change_reason,
                     )
                 )
+            item_root = None
+            if new_package:
+                from openviking.storage.catalog import declare_item
+                from openviking_cli.exceptions import UnimplementedError
+
+                try:
+                    # A failed declaration must remain retryable as a new
+                    # package, without persisting an apparently legacy SKILL.md.
+                    declaration = await run_to_completion(
+                        lambda: declare_item(
+                            viking_fs, skill_dir_uri, ctx, as_item=True, is_dir=True
+                        )
+                    )
+                    if declaration:
+                        item_root = declaration.get("_item_root")
+                except UnimplementedError:
+                    # Existing backends keep their legacy package entrypoint.
+                    pass
             write_start = time.perf_counter()
             await run_to_completion(
                 lambda: self._write_skill_content(
@@ -334,6 +355,7 @@ class SkillProcessor:
                     ctx,
                     lease,
                     source_path=skill_dict.get("source_path", ""),
+                    **({"ingest_options": IngestOptions(item_root=item_root)} if item_root else {}),
                 )
                 lease = None  # The semantic worker owns the handed-off lease.
 
@@ -828,6 +850,7 @@ class SkillProcessor:
         lease: Dict[str, Any],
         *,
         source_path: str = "",
+        ingest_options: IngestOptions | None = None,
     ) -> None:
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.semantic_msg import SemanticMsg
@@ -848,6 +871,7 @@ class SkillProcessor:
             generation_trigger="skill_ingest",
             propagate_to_parent=False,
             source={"path": source_path},
+            ingest_options=ingest_options,
         )
         try:
             queue_manager = get_queue_manager()

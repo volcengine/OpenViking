@@ -174,6 +174,13 @@ ov cp -r viking://resources/docs viking://resources/docs-backup
 
 `search --mode list` (the default) returns ranked hits. `search --mode context` assembles context using server defaults and prints its text; use `-o json` to retain the complete `entries`, `rendered`, `digest`, and `stats` result. Context mode supports `--events-time-decay-protection`, but rejects `--uri` and `--read-content`; `--level` is ignored by the server. Context-specific options such as `max_tokens` and `detail` are not exposed as CLI flags yet.
 
+Both `find` and `search --mode list` support `--search-as-item` to return declared Item roots. `--aggregation max` is the default; `sum` is also supported. This mode does not load the session supplied by `--session-id` and rejects `--read-content` and `--events-time-decay-protection`. Browse Item directories with `ov ls`, then read member files with `ov read`. See [Item Search](../../docs/en/api/06-retrieval.md#item-search-preview) for the complete contract.
+
+```bash
+ov find "service startup failure" --search-as-item
+ov search "service startup failure" --search-as-item --aggregation sum
+```
+
 ### Sessions And Memory
 
 - `session new` - Create a session with optional event-memory tags and auto-commit policy.
