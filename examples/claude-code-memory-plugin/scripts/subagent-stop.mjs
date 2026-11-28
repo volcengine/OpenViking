@@ -26,7 +26,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
+import { readTranscriptTurns } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -182,16 +182,14 @@ async function main() {
     const state = await loadState(subagentId);
     const ovSessionId = state?.ovSessionId || deriveOvSessionId(sessionId, `subagent:${subagentId}`);
 
-    let transcript;
+    let turns;
     try {
-      transcript = await readFile(transcriptPath, "utf-8");
+      turns = await readTranscriptTurns(transcriptPath, cfg);
     } catch (err) {
       logError("transcript_read", err);
       return;
     }
 
-    const messages = parseTranscript(transcript);
-    const turns = extractCaptureTurns(messages, cfg);
     const capturedTurnCount = state?.capturedTurnCount || 0;
     const newTurns = turns.slice(capturedTurnCount);
     log("transcript_parse", {
