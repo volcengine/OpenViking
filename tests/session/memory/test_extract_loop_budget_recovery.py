@@ -14,12 +14,14 @@ output, and no completion_tokens-based truncation inference.
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
 
 from openviking.models.vlm.base import ToolCall, VLMResponse
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.page_id_map import PageIdMap
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 _DEFAULT_CAP = 32768
 
@@ -209,6 +211,84 @@ class TestToolsDisabledStillUsesVLMResponse:
         assert response.finish_reason == "stop"
         assert response.usage["completion_tokens"] == 5
         assert response.content == "sdk.commit()"
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected"),
+    [
+        ({"prompt_tokens": None, "completion_tokens": 4, "total_tokens": 4}, (0, 4, 4)),
+        ({"prompt_tokens": 11, "completion_tokens": None, "total_tokens": None}, (11, 0, 0)),
+        ({"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15}, (11, 4, 15)),
+        ({"completion_tokens": 4}, (0, 4, 0)),
+        (None, None),
+    ],
+    ids=["null-prompt", "null-completion-and-total", "valid", "omitted-counts", "no-usage"],
+)
+@pytest.mark.asyncio
+async def test_openai_usage_through_extraction(mock_openai_transport, usage, expected):
+    def send(request):
+        assert request.url.path == "/v1/chat/completions"
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "sdk.commit()"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": usage,
+            },
+        )
+
+    mock_openai_transport(send)
+    vlm = VLMConfig(
+        provider="openai",
+        model="gpt-4o-mini",
+        api_key="sk-test",
+        api_base="https://example.test/v1",
+    )
+    try:
+        operations, _ = await _run_loop(_make_loop(vlm))
+        assert operations is not None
+
+        response = vlm.get_completion(prompt="Extract memory operations.", tools=[])
+        assert isinstance(response, VLMResponse)
+        assert response.content == "sdk.commit()"
+        counts = ("prompt_tokens", "completion_tokens", "total_tokens")
+        if expected is None:
+            assert response.usage == {}
+        else:
+            assert tuple(response.usage[key] for key in counts) == expected
+        prompt, completion, _ = expected or (0, 0, 0)
+        tracked = vlm.get_vlm_instance().get_token_usage()["total_usage"]
+        assert tuple(tracked[key] for key in counts) == (
+            2 * prompt,
+            2 * completion,
+            2 * (prompt + completion),
+        )
+    finally:
+        vlm.close()
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": None},
+        {"prompt_tokens": 11, "prompt_tokens_details": {"cached_tokens": None}},
+    ],
+    ids=["null-prompt", "null-cache-count"],
+)
+@pytest.mark.asyncio
+async def test_extraction_accepts_null_usage_from_other_backends(usage):
+    vlm = ScriptedVLM([VLMResponse(content="sdk.commit()", usage=usage)])
+    operations, _ = await _run_loop(_make_loop(vlm))
+    assert operations is not None
 
 
 class TestTruncationDetection:
