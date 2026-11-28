@@ -1755,8 +1755,10 @@ class MarkdownParser(BaseParser):
         direct_content = ""
         if has_children:
             direct_text = content[section_start:direct_content_end].strip()
+            # A heading is content even when it immediately precedes its first child.
+            direct_content = f"{heading_prefix} {title}"
             if direct_text:
-                direct_content = f"{heading_prefix} {title}\n\n{direct_text}"
+                direct_content += f"\n\n{direct_text}"
 
         return {
             "name": section_name,
