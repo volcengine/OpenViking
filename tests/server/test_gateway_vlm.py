@@ -143,7 +143,14 @@ def test_all_credentials_and_legacy_config_are_imported():
 async def test_effective_configuration_respects_account_credentials_and_cluster_fallback():
     from openviking.config.account_config import AccountVLMConfig
 
-    cluster = configured("openai", api_base="https://cluster.example/v1")
+    policy = {"enabled": {"chat_template_kwargs": {"enable_thinking": True}}}
+    cluster = VLMConfig(
+        model="model",
+        provider="openai",
+        api_key="secret",
+        api_base="https://cluster.example/v1",
+        thinking_extra_request_body=policy,
+    )
     account = AccountVLMConfig(
         model="account-model",
         credentials=[
@@ -165,7 +172,10 @@ async def test_effective_configuration_respects_account_credentials_and_cluster_
     assert effective.model == "account-model"
     assert effective.credentials[0].api_key == "account-secret"
     assert effective.credentials[0].api_base == "https://account.example/v1"
+    assert effective.thinking_extra_request_body is None
+    assert effective.credentials[0].thinking_extra_request_body is None
     provider._view.return_value.account.vlm = None
     fallback = await provider.effective_vlm_config("b")
     assert fallback.credentials[0].api_key == "secret"
     assert fallback.credentials[0].api_base == "https://cluster.example/v1"
+    assert fallback.credentials[0].thinking_extra_request_body == policy
