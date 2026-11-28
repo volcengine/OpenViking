@@ -27,19 +27,21 @@ class CohereRerankClient(RerankBase):
         api_key: str,
         model: str = "rerank-v3.5",
         api_base: str = "https://api.cohere.com",
+        timeout: float = 30.0,
     ):
         super().__init__()
         self.api_key = api_key
         self.model = model
         self.api_base = api_base.rstrip("/")
         self.provider = "cohere"
+        self._timeout = timeout
         self._client = httpx.Client(
             base_url=self.api_base,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=30.0,
+            timeout=self._timeout,
         )
 
     def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
@@ -126,4 +128,5 @@ class CohereRerankClient(RerankBase):
         return cls(
             api_key=config.api_key,
             model=config.model_name if config.model_name != "doubao-seed-rerank" else "rerank-v3.5",
+            timeout=config.timeout,
         )
