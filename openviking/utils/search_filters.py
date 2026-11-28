@@ -213,9 +213,13 @@ def resolve_time_bounds(
     since_dt = None
     until_dt = None
     if normalized_since:
-        since_dt = _parse_time_value(normalized_since, current_time, is_upper_bound=False)
+        since_dt = _parse_time_bound(
+            normalized_since, current_time, label=lower_label, is_upper_bound=False
+        )
     if normalized_until:
-        until_dt = _parse_time_value(normalized_until, current_time, is_upper_bound=True)
+        until_dt = _parse_time_bound(
+            normalized_until, current_time, label=upper_label, is_upper_bound=True
+        )
 
     if (
         since_dt
@@ -248,6 +252,20 @@ def matches_time_bounds(
     if until is not None and comparable_value > normalize_datetime_for_comparison(until):
         return False
     return True
+
+
+def _parse_time_bound(value: str, now: datetime, *, label: str, is_upper_bound: bool) -> datetime:
+    """Parse one bound, rejecting values no datetime can represent.
+
+    A value such as ``1000000000d`` or ``9999-12-31T23:59:59-12:00`` is
+    syntactically valid but overflows while the date is built or normalized to
+    UTC. Only ``ValueError`` is mapped to an invalid-argument response, so an
+    escaping ``OverflowError`` would surface as an internal server error.
+    """
+    try:
+        return _parse_time_value(value, now, is_upper_bound=is_upper_bound)
+    except OverflowError as exc:
+        raise ValueError(f"{label} is out of range") from exc
 
 
 def _parse_time_value(value: str, now: datetime, *, is_upper_bound: bool) -> datetime:
