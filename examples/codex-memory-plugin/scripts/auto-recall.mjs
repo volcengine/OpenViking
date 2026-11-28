@@ -48,24 +48,18 @@ function output(obj, exitAfter = false) {
   process.stdout.write(line);
 }
 
-function emit(additionalContext) {
-  if (!additionalContext) {
-    output({});
-    return;
-  }
-  const wrappedContext = String(additionalContext).trim();
-  if (!wrappedContext) {
-    output({});
-    return;
-  }
-  output({
-    hookSpecificOutput: {
+function emit({ block, error } = {}) {
+  const result = error ? { systemMessage: error } : {};
+  const wrappedContext = String(block || "").trim();
+  if (wrappedContext) {
+    result.hookSpecificOutput = {
       hookEventName: "UserPromptSubmit",
       additionalContext: [wrappedContext, usageTurnId ? answerContext({
         recalled: parseRecall(wrappedContext), lookups: [],
       }, usageTurnId, cfg) : ""].filter(Boolean).join("\n"),
-    },
-  });
+    };
+  }
+  output(result);
 }
 
 recallDeadline = setTimeout(() => {
@@ -153,5 +147,5 @@ runHookStage({
     digestCachePath: RECALL_DIGEST_CACHE_PATH, log,
   });
   log("recall_complete", { stage: recalled.stage, chars: recalled.block.length });
-  return recalled.block;
+  return recalled;
 }).catch((err) => { logError("uncaught", err); emit(); });

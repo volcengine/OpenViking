@@ -12,13 +12,9 @@ npm i -g @openviking/cli
 
 This installs the `ov` binary for your platform (macOS, Linux, Windows).
 
-### Alternative install methods
+### Run without installing
 
 ```bash
-# via curl
-curl -fsSL https://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash
-
-# one-shot with npx
 npx @openviking/cli --help
 ```
 

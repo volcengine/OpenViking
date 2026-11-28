@@ -287,11 +287,14 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(ctx, bypass_acl=True)
         await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
+        ctx.frozen_files = guard_ctx.frozen_files
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        await self._ensure_file_changes_allowed([target_uri], ctx, recursive=recursive)
 
         async def _delete_vectors() -> int:
             """Delete the target scope without enumerating filesystem entries."""
@@ -470,6 +473,7 @@ class _OpsMixin:
             )
 
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="cp")
+        await self._ensure_file_changes_allowed([new_uri], ctx, recursive=is_dir)
         await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
         lock_requests = (
             self._directory_transfer_lock_requests(old_path, new_path)
@@ -774,8 +778,10 @@ class _OpsMixin:
 
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(ctx, bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
+        ctx.frozen_files = guard_ctx.frozen_files
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
         await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
         old_scope = old_uri.rstrip("/")
@@ -802,6 +808,7 @@ class _OpsMixin:
 
         if is_dir:
             await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
+        await self._ensure_file_changes_allowed([old_uri, new_uri], ctx, recursive=is_dir)
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="mv")
         await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
 
@@ -1266,6 +1273,16 @@ class _OpsMixin:
             return False
         return await self._agfs_path_exists(self._uri_to_path(uri, ctx=ctx))
 
+    async def _validate_glob_scope(
+        self, uri: str, ctx: Optional[RequestContext]
+    ) -> tuple[RequestContext, str]:
+        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
+        await self._ensure_traversable(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        if not await self._agfs_path_exists(path):
+            raise NotFoundError(uri, "directory")
+        return ctx, path
+
     async def glob(
         self,
         pattern: str,
@@ -1284,14 +1301,9 @@ class _OpsMixin:
         (with name/uri/size/mode/mtime/isDir populated from stat) for CLI table rendering.
         """
         _ensure_non_empty_search_query(pattern)
-        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
-        await self._ensure_traversable(uri, ctx)
-        real_ctx = self._ctx_or_default(ctx)
+        ctx, path = await self._validate_glob_scope(uri, ctx)
         return_entries = extra_fields is not None
         aug_fields = list(extra_fields) if extra_fields else []
-        path = self._uri_to_path(uri, ctx=ctx)
-        if not await self._agfs_path_exists(path):
-            raise NotFoundError(uri, "directory")
 
         if not force_fs:
             remote_result = await self._try_glob_vikingdb(
@@ -1301,7 +1313,7 @@ class _OpsMixin:
                 return_entries=return_entries,
                 extra_fields=aug_fields,
                 tag_filter=tag_filter,
-                ctx=real_ctx,
+                ctx=ctx,
             )
             if remote_result is not None:
                 return remote_result
@@ -1309,7 +1321,7 @@ class _OpsMixin:
         # Tag filtering happens in FSService on the local fallback path. Fetch
         # all matches so an early filesystem limit cannot discard later tagged
         # entries. The remote path applies the same filter before its limit.
-        acl_enabled = await self._acl_enabled(real_ctx)
+        acl_enabled = await self._acl_enabled(ctx)
         fs_node_limit = None if tag_filter else node_limit
         page_size = self._glob_page_size(fs_node_limit)
         continuation_token: Optional[str] = None
@@ -1332,7 +1344,7 @@ class _OpsMixin:
                     entry["path"],
                     entry.get("name") or entry["path"].rsplit("/", 1)[-1],
                     path,
-                    real_ctx,
+                    ctx,
                     acl_enabled=acl_enabled,
                 ):
                     continue
@@ -1346,7 +1358,7 @@ class _OpsMixin:
                 page_matches.append((entry_uri, match_uri, entry))
 
             access = await self._can_access_many(
-                [entry_uri for entry_uri, _, _ in page_matches], real_ctx
+                [entry_uri for entry_uri, _, _ in page_matches], ctx
             )
             for entry_uri, match_uri, entry in page_matches:
                 if not access.get(entry_uri, False):

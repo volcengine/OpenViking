@@ -248,11 +248,27 @@ describe("plugin normal flow with healthy backend", () => {
     expect(String(latest?.content)).toContain("User prefers Rust for backend tasks.");
     expect(String(latest?.content)).toContain("what backend language should we use?");
 
+    const capturedText = [
+      "Please keep using Rust.",
+      "",
+      "- first",
+      "  - nested",
+      "",
+      "```python",
+      "if ready:",
+      "    run()",
+      "```",
+    ].join("\n");
+
     await contextEngine.afterTurn({
       sessionId: "session-normal",
       sessionFile: "",
       messages: [
-        { role: "user", content: "Please keep using Rust.", timestamp: Date.parse("2026-04-07T08:00:00Z") },
+        {
+          role: "user",
+          content: capturedText.replace("Please keep", "Please <relevant-memories>injected recall</relevant-memories> keep"),
+          timestamp: Date.parse("2026-04-07T08:00:00Z"),
+        },
         { role: "assistant", content: [{ type: "text", text: "Understood." }], timestamp: Date.parse("2026-04-07T08:00:01Z") },
       ],
       prePromptMessageCount: 0,
@@ -301,6 +317,7 @@ describe("plugin normal flow with healthy backend", () => {
     expect(addMessageRequest).toBeTruthy();
     expect(JSON.parse(addMessageRequest!.body ?? "{}")).toMatchObject({
       role: "user",
+      parts: [{ type: "text", text: capturedText }],
       created_at: "2026-04-07T08:00:01.000Z",
     });
     expect(

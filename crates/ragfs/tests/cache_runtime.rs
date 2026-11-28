@@ -1,9 +1,10 @@
 use bytes::Bytes;
 use ragfs::cache_runtime::{
     CacheError, CacheRuntime, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, MemoryMockProvider, RedisProviderConfig, ScriptRequest, SetCondition,
-    SetOptions, SetResult,
+    ListMoveRequest, MemoryMockProvider, RedisProviderConfig, ScoredMember, SetCondition,
+    SetOptions, SetResult, ScriptRequest, ZAddCondition, ZAddOptions,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -75,13 +76,25 @@ async fn async_runtime_unlink_removes_every_memory_type() {
         .await
         .unwrap();
     runtime
-        .hset("hash", "field", Bytes::from_static(b"value"))
+        .hset(
+            "hash",
+            HashMap::from([("field".to_string(), Bytes::from_static(b"value"))]),
+        )
         .await
         .unwrap();
     provider
         .insert_set_members("set", vec![Bytes::from_static(b"member")])
         .await;
-    runtime.zadd("zset", 1.0, "member").await.unwrap();
+    runtime
+        .zadd(
+            "zset",
+            vec![ScoredMember {
+                member: "member".to_string(),
+                score: 1.0,
+            }],
+        )
+        .await
+        .unwrap();
     runtime
         .lpush("list", vec![Bytes::from_static(b"item")])
         .await
@@ -239,14 +252,20 @@ async fn hash_and_sorted_set_commands_follow_query_cache_contract() {
     assert_eq!(runtime.hget("bucket", "page").await.unwrap(), None);
     assert_eq!(
         runtime
-            .hset("bucket", "page", Bytes::from_static(b"one"))
+            .hset(
+                "bucket",
+                HashMap::from([("page".to_string(), Bytes::from_static(b"one"))]),
+            )
             .await
             .unwrap(),
         1
     );
     assert_eq!(
         runtime
-            .hset("bucket", "page", Bytes::from_static(b"two"))
+            .hset(
+                "bucket",
+                HashMap::from([("page".to_string(), Bytes::from_static(b"two"))]),
+            )
             .await
             .unwrap(),
         0
@@ -256,9 +275,45 @@ async fn hash_and_sorted_set_commands_follow_query_cache_contract() {
         Some(Bytes::from_static(b"two"))
     );
 
-    assert_eq!(runtime.zadd("idx", 10.0, "bucket").await.unwrap(), 1);
-    assert_eq!(runtime.zadd("idx", 20.0, "bucket").await.unwrap(), 0);
-    assert_eq!(runtime.zadd("idx", 30.0, "other").await.unwrap(), 1);
+    assert_eq!(
+        runtime
+            .zadd(
+                "idx",
+                vec![ScoredMember {
+                    member: "bucket".to_string(),
+                    score: 10.0,
+                }],
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .zadd(
+                "idx",
+                vec![ScoredMember {
+                    member: "bucket".to_string(),
+                    score: 20.0,
+                }],
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        runtime
+            .zadd(
+                "idx",
+                vec![ScoredMember {
+                    member: "other".to_string(),
+                    score: 30.0,
+                }],
+            )
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(
         runtime.zscan_match("idx", "buck*", 100).await.unwrap(),
         vec!["bucket".to_string()]
@@ -274,6 +329,114 @@ async fn hash_and_sorted_set_commands_follow_query_cache_contract() {
     assert_eq!(
         runtime.zscan_match("idx", "*", 100).await.unwrap(),
         Vec::<String>::new()
+    );
+}
+
+#[tokio::test]
+async fn hash_and_sorted_set_conditions_preserve_existing_ttl_state() {
+    let runtime = CacheRuntime::memory();
+
+    assert_eq!(
+        runtime
+            .hsetnx(
+                "state",
+                HashMap::from([
+                    ("checkpoint".to_string(), Bytes::from_static(b"first")),
+                    ("intent".to_string(), Bytes::from_static(b"token")),
+                ]),
+            )
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        runtime
+            .hsetnx(
+                "state",
+                HashMap::from([
+                    ("checkpoint".to_string(), Bytes::from_static(b"replaced")),
+                    ("discover".to_string(), Bytes::from_static(b"1")),
+                ]),
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime.hget("state", "checkpoint").await.unwrap(),
+        Some(Bytes::from_static(b"first"))
+    );
+
+    assert_eq!(
+        runtime
+            .zadd(
+                "index",
+                vec![ScoredMember {
+                    member: "session".to_string(),
+                    score: 10.0,
+                }],
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .zadd_with_options(
+                "index",
+                vec![
+                    ScoredMember {
+                        member: "session".to_string(),
+                        score: 5.0,
+                    },
+                    ScoredMember {
+                        member: "event".to_string(),
+                        score: 20.0,
+                    },
+                ],
+                ZAddOptions {
+                    condition: ZAddCondition::Gt,
+                },
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .zadd_with_options(
+                "index",
+                vec![
+                    ScoredMember {
+                        member: "session".to_string(),
+                        score: 30.0,
+                    },
+                    ScoredMember {
+                        member: "initial".to_string(),
+                        score: 1.0,
+                    },
+                ],
+                ZAddOptions {
+                    condition: ZAddCondition::Nx,
+                },
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .zmscore(
+                "index",
+                &[
+                    "initial".to_string(),
+                    "session".to_string(),
+                    "missing".to_string(),
+                ],
+            )
+            .await
+            .unwrap(),
+        vec![Some(1.0), Some(10.0), None]
     );
 }
 

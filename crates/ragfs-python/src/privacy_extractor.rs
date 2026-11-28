@@ -36,7 +36,7 @@ impl PyPrivacyExtractor {
         })
     }
 
-    /// Conservative reservation for the shared compiled programs.
+    /// Conservative reservation for the compiled custom rules.
     #[getter]
     fn reserved_bytes(&self) -> usize {
         self.inner.reserved_bytes()

@@ -83,8 +83,8 @@ SemanticQueue 异步处理 L0/L1 生成和向量化。
 
 1. **并发生成文件摘要**：并发上限由 `vlm.max_concurrent` 控制
 2. **收集子目录摘要**：读取已生成的 .abstract.md
-3. **生成 .overview.md**：LLM 生成 L1 概览
-4. **提取 .abstract.md**：从 overview 提取 L0 摘要
+3. **生成 .abstract.md**：模型根据选中的节点摘要生成短 L0；人工维护的 L0 保持不变
+4. **渲染 .overview.md**：程序使用 L0 和条目摘要生成 L1，不调用模型生成整篇概览
 5. **写入文件**：以 OKF Markdown 保存正文和受保护元数据
 6. **向量化**：创建 Context 并入队 EmbeddingQueue
 

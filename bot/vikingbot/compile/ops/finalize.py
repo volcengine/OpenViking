@@ -19,7 +19,7 @@ async def run(runtime, documents):
     prior read by a worker. This preflight does not provide atomic compare-and-swap writes.
     """
     bundle = RenderedBundle()
-    contents, outputs = {}, {}
+    contents, outputs, rejected = {}, {}, {}
     seen_paths: set[str] = set()
     for document in documents:
         path = validate_relative_file_path(document.path)
@@ -38,6 +38,7 @@ async def run(runtime, documents):
                 validate_declared_okf_markdown(uri, content.encode("utf-8"))
             except ValueError as exc:
                 runtime.warnings.append(str(exc))
+                rejected[path] = document.source_refs
                 continue
         contents[path] = content
         outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
@@ -63,5 +64,5 @@ async def run(runtime, documents):
         outputs[path] = {"source_refs": document.source_refs, "sha256": content_hash(content)}
     if runtime.skill_target and contents:
         file_ops.validate_skill_output(contents)
-    await runtime.files.put("finalize", {"outputs": outputs})
+    await runtime.files.put("finalize", {"outputs": outputs, "rejected": rejected})
     return bundle

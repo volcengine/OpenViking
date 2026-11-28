@@ -9,85 +9,18 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.openapi.utils import get_openapi
 
+from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers import content as content_router
 from openviking.server.routers.content import (
     BatchWriteOperation,
     BatchWriteRequest,
-    ReindexRequest,
-    WriteContentRequest,
     batch_write,
-    reindex,
 )
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import ConflictError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
-
-
-def test_write_content_request_accepts_processing_mode():
-    request = WriteContentRequest(
-        uri="viking://resources/demo.md",
-        content="updated",
-        processing_mode="vectors_only",
-    )
-
-    assert request.processing_mode == "vectors_only"
-
-
-def test_write_content_request_defaults_processing_mode():
-    request = WriteContentRequest(uri="viking://resources/demo.md", content="updated")
-
-    assert request.processing_mode == "semantic_and_vectors"
-
-
-def test_write_content_request_accepts_tags_and_tag_mode():
-    request = WriteContentRequest(
-        uri="viking://resources/demo.md",
-        content="updated",
-        tags=["Env=Prod", "team=search"],
-        tag_mode="append",
-    )
-
-    assert request.tags == ["Env=Prod", "team=search"]
-    assert request.tag_mode == "append"
-
-
-def test_write_content_request_accepts_clear_without_tags():
-    request = WriteContentRequest(
-        uri="viking://resources/demo.md",
-        content="updated",
-        tag_mode="clear",
-    )
-
-    assert request.tags is None
-    assert request.tag_mode == "clear"
-
-
-def test_batch_write_request_accepts_write_parity_options():
-    request = BatchWriteRequest(
-        root_uri="viking://resources/demo",
-        processing_mode="vectors_only",
-        operations=[
-            BatchWriteOperation(
-                uri="viking://resources/demo/a.md",
-                content="updated",
-                resolve_conflicts=True,
-                tags=["team=search"],
-                tag_mode="append",
-                acl={
-                    "acl_mode": "restricted",
-                    "entries": [{"principal": "group:engineering", "level": "write"}],
-                },
-            )
-        ],
-    )
-
-    assert request.processing_mode == "vectors_only"
-    assert request.defer_processing is False
-    assert request.operations[0].tags == ["team=search"]
-    assert request.operations[0].resolve_conflicts is True
-    assert request.operations[0].tag_mode == "append"
-    assert request.operations[0].acl.acl_mode == "restricted"
+from tests.server.test_api_resources import _wait_task_terminal
 
 
 async def test_batch_write_forwards_processing_mode_and_operation_metadata(monkeypatch):
@@ -134,81 +67,39 @@ async def test_batch_write_forwards_processing_mode_and_operation_metadata(monke
     assert list(operation["acl"]["entries"]) == []
 
 
-async def test_write_forwards_processing_mode_to_service(monkeypatch):
-    seen = {}
-
-    async def fake_write(**kwargs):
-        seen.update(kwargs)
-        return {"uri": kwargs["uri"], "semantic_status": "skipped"}
-
-    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
-    monkeypatch.setattr(content_router, "get_service", lambda: service)
-    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
-
-    response = await content_router.write(
-        WriteContentRequest(
-            uri="viking://resources/demo.md",
-            content="updated",
-            processing_mode="vectors_only",
-            defer_processing=True,
-            use_snapshot=True,
-        ),
-        ctx,
+async def test_write_processing_mode_and_deferred_snapshot(client, service, request_context):
+    uri = "viking://resources/write-deferred/page.md"
+    deferred = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": "Saved draft",
+            "defer_processing": True,
+            "use_snapshot": True,
+            "wait": True,
+        },
     )
+    assert deferred.status_code == 200, deferred.text
+    result = deferred.json()["result"]
+    assert result["semantic_status"] == result["vector_status"] == "deferred"
+    versions = await service.fs.file_versions(uri, request_context, limit=10)
+    assert len(versions["versions"]) == 1
+    oid = versions["versions"][0]["oid"]
+    assert await service.viking_fs.show(oid, path=uri, ctx=request_context) == b"Saved draft"
 
-    assert response["status"] == "ok"
-    assert seen["processing_mode"] == "vectors_only"
-    assert seen["defer_processing"] is True
-    assert seen["use_snapshot"] is True
-
-
-async def test_write_forwards_tags_and_tag_mode_to_service(monkeypatch):
-    seen = {}
-
-    async def fake_write(**kwargs):
-        seen.update(kwargs)
-        return {"uri": kwargs["uri"]}
-
-    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
-    monkeypatch.setattr(content_router, "get_service", lambda: service)
-    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
-
-    await content_router.write(
-        WriteContentRequest(
-            uri="viking://resources/demo.md",
-            content="updated",
-            tags=["env=prod"],
-            tag_mode="append",
-        ),
-        ctx,
+    vector_write = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": "Indexed draft",
+            "processing_mode": "vectors_only",
+            "wait": True,
+        },
     )
-
-    assert seen["tags"] == ["env=prod"]
-    assert seen["tag_mode"] == "append"
-
-
-async def test_write_forwards_clear_without_tags_to_service(monkeypatch):
-    seen = {}
-
-    async def fake_write(**kwargs):
-        seen.update(kwargs)
-        return {"uri": kwargs["uri"]}
-
-    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
-    monkeypatch.setattr(content_router, "get_service", lambda: service)
-    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
-
-    await content_router.write(
-        WriteContentRequest(
-            uri="viking://resources/demo.md",
-            content="updated",
-            tag_mode="clear",
-        ),
-        ctx,
-    )
-
-    assert seen["tags"] is None
-    assert seen["tag_mode"] == "clear"
+    assert vector_write.status_code == 200, vector_write.text
+    result = vector_write.json()["result"]
+    assert result["semantic_status"] == "skipped"
+    assert result["vector_status"] == "complete"
 
 
 async def test_read_content(client, service, monkeypatch):
@@ -373,15 +264,6 @@ async def test_overview_missing_uri_returns_not_found(client):
     assert body["error"]["code"] == "NOT_FOUND"
 
 
-async def test_reindex_missing_uri(client):
-    """Test reindex without uri field returns structured INVALID_ARGUMENT."""
-    resp = await client.post(
-        "/api/v1/content/reindex",
-        json={"mode": "vectors_only"},
-    )
-    assert resp.status_code == 400
-
-
 async def test_directory_index_preserves_summaries_and_tags(client, service):
     """Directory indexing preserves content; Compile tags belong only to the target root."""
     from openviking.storage.expr import PathScope
@@ -460,64 +342,48 @@ async def test_tagged_output_snapshots_writes_and_blocks_resource_replacement(cl
     await service.resources._ensure_resource_target_available(f"{output}-sibling", ctx)
 
 
-async def test_reindex_request_validation(client):
-    """Test reindex validates the request body schema."""
-    # Empty body — uri is required
-    resp = await client.post("/api/v1/content/reindex", json={})
-    assert resp.status_code == 400
+async def test_reindex_request_validation(client_with_resource):
+    client, root = client_with_resource
+    uri = f"{root}/sample.md"
+    for payload, field in (({}, "uri"), ({"uri": uri, "wait": "invalid"}, "wait")):
+        response = await client.post("/api/v1/content/reindex", json=payload)
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["code"] == "INVALID_ARGUMENT"
+        [validation] = error["details"]["validation_errors"]
+        assert validation["loc"] == ["body", field]
 
-    # Invalid mode should not be accepted by the endpoint
-    resp = await client.post(
-        "/api/v1/content/reindex",
-        json={"uri": "viking://resources/test", "mode": "not_a_mode"},
+    unsupported = await client.post(
+        "/api/v1/content/reindex", json={"uri": uri, "mode": "not_a_mode"}
     )
-    assert resp.status_code in (200, 400)
+    assert unsupported.status_code == 400, unsupported.text
+    error = unsupported.json()["error"]
+    assert error["code"] == "UNSUPPORTED_MODE"
+    assert error["details"]["mode"] == "not_a_mode"
+    assert "vectors_only" in error["details"]["supported_modes"]
 
 
-async def test_reindex_wait_parameter_schema(client):
-    """Test reindex accepts wait parameter in request schema."""
-    # Invalid wait type should be coerced or rejected, not crash
-    resp = await client.post(
-        "/api/v1/content/reindex",
-        json={"uri": "viking://resources/test", "wait": "invalid"},
-    )
-    # Pydantic coerces or rejects — either way, not a 404/405
-    assert resp.status_code != 404
-    assert resp.status_code != 405
+async def test_reindex_uses_request_tenant_for_exists(client_with_resource, app, monkeypatch):
+    client, root = client_with_resource
+    uri = f"{root}/sample.md"
+    foreign = RequestContext(user=UserIdentifier("other-account", "default"), role=Role.ADMIN)
+    monkeypatch.setitem(app.dependency_overrides, get_request_context, lambda: foreign)
+    payload = {"uri": uri, "mode": "vectors_only", "wait": False}
 
+    unavailable = await client.post("/api/v1/content/reindex", json=payload)
+    assert unavailable.status_code == 404, unavailable.text
+    assert unavailable.json()["error"]["code"] == "NOT_FOUND"
 
-@pytest.mark.asyncio
-async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
-    """Reindex must validate URI existence inside the caller's tenant."""
-    seen = {}
-
-    class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
-            seen["uri"] = uri
-            seen["mode"] = mode
-            seen["wait"] = wait
-            seen["ctx"] = ctx
-            return {"status": "completed", "uri": uri, "mode": mode}
-
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="alice"),
-        role=Role.ADMIN,
-    )
-    request = ReindexRequest(
-        uri="viking://resources/demo/demo-note.md",
-        mode="semantic_and_vectors",
-        wait=True,
-    )
-
-    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
-
-    response = await reindex(body=request, ctx=ctx)
-
-    assert response.status == "ok"
-    assert seen["uri"] == "viking://resources/demo/demo-note.md"
-    assert seen["mode"] == "semantic_and_vectors"
-    assert seen["wait"] is True
-    assert seen["ctx"] == ctx
+    owner = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    monkeypatch.setitem(app.dependency_overrides, get_request_context, lambda: owner)
+    accepted = await client.post("/api/v1/content/reindex", json=payload)
+    assert accepted.status_code == 200, accepted.text
+    result = accepted.json()["result"]
+    assert result["uri"] == uri
+    assert result["status"] == "accepted"
+    task = await _wait_task_terminal(client, result["task_id"])
+    assert task["status"] == "completed", task
+    assert task["resource_id"] == uri
 
 
 async def test_content_rebuild_endpoint_removed(client):

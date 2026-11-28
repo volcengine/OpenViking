@@ -17,6 +17,7 @@ Mutations of the same `category + target_key` for the same user require the targ
 | GET | `/api/v1/privacy-configs` | List privacy config categories |
 | GET | `/api/v1/privacy-configs/tree` | List current targets and field metadata as a tree without values |
 | POST | `/api/v1/privacy-configs/scan` | Scan or repair registered values in stored content |
+| POST | `/api/v1/privacy-configs/seal` | Replace registered secrets in caller-supplied texts; optionally enroll new ones |
 | GET | `/api/v1/privacy-configs/{category}` | List targets under a category |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | Get active config (`meta + current`) |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/fields` | List safe active-field metadata without values |
@@ -39,6 +40,7 @@ Mutations of the same `category + target_key` for the same user require the targ
 - Rotate keys by writing a new version
 - Roll back to an old version
 - Restore values from placeholders when reading Skill or Session content
+- Keep secrets out of model requests (see [Seal Texts](#seal-texts))
 
 ---
 
@@ -60,6 +62,89 @@ POST /api/v1/privacy-configs/scan
 
 `uri` is required. Broad scope-based scans are intentionally unsupported. `node_limit` must be between 1 and 1000. The server also enforces one scan per process, 20 file reads per second, 1 MiB per file, 16 MiB total input, 1,000 replacements per file, at most 32 reference details per matched file, at most 100 repaired files, and a cooperative 60-second scan budget. A second concurrent request receives `RESOURCE_EXHAUSTED`. Repair never waits for semantic/vector refresh work. Responses report skipped files, truncation, the stop reason, and the effective limits. When one value maps to multiple Privacy fields, the result reports `ambiguous` and never chooses a reference arbitrarily.
 By default, a fixed order selects a restorable reference. Set `OPENVIKING_PRIVACY_AMBIGUOUS_STRICT=1` to reject such matching operations.
+
+---
+
+## Seal Texts
+
+Replace the caller's registered values (in the `credential` and `auto` categories) in caller-supplied texts with their canonical references, and optionally store new tokens it recognizes, for example before the texts are sent to a model provider. The result does not depend on the user's privacy `mode`; it also works when `mode` is `off`. Intended for clients such as the gateway and agent plugins. For the gateway, see [Seal secrets](../gateway/14-seal-secrets.md).
+
+```text
+POST /api/v1/privacy-configs/seal
+```
+
+```json
+{
+  "texts": [
+    {"text": "My new GitHub token is ghp_..., use it from now on", "enroll": true},
+    {"text": "(tool output)"}
+  ]
+}
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "revision": "4f0c...-9a1b...",
+    "texts": [
+      {
+        "text": "My new GitHub token is {{ov_privacy:alice:viking://~/privacy/auto/github-k3j2m8#/values/token}}, use it from now on",
+        "replaced": [
+          {"start": 23, "end": 63, "reference": "{{ov_privacy:alice:viking://~/privacy/auto/github-k3j2m8#/values/token}}", "created": true, "temporary": true}
+        ]
+      },
+      null
+    ]
+  }
+}
+```
+
+**Request**
+
+| Field | Type | Required | Meaning |
+|-------|------|----------|---------|
+| `texts` | array | Yes | 1 to 1024 items whose UTF-8 sizes sum to at most 16 MiB |
+| `texts[].text` | string | Yes | The text to seal |
+| `texts[].enroll` | bool | No (default `false`) | Also store unregistered tokens it recognizes; see **Enrollment** below |
+
+**Response**
+
+| Field | Meaning |
+|-------|---------|
+| `result.revision` | Opaque string that changes after every write to `credential` or `auto` and every change to `never_mask` or `custom_rules`. It already includes what the call enrolled. Compare it for equality only, for example as part of a cache key |
+| `result.texts[i]` | `null` when nothing in that text was replaced; keep the original text |
+| `result.texts[i].text` | The text with references in place of the values |
+| `result.texts[i].replaced[].start`, `end` | Unicode code point offsets into the original text; `end` is exclusive |
+| `result.texts[i].replaced[].reference` | The canonical reference that replaced the span |
+| `result.texts[i].replaced[].temporary` | True exactly when the reference is in the `auto` category, that is, the value has not been saved under a proper name yet. It depends only on the vault at the returned `revision`, so callers may cache it under that revision |
+| `result.texts[i].replaced[].created` | True for every occurrence, in any text of the request, of a value enrolled by this call. A statistic about this one call; do not cache it or base decisions on it |
+
+**What is matched**
+
+- Matching follows the storage-path rules: string values of at least 6 characters, `never_mask` excluded, existing <code v-pre>{{ov_privacy:...}}</code> spans skipped, and the same ambiguity handling.
+- Registered values are those of the `credential` category and of the `auto` category, which holds automatically enrolled values (see **Enrollment**). The storage-path sanitizer does not look at `auto`.
+- Unlike the storage paths, seal also matches the values of earlier stored versions of each target, so a rotated token that is still in a conversation's history keeps being replaced. An earlier value gets the reference of its field, the same one the current value gets. When a value is held by several fields, a `credential` field wins over an `auto` one, and within a category a current value wins over an earlier one. Deleting a target removes its history, and its values are no longer sealed.
+
+**Enrollment**
+
+- With `enroll: true`, tokens recognized by the built-in detectors and the user's `custom_rules` (minus `never_mask`) that are not registered yet are stored as one new target each in the `auto` category, named `<rule>-<random suffix>` with field `token` and label `{"ov.rule": "<rule>"}`. Their reference is <code v-pre>{{ov_privacy:&lt;owner&gt;:viking://~/privacy/auto/&lt;target&gt;#/values/token}}</code>.
+- The same value always yields the same reference, also across workers. Every occurrence of a value enrolled by this call, in any text of the request, reports `created: true`.
+- At most 1024 new values can be enrolled per call; a request with more returns `RESOURCE_EXHAUSTED` and enrolls none of them. Because enrollment is idempotent, a caller that timed out can simply retry.
+
+To give an enrolled entry a proper name, write its reference as a value (see [upsert_privacy_config()](#upsert-privacy-config)); the `auto` entry is then removed. Entries in `auto` otherwise stay and accumulate; they can be listed, resolved and deleted like any other target. Only the seal endpoint writes into `auto`: upsert and patch with `category=auto` are rejected with `INVALID_ARGUMENT`.
+
+**Errors**
+
+| Condition | Error |
+|-----------|-------|
+| `texts` has fewer than 1 or more than 1024 items | `INVALID_ARGUMENT` |
+| The texts' UTF-8 sizes sum to more than 16 MiB | `RESOURCE_EXHAUSTED` |
+| More than 1024 new values to enroll | `RESOURCE_EXHAUSTED`; none of them is enrolled |
+| More than 10,000 replacements in total | `RESOURCE_EXHAUSTED` |
+
+- An error never comes back as unchanged text.
+- Callers should treat any non-`ok` outcome, including HTTP 404 from an older server, as a failure and not forward the original text.
 
 ---
 
@@ -146,7 +231,7 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 }
 ```
 
-Only categories with stored configs are returned; a Session with no extracted values does not create a privacy config.
+Only categories with stored configs are returned, including `auto` once something was enrolled; a Session with no extracted values does not create a privacy config.
 
 ---
 
@@ -165,6 +250,8 @@ GET /api/v1/privacy-configs/tree
 The optional `category` query parameter limits the tree to one category. An invalid
 identifier returns `INVALID_ARGUMENT`. An empty store returns `categories: []`;
 a missing filtered category returns that category with `targets: []`.
+The HTTP route and `ov privacy tree` list every category. The MCP `privacy_tree` tool
+leaves the `auto` category out unless it is called with `category="auto"`.
 
 ```bash
 curl "http://localhost:1933/api/v1/privacy-configs/tree?category=credential" \
@@ -350,6 +437,10 @@ Write a new version and set it as active.
 - `values` replaces the complete value map for that version; omitted keys are absent from the new snapshot
 - New keys are allowed and persisted
 - If `values` is identical to the current version, no new version is created
+- A top-level string value that is, as a whole, a reference to a field in the caller's own `credential` or `auto` category stores that field's current value instead of the reference text. Writing to a new target renames the credential; writing to an existing target rotates it to a new version. A source in `auto` is deleted after the write succeeds (if that cleanup fails, the write still stands); a source in `credential` is kept. The destination may not be in `auto`
+- When at least one value in the request was such a reference, the response's `values` holds each field's own canonical reference in place of every stored value, so the copied secret is never echoed (also by `ov privacy upsert`, in table and JSON output). Requests with only plain values get the stored values back as before
+- Any other top-level string value that contains a reference is rejected with `INVALID_ARGUMENT`: references to another category or user, to a missing target or field, and references inside a longer string. References nested inside object or array values are not inspected and are stored as written. This also applies to PATCH, the MCP `privacy_upsert` tool, and the CLI
+- A target can carry a short description in the label `description`. `list_privacy_tree()` returns it on each target that has one; other labels are not returned there. The MCP `privacy_upsert` tool takes an optional `description` (at most 500 characters) that sets this label and keeps the other labels; without it, labels stay as they are. From the CLI, pass `--labels-json '{"description":"..."}'`
 
 **HTTP API**
 
@@ -416,6 +507,12 @@ PATCH /api/v1/privacy-configs/{category}/{target_key}
   "values": {"pat": "github_pat_..."},
   "change_reason": "configure GitHub PAT"
 }
+```
+
+A whole-value reference to a `credential` or `auto` field is copied the same way as for upsert, so a model that only holds a reference can rename or rotate a credential without seeing it. As with upsert, the response then shows every value as its field's reference. For example, this body saves an automatically enrolled token as `pat`:
+
+```json
+{"values": {"pat": "{{ov_privacy:alice:viking://~/privacy/auto/github-k3j2m8#/values/token}}"}}
 ```
 
 Canonical CLI `--field` and `--field-*` flags use this endpoint without reading current values in the CLI. `--key` and `--key-*` remain backward-compatible aliases:
@@ -660,3 +757,4 @@ ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credent
 - [Privacy Configs](../concepts/13-privacy.md) - Sensitive value extraction and restore
 - [File System](03-filesystem.md) - `read`/`write`/`ls`
 - [System](07-system.md) - System status and observability
+- [Secret sealing in the gateway](../gateway/14-seal-secrets.md) - Seal secrets in model requests

@@ -60,7 +60,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | Qoder CLI | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | Yes | Commits uncommitted messages |
 | Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | Every turn | No exit hook; turns are already committed | No pre-compaction hook |
 | OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 20,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
-| DSH | Yes, session-aware | Profile, memory index, skills, once per session | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
+| DSH | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
 | pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 20,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
 | OpenClaw | Yes, session-aware | Profile, every turn | At half the token budget (64,000 by default) | No | The plugin owns compaction |
 | Hermes (bundled) | Yes, session-aware with a fallback | Profile and memory listings | No; only at session boundaries | Yes, if pending uploads finish within 10 seconds | Commits at fork-style compaction |
@@ -165,7 +165,7 @@ The updated Hermes external plugin has seven tools: `viking_search`, `viking_rul
 The server applies the same checks to every delete, whichever tool or command sends it:
 
 - The caller needs manage permission on the URI, and a user whose own deletion is in progress is refused.
-- `viking://`, `viking://user`, and `viking://agent` cannot be deleted. Deleting `viking://resources` or a whole user root such as `viking://user/<id>` requires the ROOT role. Non-root callers cannot write to the `viking://temp` root.
+- `viking://` and `viking://user` cannot be deleted. Deleting `viking://resources`, `viking://agent`, or a whole user root such as `viking://user/<id>` requires the ROOT role. Non-root callers cannot write to the `viking://temp` root.
 - URIs hidden by the caller's actor-peer view are refused.
 
 These checks protect namespaces, not content types. Restrictions by type come from the client:
@@ -193,7 +193,7 @@ Skills follow their own path. Create, install, or replace them with the MCP `add
 Every integration except OpenClaw and Hermes uses the shared plugin code, which tries up to three requests:
 
 1. **Context search.** `POST /api/v1/search/search` with `mode: "context"`, `purpose: "coding"`, and the session ID. Budgets, quotas, query expansion, and digest options are sent only when you configure them; otherwise the server defaults apply, including a 1,600-token injection budget (`max_tokens`).
-2. **Legacy recall.** If the server rejects context mode as an older version, the plugin records that in `~/.openviking/state/context-face.json` for six hours and calls `/api/v1/search/recall` instead. The file is shared by every integration on the machine, so one integration's result applies to all of them.
+2. **Legacy recall.** If Context search is unavailable, the plugin can fall back to `/api/v1/search/recall`. A Context request rejected with HTTP `400` or `422` ends recall for that turn. Codex and Claude Code display the server error as a hook warning, and other callers of the shared recall pipeline write it to stderr.
 3. **Plain find.** As a last resort the plugin runs `find` on `viking://~/memories` and `viking://~/skills`, ranks the results locally, and fills its own token budget. `recallTokenBudget`, `recallMaxContentChars`, and `recallPreferAbstract` apply only at this step.
 
 The shared-plugin recall pipeline excludes resources; the model searches resource documents by calling `search` itself. Hermes can include resources when its resource-recall option is enabled.
@@ -257,13 +257,14 @@ When each integration injects it:
 | Integration | When |
 |---|---|
 | Claude Code | `SessionStart`, every source |
-| Codex | `SessionStart` on startup, clear, and resume |
-| Cursor, TRAE, TRAE CN, ZCode, Antigravity | `SessionStart` |
+| Codex | `SessionStart` on startup, clear, resume, and compact |
+| Cursor, TRAE, TRAE CN, ZCode | `SessionStart` |
+| Antigravity | `SessionStart`, and the first turn after each compaction checkpoint in the transcript |
 | Kimi Code | The first prompt; retried on later prompts until it succeeds |
-| CodeBuddy Code | `SessionStart`, every source; it can be delivered twice in one session, so the hook is idempotent |
+| CodeBuddy Code | `SessionStart`, every source; it can be delivered twice in one session, so the hook is idempotent. CodeBuddy drops `SessionStart` context at a compaction, so the next prompt sends it again |
 | Qoder CLI | `SessionStart`, every source (`startup`, `resume`, `compact`) |
-| OpenCode | The first message of each session; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
-| DSH | Once per session; not sent again after compaction |
+| OpenCode | The first message of each session and the first after each compaction; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
+| DSH | At session start, and again on the next model step when a compaction dropped it |
 | pi | In the system prompt, rebuilt every turn |
 | OpenClaw | In the system prompt, rebuilt every turn: `<user-profile>` for the user's profile and, with `peer_role`, the actor peer's profile. No memory index or skill catalog |
 | Hermes | Its own reader loads the profile and the preferences and entities listings, with a 6,000-token default budget |
@@ -442,15 +443,15 @@ When the host shortens its context, most integrations make sure the dropped mess
 | Integration | Approach | Before compaction | After compaction |
 |---|---|---|---|
 | Claude Code | Host summarizes | `PreCompact` commits synchronously; this is the one write that never runs in the background, because the host rewrites the transcript right after | `SessionStart` with `source="compact"` injects the archive overview and up to 5 summaries |
-| Codex, TraeCode CLI 2.0 | Host summarizes | `PreCompact` catches up uncaptured turns, commits everything, and starts a new OpenViking session. If the catch-up is incomplete, it does not commit and retries later | The archive summary is injected on resume |
+| Codex, TraeCode CLI 2.0 | Host summarizes | `PreCompact` catches up uncaptured turns, commits everything, and starts a new OpenViking session. If the catch-up is incomplete, it does not commit and retries later | `SessionStart` with `source="compact"` sends the profile again; the archive summary is injected on resume |
 | Cursor | Host summarizes | `preCompact` commits | Nothing |
-| CodeBuddy Code | Host summarizes | `PreCompact` commits | Nothing |
+| CodeBuddy Code | Host summarizes | `PreCompact` commits | The next prompt sends the profile again |
 | Qoder CLI | Host summarizes | `PreCompact` commits | Nothing |
 | TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
-| Antigravity | Not verified | No pre-compaction hook | Nothing |
+| Antigravity | Host summarizes | No pre-compaction hook | The first turn after the compaction checkpoint sends the profile again |
 | Kimi Code | Host summarizes | `PreCompact` commits | Nothing |
-| OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended` |
-| DSH | Host summarizes | `compaction/start` commits regardless of the token threshold. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | Nothing |
+| OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended`. The next message sends the session-start context again |
+| DSH | Host summarizes | `compaction/start` commits regardless of the token threshold. Injected context is a user message and shrinks with the host's compaction | The next model step sends the profile again if the compaction dropped it |
 | pi | Takeover, on by default | Commits and waits for the archive overview | The overview replaces pi's summary; on failure pi compacts as usual |
 | OpenClaw | The plugin owns compaction | `compact()` commits and waits | The next context assembly rebuilds history from the server |
 | Hermes (bundled) | Host summarizes | Fork-style compaction commits the old session; in-place compaction does nothing | Nothing |

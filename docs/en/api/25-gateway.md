@@ -349,6 +349,9 @@ An error the gateway produces on a model route (`/gateway/v1/*`, `/gateway/api/v
 | 502 | `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid` | upstream | During OpenViking tool rounds, the provider's reply was unusable, incomplete or an error, or the model called a tool it may not use. |
 | 502 | `tool_loop_limit` | gateway | The OpenViking tool rounds reached a limit. |
 | 504 | `tool_loop_timeout` | gateway | The OpenViking tool rounds ran out of time. |
+| 503 | `secret_seal_failed` | openviking | With **Seal secrets** on, OpenViking could not seal the request, or is too old to; see [When sealing cannot be done](../gateway/14-seal-secrets.md#when-sealing-cannot-be-done). |
+| 400 | `secret_seal_invalid_request` | gateway | With **Seal secrets** on, the request itself cannot be sealed; the detail says why. See [When sealing cannot be done](../gateway/14-seal-secrets.md#when-sealing-cannot-be-done). |
+| 502 | `secret_unseal_failed` | openviking | With **Seal secrets** on, the tool calls in the reply could not be unsealed; a reply that is already streaming ends with it as its error event. See [When sealing cannot be done](../gateway/14-seal-secrets.md#when-sealing-cannot-be-done). |
 
 A WebSocket request to a Responses route still gets an empty 426; its record says `websocket_unsupported`. A `gateway_http_<status>` reason on a model route would mean an error the gateway does not classify yet.
 

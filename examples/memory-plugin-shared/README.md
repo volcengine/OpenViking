@@ -121,6 +121,24 @@ For deployments where one bot serves multiple real people, such as zouk,
 vikingbot, or AstrBot, configure an explicit actor peer and use the isolation
 mode so one person's memories are not recalled into another person's session.
 
+## Server Feature Table
+
+`lib/server-features.json` names each OpenViking server capability a client depends on, with the first server version that has it. The gateway and the plugins answer "does this server have X" from this one table: `lib/server-features.mjs` reads it for the plugins (`supports(feature, version)`, `featureStatus`, `healthVersion`), and `openviking_gateway/client.py` reads a copy the sync writes into the gateway package (`openviking_gateway/server-features.json`; `supports(feature, version)`, `VikingClient.supports(key, feature)`). The copy is committed, and CI fails a pull request whose copy differs from the source; a plugin gets the table only with a module that reads it.
+
+Adding a row:
+
+1. Add `"name": "X.Y.Z"` to `lib/server-features.json`.
+2. Add `"name"` to the `ServerFeature` union in `lib/server-features.d.mts`, so TypeScript callers can name it.
+3. Run `node examples/memory-plugin-shared/sync.mjs` and commit the regenerated `openviking_gateway/server-features.json` with the source.
+4. Add boundary cases for the row (the version itself, the release before it, a development build of it) to `tests/fixtures/server_feature_versions.json`.
+
+Rules for a row:
+
+- The version is the next unreleased release at the time the server change merges, the release its users will first see it in.
+- Only the release part of a version is compared, so a development build such as `0.5.7.dev44` counts as 0.5.7.
+- A version that cannot be read, or none at all, counts as not supporting. Both readers accept the PEP 440 grammar and nothing else; `tests/fixtures/server_feature_versions.json` holds the cases both test suites check.
+- Callers ask the table before they use a capability. They do not infer support from a 404 or another error from the server.
+
 ## Skill Catalog
 
 `lib/profile-inject.mjs` ends the session-start block with `<available-skills>`, built from one `GET /api/v1/skills?node_limit=200`, which caps each root rather than the merged list: the user's own skills first, then the ones shared under `viking://agent/skills` (a shared skill whose name the user also owns is left out), each description cut to about 40 tokens. Nothing trims the list again on this side; the token budget decides what fits. Callers turn it on by passing their resolved config as `buildProfileBlock()`'s fourth argument, and claude-code, codex, cursor, trae, trae-cn, zcode, opencode, dsh and pi all do, so they build it the same way; openclaw and hermes inject no profile, and `pi-experimental-context-management` calls `buildProfileBlock()` without that argument.

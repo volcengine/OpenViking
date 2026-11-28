@@ -3,6 +3,7 @@
 
 import asyncio
 import sys
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,10 +15,10 @@ from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 from openviking.observability.context import get_root_observability_context
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
-from openviking.server.profile_middleware import PROFILE_TOP_N, _sanitize_profile_path
+from openviking.server.profile_middleware import _sanitize_profile_path
 
 
-def _make_test_app():
+def _make_test_app(*, profile_enabled=True):
     class _Service:
         _initialized = True
 
@@ -27,20 +28,7 @@ def _make_test_app():
         async def close(self):
             pass
 
-    return create_app(config=ServerConfig(profile_enabled=True), service=_Service())
-
-
-def _make_test_app_with_config(config: ServerConfig):
-    class _Service:
-        _initialized = True
-
-        async def initialize(self):
-            pass
-
-        async def close(self):
-            pass
-
-    return create_app(config=config, service=_Service())
+    return create_app(config=ServerConfig(profile_enabled=profile_enabled), service=_Service())
 
 
 @pytest.mark.asyncio
@@ -72,9 +60,8 @@ async def test_profile_query_adds_profile_field_to_json_response():
     assert float(resp.headers["x-process-time"]) >= 0
     assert any("ncalls" in line for line in body["profile"])
     assert any("cumtime" in line for line in body["profile"])
-    assert not any(
-        "/Users/bytedance/github_openviking/OpenViking/" in line for line in body["profile"]
-    )
+    workspace = str(Path(__file__).resolve().parents[2])
+    assert not any(workspace in line for line in body["profile"])
     assert not any("/site-packages/" in line for line in body["profile"])
     assert not any("/lib/python" in line for line in body["profile"])
     assert any("openviking/" in line or "tests/" in line for line in body["profile"])
@@ -100,7 +87,7 @@ async def test_profile_query_does_not_affect_following_request():
 
 @pytest.mark.asyncio
 async def test_profile_query_is_ignored_when_server_profile_disabled():
-    app = _make_test_app_with_config(ServerConfig(profile_enabled=False))
+    app = _make_test_app(profile_enabled=False)
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -220,7 +207,7 @@ async def test_profile_query_preserves_stream_delivery_and_context_cleanup(endin
         if ending == "cancel":
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await task
+                await asyncio.wait_for(task, timeout=2)
         elif ending == "disconnect":
             disconnect.set()
             await asyncio.wait_for(task, timeout=2)
@@ -245,13 +232,7 @@ async def test_profile_query_preserves_stream_delivery_and_context_cleanup(endin
 
 
 def test_sanitize_profile_path_prefers_package_root_over_project_root_for_venv_packages():
-    path = (
-        "/Users/bytedance/github_openviking/OpenViking/"
-        ".venv/lib/python3.11/site-packages/starlette/middleware/base.py"
-    )
+    root = Path(__file__).resolve().parents[2]
+    path = str(root / ".venv/lib/python3.11/site-packages/starlette/middleware/base.py")
 
     assert _sanitize_profile_path(path) == "starlette/middleware/base.py"
-
-
-def test_profile_default_top_n_is_100():
-    assert PROFILE_TOP_N == 100

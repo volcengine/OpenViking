@@ -14,7 +14,7 @@ import json
 import math
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol, cast
 
 from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking_cli.exceptions import (
@@ -38,6 +38,18 @@ MAX_SPARSE_NONZERO = 4096
 MAX_SPARSE_TERM_BYTES = 256
 MAX_CANDIDATE_LIMIT = 10000
 DEFAULT_CANDIDATE_LIMIT = 1000
+
+
+class _DenseCandidateCollection(Protocol):
+    """Collection methods needed by the hook, without importing its concrete owner."""
+
+    _array_fields: set[str]
+
+    def _normalize_filter_date_times(
+        self, filters: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
+
+    def _resolve_distance_and_op(self, index_name: str) -> tuple[str, str]: ...
 
 
 def _finite_number(value: Any, name: str) -> float:
@@ -432,6 +444,41 @@ class OpenGaussRetrievalMixin:
     def _validate_ranked_filters(self, filters) -> None:
         _validate_filters(filters, self._field_names)
 
+    def _dense_vector_guard(self, op: str) -> str:
+        return '"vector" IS NOT NULL'
+
+    def _dense_filter_clause(self, op, where, filter_params):
+        condition = f"({where})" if where else "TRUE"
+        return f"{condition} AND {self._dense_vector_guard(op)}", list(filter_params)
+
+    def _dense_candidate_query(self, index_name, where, filter_params, vector_text, op, budget):
+        """Backend hook for dense recall, kept inside the ranking statement's snapshot."""
+        predicate, params = self._dense_filter_clause(op, where, filter_params)
+        return (
+            f'SELECT "id" AS _ov_candidate_id FROM {_quote_identifier(self._name)} '
+            f"WHERE {predicate} "
+            f'ORDER BY "vector" {op} %s::vector LIMIT %s',
+            [*params, vector_text, budget],
+        )
+
+    def _dense_candidate_ctes(self, index_name, vector_text, budget, filters):
+        """Backend hook shared by dense recall and sparse/advanced reranking."""
+        collection = cast(_DenseCandidateCollection, self)
+        where, params = _build_where_clause(
+            collection._normalize_filter_date_times(filters), collection._array_fields
+        )
+        _, op = collection._resolve_distance_and_op(index_name)
+        sql, params = self._dense_candidate_query(
+            index_name, where, params, vector_text, op, budget
+        )
+        return [f"dense_candidates AS ({sql})"], params
+
+    def _candidate_query_sql(self, ctes, select):
+        return "WITH " + ", ".join(ctes) + " " + select
+
+    def _consume_candidate_rows(self, columns, rows, index_name):
+        return columns, rows
+
     def search_ranked(
         self,
         index_name: str,
@@ -505,24 +552,27 @@ class OpenGaussRetrievalMixin:
             for term, weight in sparse.items():
                 params.extend([term, weight])
         if has_dense:
-            ctes.append(
-                f'dense_candidates AS (SELECT "id" AS _ov_candidate_id FROM {table} '
-                f'WHERE {condition} AND "vector" IS NOT NULL '
-                f'ORDER BY "vector" {op} %s::vector LIMIT %s)'
+            dense_ctes, dense_params = self._dense_candidate_ctes(
+                index_name, vector_text, budget, filters
             )
-            params.extend([*filter_params, vector_text, budget])
+            ctes.extend(dense_ctes)
+            params.extend(dense_params)
             candidate_selects.append("SELECT _ov_candidate_id FROM dense_candidates")
         if has_sparse:
-            vector_guard = ' AND "vector" IS NOT NULL' if has_dense else ""
+            sparse_predicate, sparse_params = (
+                self._dense_filter_clause(op, where, filter_params)
+                if has_dense
+                else (condition, list(filter_params))
+            )
             ctes.append(
                 f"sparse_candidates AS (SELECT p.id AS _ov_candidate_id FROM {postings} p "
                 "JOIN query_sparse q ON p.term = q.term "
                 f'WHERE EXISTS (SELECT 1 FROM {table} WHERE "id" = p.id '
-                f"AND {condition}{vector_guard}) GROUP BY p.id "
+                f"AND {sparse_predicate}) GROUP BY p.id "
                 "HAVING SUM(p.weight * q.weight) > 0 "
                 "ORDER BY SUM(p.weight * q.weight) DESC, p.id LIMIT %s)"
             )
-            params.extend([*filter_params, budget])
+            params.extend([*sparse_params, budget])
             candidate_selects.append("SELECT _ov_candidate_id FROM sparse_candidates")
         ctes.append("candidates AS (" + " UNION ".join(candidate_selects) + ")")
         distance_sql = (
@@ -547,11 +597,14 @@ class OpenGaussRetrievalMixin:
         )
         # A semi-join keeps the outer projection unambiguous even if a user
         # column is named _ov_candidate_id; candidates are never fetched first.
-        sql = (
-            "WITH " + ", ".join(ctes) + f" SELECT {projection}, "
-            f"{distance_sql} AS _ov_dense_distance, {sparse_sql} AS _ov_sparse_score, "
-            f"{time_sql} AS _ov_decay_time FROM {table} "
-            f'WHERE {table}."id" IN (SELECT candidates._ov_candidate_id FROM candidates)'
+        sql = self._candidate_query_sql(
+            ctes,
+            (
+                f"SELECT {projection}, "
+                f"{distance_sql} AS _ov_dense_distance, {sparse_sql} AS _ov_sparse_score, "
+                f"{time_sql} AS _ov_decay_time FROM {table} "
+                f'WHERE {table}."id" IN (SELECT candidates._ov_candidate_id FROM candidates)'
+            ),
         )
         cursor = self._cursor()
         try:
@@ -560,6 +613,7 @@ class OpenGaussRetrievalMixin:
             cursor.execute(sql, params)
             columns = [desc[0] for desc in cursor.description]
             rows = cursor.fetchall()
+            columns, rows = self._consume_candidate_rows(columns, rows, index_name)
             self._conn.commit()
         except Exception:
             self._conn.rollback()

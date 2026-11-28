@@ -5,35 +5,20 @@ import * as readline from "node:readline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { __test__ as setupCommandTest } from "../../commands/setup.js";
-import { defaultSetupIO } from "../../services/setup/config-writer.js";
-import { createOpenVikingSetupService } from "../../services/setup/setup-flow.js";
 
 vi.mock("node:readline", () => ({ createInterface: vi.fn() }));
 
-describe("openviking setup agent prefix validation", () => {
+describe("openviking setup command", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-
-  it.each(["", "  ", "main", "foo_main", "foo-main", "Foo_123"])(
-    "accepts valid agent prefix %j",
-    (value) => {
-      expect(/^[a-zA-Z0-9_-]*$/.test(value.trim())).toBe(true);
-    },
-  );
-
-  it.each(["foo.bar", "foo/bar", "foo bar", "中文", "foo:bar"])(
-    "rejects invalid agent prefix %j",
-    (value) => {
-      expect(/^[a-zA-Z0-9_-]*$/.test(value.trim())).toBe(false);
-    },
-  );
 
   it("reads legacy person from existing config but rejects it as setup input", () => {
     expect(setupCommandTest.normalizePeerRole("sender")).toBe("sender");
@@ -76,36 +61,50 @@ describe("openviking setup agent prefix validation", () => {
     });
   });
 
-  it("non-interactive setup can persist resource-only recallTargetTypes for post-install opt-in", async () => {
+  it("non-interactive setup saves resource-only recall and replaces an occupied context engine only when forced", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openviking-setup-"));
     tempDirs.push(dir);
     const configPath = path.join(dir, "openclaw.json");
-    const { setupNonInteractive } = createOpenVikingSetupService({
-      io: defaultSetupIO,
-      checkServiceHealth: async () => ({
-        ok: false,
-        version: "",
-        error: "offline",
-        compatibility: "unknown",
-        pluginVersion: "test",
-        compatRange: "any",
-      }),
-      probeApiKeyType: async () => ({
-        keyType: "unknown",
-        needsAccountId: false,
-        needsUserId: false,
-        detail: "not probed",
-      }),
-    });
+    fs.writeFileSync(configPath, JSON.stringify({
+      plugins: { slots: { contextEngine: "other-engine" } },
+    }));
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
 
-    const result = await setupNonInteractive(configPath, {
+    const params = {
       baseUrl: "http://127.0.0.1:1933",
       allowOffline: true,
       recallTargetTypes: ["resource"],
+      peerRole: "assistant" as const,
+      peerPrefix: "main",
+    };
+
+    const regular = await setupCommandTest.setupNonInteractive(configPath, params);
+    expect(regular).toMatchObject({
+      success: false,
+      action: "slot_blocked",
+      slot: { activated: false, previousOwner: "other-engine", replaced: false },
+    });
+    const saved = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(saved.plugins).toMatchObject({
+      allow: ["openviking"],
+      slots: { contextEngine: "other-engine" },
+      entries: { openviking: { config: {
+        mode: "remote",
+        baseUrl: "http://127.0.0.1:1933",
+        peer_role: "assistant",
+        peer_prefix: "main",
+        recallTargetTypes: ["resource"],
+      } } },
     });
 
-    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    expect(result.success).toBe(true);
-    expect(config.plugins.entries.openviking.config.recallTargetTypes).toEqual(["resource"]);
+    const forced = await setupCommandTest.setupNonInteractive(configPath, { ...params, forceSlot: true });
+    expect(forced).toMatchObject({
+      success: true,
+      action: "configured",
+      slot: { activated: true, previousOwner: "other-engine", replaced: true },
+    });
+    const updated = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    expect(updated.plugins.slots.contextEngine).toBe("openviking");
+    expect(updated.plugins.entries.openviking.config).toEqual(saved.plugins.entries.openviking.config);
   });
 });

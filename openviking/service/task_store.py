@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.service.task_domain import (
     ACTIVE_TASK_STATUSES,
@@ -449,6 +450,36 @@ class PersistentTaskStore(TaskWorkStore):
     ROOT_PREFIX = "/local"
     SYSTEM_DIRNAME = "_system"
     TASKS_DIRNAME = "tasks"
+
+    @classmethod
+    def has_task_store(cls, agfs: Any) -> bool:
+        """Check legacy File task roots, including empty directories.
+
+        Probe task roots without listing users or task files. Only absent
+        paths mean no store; other storage failures must propagate.
+        """
+
+        def is_directory(path: str) -> bool:
+            try:
+                return bool(agfs.stat(path, ctx=fs_ctx_from_agfs_path(path)).get("isDir"))
+            except (AGFSNotFoundError, FileNotFoundError):
+                return False
+
+        if is_directory(cls._task_root_dir(SYSTEM_TASK_ACCOUNT_ID)):
+            return True
+        try:
+            accounts = agfs.ls(cls.ROOT_PREFIX, ctx=fs_ctx_from_agfs_path(cls.ROOT_PREFIX))
+        except (AGFSNotFoundError, FileNotFoundError):
+            return False
+        for account in accounts:
+            if not account.get("isDir") or not account.get("name"):
+                continue
+            account_id = str(account["name"])
+            if account_id == SYSTEM_TASK_ACCOUNT_ID:
+                continue
+            if is_directory(cls._task_root_dir(account_id)):
+                return True
+        return False
 
     def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
@@ -1784,16 +1815,19 @@ class PersistentTaskStore(TaskWorkStore):
             self._task_dir(account_id, user_id),
         )
 
-    def _system_dir(self, account_id: str) -> str:
+    @classmethod
+    def _system_dir(cls, account_id: str) -> str:
         if account_id == SYSTEM_TASK_ACCOUNT_ID:
-            return f"{self.ROOT_PREFIX}/{account_id}"
-        return f"{self.ROOT_PREFIX}/{account_id}/{self.SYSTEM_DIRNAME}"
+            return f"{cls.ROOT_PREFIX}/{account_id}"
+        return f"{cls.ROOT_PREFIX}/{account_id}/{cls.SYSTEM_DIRNAME}"
 
-    def _task_root_dir(self, account_id: str) -> str:
-        return f"{self._system_dir(account_id)}/{self.TASKS_DIRNAME}"
+    @classmethod
+    def _task_root_dir(cls, account_id: str) -> str:
+        return f"{cls._system_dir(account_id)}/{cls.TASKS_DIRNAME}"
 
-    def _task_dir(self, account_id: str, user_id: str) -> str:
-        return f"{self._task_root_dir(account_id)}/{user_id}"
+    @classmethod
+    def _task_dir(cls, account_id: str, user_id: str) -> str:
+        return f"{cls._task_root_dir(account_id)}/{user_id}"
 
     def _task_path(self, account_id: str, user_id: str, task_id: str) -> str:
         return f"{self._task_dir(account_id, user_id)}/{task_id}.json"

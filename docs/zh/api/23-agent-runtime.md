@@ -23,7 +23,7 @@ POST /api/v1/compile/create
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `compile_name` | string | 是 | 调用者指定的配置名称，原样返回 |
-| `from` | string[] | 是 | 非空来源目录列表 |
+| `from` | string[] | 是 | 1 至 100 个来源目录，按 URI 解析后去重计数 |
 | `to` | string | 是 | 调用者可写、与来源不重叠的输出目录 |
 | `skill` | string | 是 | 可读的 Skill 目录或其 `SKILL.md` URI |
 | `instruction` | string | 否 | 补充指令；null 使用 Skill 默认行为 |
@@ -61,7 +61,10 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 
 只传频率时，服务端在 00:00–03:59 中为计划分配固定时间。每周计划省略 `weekday` 时也会分配固定执行日（1 为周一，7 为周日）。只传 `hour`（0–23）时，在该小时内分配固定分钟，例如 `hour: 10` 对应 10:00–10:59。只传 `minute`（0–59）时，小时取 0。查询配置的 `update_schedule` 可查看分配结果。
 
-定时执行要求开启 `compile_api.scheduler_enabled=true` 并配置 Redis expiry 服务。凭据加密保存，每次触发时重新验证凭据及当前用户组权限。调度未启用或不可用时返回错误，不会退化为立即执行。禁用计划后 `next_triggered_slot` 为 null。
+定时执行要求开启 `compile_api.scheduler_enabled=true`，并通过
+`expiry.cache.instance` 选择 Redis CacheRuntime。凭据加密保存，每次触发时重新验证
+凭据及当前用户组权限。调度未启用或不可用时返回错误，不会退化为立即执行。禁用计划后
+`next_triggered_slot` 为 null。
 
 ### 执行编译
 
@@ -202,6 +205,10 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 
 无变化时可复用开始快照。失败、取消不推进成功源基线。执行计划及必要恢复检查点保存在私有 Task 状态；公共配置、run 和 Task 不暴露执行凭据。
 
+VikingBot 在已知来源、worker 或写入失败仍未解决时返回 `result.completion_status: "partial"`。
+已确认输出会保留，命名 Compile 保留原成功源基线，使遗漏且未再次变化的输入仍能进入下一轮。
+其他结果省略该标记；没有标记不代表语义覆盖完整或索引成功。
+
 Compile 业务文件仅有：
 
 ```text
@@ -215,7 +222,7 @@ Compile 业务文件仅有：
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-Compile 成功收尾时发布产物快照。目标目录的统计中只要有文件新增、修改或删除，就推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+Compile 成功收尾时发布产物快照。完整交付且目标有文件新增、修改或删除时推进增量基线。部分交付后的增量恢复也可在目标零变更时推进基线，但仅限本轮所有新增或修改的来源均已处理，且能核对实际读取内容与冻结源快照一致。涉及未验证来源、删除或全量扫描时，零变更结果保留原基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
 
 ### 检查 Compile 可用性
 

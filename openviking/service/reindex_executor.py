@@ -8,7 +8,7 @@ import asyncio
 import re
 import time
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from openviking.concurrency import FILE_TASK_CONCURRENCY
@@ -661,6 +661,11 @@ class ReindexExecutor:
                 vector_inventory=groups.get(root, {}),
             )
 
+        if exists:
+            await self._reindex_rfv(
+                uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=inventory
+            )
+
     async def _reindex_peer_scopes(
         self,
         *,
@@ -729,6 +734,11 @@ class ReindexExecutor:
                     vector_inventory=content_groups.get(memories, {}),
                 )
 
+        if exists:
+            await self._reindex_rfv(
+                uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=inventory
+            )
+
     async def _memory_scopes(
         self,
         *,
@@ -766,10 +776,7 @@ class ReindexExecutor:
 
         for record in inventory.values():
             root, depth = scope_root(record)
-            if (
-                root
-                and (depth > 1 or int(record.get("level", -1)) in {0, 1})
-            ):
+            if root and (depth > 1 or int(record.get("level", -1)) in {0, 1}):
                 directory_roots.add(root)
         groups: dict[str, dict[str, Mapping[str, Any]]] = {}
         root_inventory = {}
@@ -1037,10 +1044,10 @@ class ReindexExecutor:
         self,
         *,
         uri: str,
-        mode: str,
-        context_type: str,
         recursive: bool,
         run: _ReindexRunContext,
+        mode: str = "vectors_only",
+        context_type: str | None = None,
         root_is_dir: bool | None = None,
         formal_entries: list[dict[str, Any]] | None = None,
         root_exists: bool = True,
@@ -1051,6 +1058,8 @@ class ReindexExecutor:
         from openviking.storage.resource_rnfv import RequestIntent
         from openviking.utils.resource_processor import ResourceProcessor
 
+        if context_type is None:
+            context_type = context_type_for_uri(uri)
         service = get_service()
         request = RequestIntent.from_ingest_options(
             target_uri=uri,
@@ -1061,7 +1070,7 @@ class ReindexExecutor:
             # when their md5 values are unchanged (the public API regression
             # contract relies on this), while other RFV targets retain the
             # caller-controlled force behavior.
-            force=run.force or (context_type == "skill" and mode == "vectors_only"),
+            force=run.force or (classify_uri(uri).is_skill_root and mode == "vectors_only"),
             scalar_target_levels=frozenset({0, 1, 2}),
         )
         resolved_root_is_dir = run.root_is_dir if root_is_dir is None else root_is_dir
@@ -1076,6 +1085,13 @@ class ReindexExecutor:
                 recursive=recursive,
                 include_direct_children=bool(resolved_root_is_dir) and not recursive,
             )
+        if root_exists and resolved_root_is_dir and not recursive and formal_entries == []:
+            # Descendants have their own scopes. Only reconcile the directory's summaries here.
+            vector_inventory = {
+                record_id: record
+                for record_id, record in vector_inventory.items()
+                if record.get("uri") == uri and record.get("level") in {0, 1}
+            }
         snapshot = await build_rfv_snapshot(
             viking_fs=service.viking_fs,
             vikingdb=service.vikingdb_manager,
@@ -1098,30 +1114,6 @@ class ReindexExecutor:
             account_id=run.ctx.account_id,
             source_metadata=snapshot.source_metadata,
         )
-        root_entry = snapshot.formal.entries.get("")
-        if (
-            mode == "vectors_only"
-            and root_entry is not None
-            and not root_entry.is_dir
-            and any(
-                action.level == int(ContextLevel.DETAIL)
-                and action.action.value in {"merge", "upsert"}
-                for action in plan.direct_index_actions
-            )
-        ):
-            enriched_snapshot = await self._with_single_file_parent_overview(
-                snapshot,
-                ctx=run.ctx,
-                viking_fs=service.viking_fs,
-            )
-            if enriched_snapshot is not snapshot:
-                snapshot = enriched_snapshot
-                diff, plan = build_rfv_context_update_plan(
-                    snapshot=snapshot,
-                    context_type=context_type,
-                    account_id=run.ctx.account_id,
-                    source_metadata=snapshot.source_metadata,
-                )
         run.counters.scanned_records += len(snapshot.formal.entries)
         if plan.direct_index_actions:
             owner_ctx = self._content_owner_ctx(uri, run.ctx)
@@ -1162,33 +1154,8 @@ class ReindexExecutor:
                 ctx=run.ctx,
                 ingest_options=run.ingest_options,
                 file_md5=plan.file_refresh.md5,
+                generation_trigger="reindex",
             )
-
-    @staticmethod
-    async def _with_single_file_parent_overview(
-        snapshot: Any,
-        *,
-        ctx: RequestContext,
-        viking_fs: Any,
-    ) -> Any:
-        """Best-effort hydrate a file root's parent overview for L2 summary reuse."""
-        parent = VikingURI(snapshot.request.target_uri).parent
-        if parent is None:
-            return snapshot
-        try:
-            raw = await viking_fs.read_file_bytes(f"{parent.uri}/.overview.md", ctx=ctx)
-            overview = body_for_preview(raw)
-        except Exception:
-            return snapshot
-        if not overview.strip():
-            return snapshot
-        return replace(
-            snapshot,
-            source_contents={
-                **snapshot.source_contents,
-                (parent.uri, int(ContextLevel.OVERVIEW)): overview,
-            },
-        )
 
     async def _enqueue_reindex_semantic_plan(
         self,
@@ -1370,7 +1337,6 @@ class ReindexExecutor:
                     telemetry_id=get_current_telemetry().telemetry_id,
                     ingest_options=run.ingest_options,
                     generation_trigger="reindex",
-                    use_hierarchical_aggregation=True,
                     propagate_to_parent=recursive,
                 ),
                 root_is_dir=True,
@@ -1507,6 +1473,9 @@ class ReindexExecutor:
         for name in ("skills", "peers"):
             if facts[name][0] and not facts[name][1]:
                 raise InvalidArgumentError(f"{name} namespace must be a directory: {roots[name]}")
+        await self._reindex_rfv(
+            uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=direct_inventory
+        )
         await self._resource_scope(
             uri=roots["resources"],
             mode=mode,
@@ -1563,29 +1532,48 @@ class ReindexExecutor:
         self._ensure_reconciliation_scope_visible(uri, run.ctx)
         if not recursive:
             return
-        resources, skills = "viking://resources", "viking://agent/skills"
+        agent = "viking://agent"
+        resources, tools, skills = "viking://resources", f"{agent}/tools", f"{agent}/skills"
+        resource_roots = (resources, tools)
         inventories = {}
-        for root in (resources, skills):
+        for root in (*resource_roots, skills):
             inventories[root] = await self._read_reindex_inventory(
                 get_service().vikingdb_manager,
                 uri=root,
                 ctx=run.ctx,
                 recursive=True,
             )
-        resource_facts = await self._namespace_facts(resources, ctx=run.ctx)
+        agent_exists, agent_is_dir, _ = await self._namespace_facts(agent, ctx=run.ctx)
+        agent_inventory = None
+        if agent_exists and agent_is_dir:
+            agent_inventory = await self._read_reindex_inventory(
+                get_service().vikingdb_manager, uri=agent, ctx=run.ctx, recursive=False
+            )
+        resource_facts = {
+            root: await self._namespace_facts(root, ctx=run.ctx) for root in resource_roots
+        }
         skill_facts = await self._namespace_facts(skills, ctx=run.ctx, list_children=True)
         _, _, users = await self._namespace_facts(
             "viking://user",
             ctx=run.ctx,
             list_children=True,
         )
-        await self._resource_scope(
-            uri=resources,
-            mode=mode,
-            run=run,
-            facts=resource_facts,
-            inventory=inventories[resources],
-        )
+        if agent_inventory is not None:
+            await self._reindex_rfv(
+                uri=agent,
+                recursive=False,
+                run=run,
+                formal_entries=[],
+                vector_inventory=agent_inventory,
+            )
+        for root in resource_roots:
+            await self._resource_scope(
+                uri=root,
+                mode=mode,
+                run=run,
+                facts=resource_facts[root],
+                inventory=inventories[root],
+            )
         await self._reindex_skill_namespace(
             uri=skills,
             mode=mode,
@@ -1741,12 +1729,6 @@ class ReindexExecutor:
             if record_uri and level in {0, 1, 2}:
                 existing_by_uri_level.setdefault((record_uri, level), dict(record, id=record_id))
 
-        overview_cache: dict[str, dict[str, str]] = {
-            directory: SemanticProcessor._parse_overview_md(source.text) if source.text else {}
-            for (directory, level), source in directory_sources.items()
-            if level == 1
-        }
-
         async def process_file(file_uri: str) -> _ReindexCounters:
             file_counters = _ReindexCounters(scanned_records=1)
             failure_message = f"Skipped {file_uri}: failed to read memory body"
@@ -1759,12 +1741,6 @@ class ReindexExecutor:
                 memory_content = MemoryFileUtils.read(body).content if body else ""
                 existing = existing_by_uri_level.get((file_uri, int(ContextLevel.DETAIL)))
                 abstract = self._record_abstract(existing)
-                if not abstract:
-                    abstract = await self._best_memory_file_summary(
-                        file_uri,
-                        ctx=ctx,
-                        overview_cache=overview_cache,
-                    )
                 if not body and existing is None:
                     file_counters.unsupported_records += 1
                     file_counters.warnings.append(f"No memory source found for {file_uri}")
@@ -1984,20 +1960,6 @@ class ReindexExecutor:
                     exc,
                 )
         raise AssertionError("unreachable")
-
-    async def _best_memory_file_summary(
-        self,
-        uri: str,
-        *,
-        ctx: RequestContext,
-        overview_cache: dict[str, dict[str, str]],
-    ) -> str:
-        parent_uri = VikingURI(uri).parent.uri
-        if parent_uri not in overview_cache:
-            raw = await self._safe_read_text(f"{parent_uri}/.overview.md", ctx=ctx)
-            overview_cache[parent_uri] = SemanticProcessor._parse_overview_md(raw) if raw else {}
-        file_name = uri.rsplit("/", 1)[-1]
-        return overview_cache[parent_uri].get(file_name, "")
 
     async def _reindex_memory_directory_chain(
         self,

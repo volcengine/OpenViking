@@ -4,9 +4,16 @@ Give TRAE, TRAE CN, and TraeCode CLI 2.0 long-term memory across projects and se
 
 ## Install
 
-Prerequisites: macOS or Linux, Node.js 18+, and a TRAE/TRAE CN release that supports the `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `Stop` Hooks. TraeCode CLI 2.0 uses the Codex-compatible plugin format directly. The installer guides you through the OpenViking connection settings.
+Prerequisites: macOS or Linux, Node.js 18+, and a TRAE/TRAE CN release that supports the `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, and `PostCompact` Hooks. TraeCode CLI 2.0 uses the Codex-compatible plugin format directly. The installer guides you through the OpenViking connection settings.
 
-When prompted for the connection, Volcengine Cloud users should select **Volcengine OpenViking Cloud** and enter their API key. Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`); for a remote self-hosted server, select **Custom URL / keep current** and enter its URL.
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
+Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`). For a remote self-hosted server, select **Custom URL** and enter its URL. If a connection is already saved, this option is named **Custom URL / keep current**.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -41,6 +48,7 @@ Once installed, start a new TRAE session and ask it to follow https://docs.openv
 - `UserPromptSubmit` recalls and injects context for the current request, including your own skills and those shared with your account under `viking://agent/skills`.
 - `PreToolUse` on TRAE and TRAE CN denies `Read`, `Glob`, and `Grep` calls whose path is a `viking://` URI and points to OpenViking MCP tools; a `Bash` or `RunCommand` command that carries a `viking://` URI still runs, with a notice suggesting those tools. TraeCode CLI 2.0 uses the Codex plugin, which has no URI guard.
 - TRAE/TRAE CN `Stop` captures and commits the completed turn. TraeCode CLI 2.0 follows the Codex plugin’s capture and lifecycle commit policy.
+- TRAE/TRAE CN `PostCompact` adds a short note after a compaction, naming the session's OpenViking id and the `session_history` MCP tool for looking up exact earlier details; the Agent passes that id as the tool's `session`.
 - The OpenViking MCP server transparently exposes the full server MCP tool set (21 tools): `find`, `search`, `read`, `download`, `list`, `tree`, `remember`, `write`, `edit`, `add_resource`, `add_skill`, `list_watches`, `cancel_watch`, `grep`, `glob`, `forget`, `health`, `list_users`, `list_groups`, `get_acl`, and `set_acl`. `search` with `mode="context"` returns assembled context.
 - TRAE/TRAE CN skills: `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` are installed into `~/.trae/skills/<name>` (TRAE CN: `~/.trae-cn/skills/<name>`). A skill you edited, or an existing unmanaged directory of the same name, is preserved on upgrade. TraeCode CLI also reads `~/.trae/skills`, so with both the TRAE integration and the TraeCode CLI 2.0 plugin installed, the CLI lists each of these skills twice: once bare and once under the plugin namespace.
 The skill catalog lists your own skills before those shared with your account, with each description cut to about 40 tokens. Its budget, `skillCatalogTokenBudget` (default `1200` tokens), is separate from the profile budget; when not every description fits, the catalog lists names only. Set `skillCatalog` to `false` or the budget to `0` to turn it off, either in the `plugin` section of `~/.openviking/ovcli.conf` ([Plugin Settings](../configuration/02-client.md#plugin-settings)) or through `OPENVIKING_SKILL_CATALOG` and `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`.

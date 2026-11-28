@@ -496,98 +496,56 @@ exit 0
   }
 });
 
-test("TraeCode CLI 2.0 keeps the deprecated integration when plugin installation fails", () => {
-  const home = mkdtempSync(join(tmpdir(), "openviking-trae-cli-failed-migration-"));
-  try {
-    const binDir = join(home, "bin");
-    mkdirSync(binDir, { recursive: true });
-    const cliPath = join(binDir, "trae-cli");
-    writeFileSync(cliPath, `#!/bin/sh
-case "$*" in
-  "plugin marketplace list --json") printf '{"marketplaces":[]}\n' ;;
-  "plugin marketplace list") printf 'Marketplaces:\n' ;;
-  "plugin add "*|"plugin install "*) exit 1 ;;
-esac
-exit 0
-`);
-    chmodSync(cliPath, 0o755);
+for (const [failure, commands, warning] of [
+  ["install", '"plugin add "*|"plugin install "*) exit 1 ;;', /plugin add\/install returned non-zero/u],
+  ["enable", '"plugin add "*) exit 2 ;;\n  "plugin enable "*) exit 1 ;;', /could not be enabled/u],
+]) {
+  test(`failed TraeCode CLI ${failure} preserves the old integration`, () => {
+    const home = mkdtempSync(join(tmpdir(), "openviking-trae-cli-failed-migration-"));
+    try {
+      const binDir = join(home, "bin");
+      mkdirSync(binDir, { recursive: true });
+      const cliPath = join(binDir, "trae-cli");
+      writeFileSync(cliPath, `#!/bin/sh
+  case "$*" in
+    "plugin marketplace list --json") printf '{"marketplaces":[]}\n' ;;
+    "plugin marketplace list") printf 'Marketplaces:\n' ;;
+    ${commands}
+  esac
+  exit 0
+  `);
+      chmodSync(cliPath, 0o755);
 
-    const hooksPath = join(home, ".trae", "cli", "hooks.json");
-    const configPath = join(home, ".trae", "traecli.toml");
-    writeJson(hooksPath, { hooks: { Stop: [{ hooks: [{
-      type: "command",
-      command: "OPENVIKING_INTEGRATION_ID=openviking-memory node /tmp/agent-integrations/trae-cli/scripts/auto-capture.mjs",
-    }] }] } });
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, '[mcp_servers."openviking-memory"]\ncommand = "node"\n');
-    const integrationRoot = join(home, ".openviking", "agent-integrations", "trae-cli");
-    mkdirSync(integrationRoot, { recursive: true });
+      const hooksPath = join(home, ".trae", "cli", "hooks.json");
+      const configPath = join(home, ".trae", "traecli.toml");
+      writeJson(hooksPath, { hooks: { Stop: [{ hooks: [{
+        type: "command",
+        command: "OPENVIKING_INTEGRATION_ID=openviking-memory node /tmp/agent-integrations/trae-cli/scripts/auto-capture.mjs",
+      }] }] } });
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(configPath, '[mcp_servers."openviking-memory"]\ncommand = "node"\n');
+      const integrationRoot = join(home, ".openviking", "agent-integrations", "trae-cli");
+      mkdirSync(integrationRoot, { recursive: true });
 
-    const installed = runInstaller(home, [
-      "--harness", "trae-cli",
-      "--source", "dev",
-      "--lang", "en",
-      "--url", "http://127.0.0.1:9",
-      "--api-key", "",
-      "--yes",
-    ], { PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin` });
+      const installed = runInstaller(home, [
+        "--harness", "trae-cli",
+        "--source", "dev",
+        "--lang", "en",
+        "--url", "http://127.0.0.1:9",
+        "--api-key", "",
+        "--yes",
+      ], { PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin` });
 
-    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
-    assert.match(installed.stdout, /plugin add\/install returned non-zero/u);
-    assert.match(readFileSync(hooksPath, "utf8"), /openviking-memory/u);
-    assert.match(readFileSync(configPath, "utf8"), /openviking-memory/u);
-    assert.equal(existsSync(integrationRoot), true);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test("TraeCode CLI 2.0 keeps the deprecated integration when plugin enable fails", () => {
-  const home = mkdtempSync(join(tmpdir(), "openviking-trae-cli-failed-enable-"));
-  try {
-    const binDir = join(home, "bin");
-    mkdirSync(binDir, { recursive: true });
-    const cliPath = join(binDir, "trae-cli");
-    writeFileSync(cliPath, `#!/bin/sh
-case "$*" in
-  "plugin marketplace list --json") printf '{"marketplaces":[]}\n' ;;
-  "plugin marketplace list") printf 'Marketplaces:\n' ;;
-  "plugin add "*) exit 2 ;;
-  "plugin enable "*) exit 1 ;;
-esac
-exit 0
-`);
-    chmodSync(cliPath, 0o755);
-
-    const hooksPath = join(home, ".trae", "cli", "hooks.json");
-    const configPath = join(home, ".trae", "traecli.toml");
-    writeJson(hooksPath, { hooks: { Stop: [{ hooks: [{
-      type: "command",
-      command: "OPENVIKING_INTEGRATION_ID=openviking-memory node /tmp/agent-integrations/trae-cli/scripts/auto-capture.mjs",
-    }] }] } });
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, '[mcp_servers."openviking-memory"]\ncommand = "node"\n');
-    const integrationRoot = join(home, ".openviking", "agent-integrations", "trae-cli");
-    mkdirSync(integrationRoot, { recursive: true });
-
-    const installed = runInstaller(home, [
-      "--harness", "trae-cli",
-      "--source", "dev",
-      "--lang", "en",
-      "--url", "http://127.0.0.1:9",
-      "--api-key", "",
-      "--yes",
-    ], { PATH: `${binDir}:${dirname(installedNode)}:/usr/bin:/bin` });
-
-    assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
-    assert.match(installed.stdout, /could not be enabled/u);
-    assert.match(readFileSync(hooksPath, "utf8"), /openviking-memory/u);
-    assert.match(readFileSync(configPath, "utf8"), /openviking-memory/u);
-    assert.equal(existsSync(integrationRoot), true);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
+      assert.equal(installed.status, 0, `${installed.stdout}\n${installed.stderr}`);
+      assert.match(installed.stdout, warning);
+      assert.match(readFileSync(hooksPath, "utf8"), /openviking-memory/u);
+      assert.match(readFileSync(configPath, "utf8"), /openviking-memory/u);
+      assert.equal(existsSync(integrationRoot), true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+}
 
 test("combined hook-host install preserves unrelated hooks and is idempotent", () => {
   const home = mkdtempSync(join(tmpdir(), "openviking-agent-hooks-"));

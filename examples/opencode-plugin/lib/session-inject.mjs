@@ -1,14 +1,39 @@
+import { isCaptureEnabled } from "./shared/capture-utils.mjs"
 import { buildProfileBlock } from "./shared/profile-inject.mjs"
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createSessionInject({ config, sessionManager }) {
-  const injectedSessions = new Set()
+  // The compaction each session's start context was last sent after: a
+  // compaction summarizes it away, so the next message sends it again.
+  const injectedAfter = new Map()
 
   async function buildSessionContext(input) {
+    const block = await buildStartContext(input)
+    const pointer = historyPointer(input)
+    return pointer ? [block, pointer].filter(Boolean).join("\n") : block
+  }
+
+  // The first message after a compaction. The plugin fills `session` only for
+  // its bundled MCP server; in hook-only mode the model names it itself.
+  function historyPointer(input) {
+    if (!config.sessionHistoryPointer || !isCaptureEnabled(config)) return ""
+    if (!input.sessionID || !input.messageID) return ""
+    const ovSessionId = sessionManager.takeHistoryPointer?.(input.sessionID)
+    if (!ovSessionId || ovSessionId.includes("__subagent-")) return ""
+    log("INFO", "session-inject", "Injected OpenViking session-history pointer", {
+      opencode_session: input.sessionID,
+      openviking_session: ovSessionId,
+    })
+    return formatSessionHistoryPointer(ovSessionId, { sessionDefault: Boolean(config.mcp?.enabled) })
+  }
+
+  async function buildStartContext(input) {
     if (config.noAutoInject) return false
     const sessionID = input.sessionID
     const messageID = input.messageID
-    if (!sessionID || !messageID || injectedSessions.has(sessionID)) return false
+    const compactedAt = sessionManager.getCompactedAt?.(sessionID) ?? 0
+    if (!sessionID || !messageID || injectedAfter.get(sessionID) === compactedAt) return false
 
     const ovSessionId = sessionManager.getMappedSessionId(sessionID)
     if (ovSessionId.includes("__subagent-")) return false
@@ -21,13 +46,13 @@ export function createSessionInject({ config, sessionManager }) {
     const profile = await buildProfileBlock(clientFetch, config.profileTokenBudget, actorPeerId, config)
     if (profile?.block) parts.push(profile.block)
 
-    const archive = config.resumeArchiveInject
+    const archive = config.resumeArchiveInject && !injectedAfter.has(sessionID)
       ? await fetchArchiveBlock(clientFetch, ovSessionId, config.resumeContextBudget)
       : ""
     if (archive) parts.push(archive)
 
     if (parts.length === 0) {
-      injectedSessions.add(sessionID)
+      injectedAfter.set(sessionID, compactedAt)
       return undefined
     }
 
@@ -37,7 +62,7 @@ export function createSessionInject({ config, sessionManager }) {
       "</openviking-context>",
     ].join("\n")
 
-    injectedSessions.add(sessionID)
+    injectedAfter.set(sessionID, compactedAt)
     log("INFO", "session-inject", "Injected OpenViking session context", {
       opencode_session: sessionID,
       openviking_session: ovSessionId,
@@ -66,6 +91,20 @@ export function createSessionInject({ config, sessionManager }) {
   }
 
   return { buildSessionContext, injectSessionContext }
+}
+
+const START_CONTEXT = /<openviking-context source="session-start">\n[\s\S]*?\n<\/openviking-context>\n?/
+
+// A compaction can keep the message that carried the start context (its recent
+// tail, an overflow replay), so a request keeps only the newest copy.
+export function keepNewestStartContext(partLists) {
+  const carriers = partLists.flatMap((parts) => (Array.isArray(parts) ? parts : [])
+    .filter((part) => typeof part?.text === "string" && START_CONTEXT.test(part.text))
+    .map((part) => [parts, part]))
+  for (const [parts, part] of carriers.slice(0, -1)) {
+    part.text = part.text.replace(START_CONTEXT, "")
+    if (!part.text.trim()) parts.splice(parts.indexOf(part), 1)
+  }
 }
 
 async function fetchArchiveBlock(fetcher, ovSessionId, tokenBudget) {

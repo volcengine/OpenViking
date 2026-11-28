@@ -16,7 +16,6 @@ from openviking.server.config import ServerConfig
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.mcp_endpoint import _get_ctx, _IdentityASGIMiddleware
 from openviking.server.oauth.provider import OpenVikingOAuthProvider
-from openviking.server.oauth.storage import OAuthStore
 from openviking_cli.exceptions import UnauthenticatedError
 
 
@@ -45,7 +44,7 @@ async def _ok_app(scope, receive, send):
     await send({"type": "http.response.body", "body": response.content})
 
 
-def _build_test_app(*, oauth_enabled: bool, tmp_path=None) -> FastAPI:
+def _build_test_app(*, oauth_enabled: bool) -> FastAPI:
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
     from openviking.server.auth.registry import get_registry
 
@@ -62,7 +61,7 @@ def _build_test_app(*, oauth_enabled: bool, tmp_path=None) -> FastAPI:
         # the bearer middleware emits WWW-Authenticate based on its presence,
         # not on any specific verifier behavior.
         app.state.oauth_provider = OpenVikingOAuthProvider(
-            store=OAuthStore(tmp_path / "oauth.db") if tmp_path else None,
+            store=None,
             issuer="http://ov.test",
         )
     return app
@@ -105,20 +104,30 @@ def _mount_mcp(app: FastAPI, downstream=_noop_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unauthenticated_request_includes_www_authenticate_when_oauth_enabled():
+async def test_unauthenticated_request_includes_www_authenticate_when_oauth_enabled(monkeypatch):
+    monkeypatch.delenv("OPENVIKING_PUBLIC_BASE_URL", raising=False)
     app = _build_test_app(oauth_enabled=True)
     _mount_mcp(app)
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
         resp = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
-    assert resp.status_code == 401
-    auth_header = resp.headers.get("www-authenticate", "")
-    assert auth_header.startswith("Bearer "), auth_header
-    assert "resource_metadata=" in auth_header
-    assert "/.well-known/oauth-protected-resource" in auth_header
-    # The origin is derived from the request Host header.
-    assert "ov.test" in auth_header
+        assert resp.status_code == 401
+        discovery_path = "/.well-known/oauth-protected-resource"
+        assert resp.headers["www-authenticate"] == (
+            f'Bearer resource_metadata="http://ov.test{discovery_path}"'
+        )
+        assert resp.json()["error"]["code"] == -32001
+
+        forwarded = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers={"X-Forwarded-Proto": "https", "X-Forwarded-Host": "public.example.com"},
+        )
+        assert forwarded.status_code == 401
+        assert forwarded.headers["www-authenticate"] == (
+            f'Bearer resource_metadata="https://public.example.com{discovery_path}"'
+        )
 
 
 @pytest.mark.asyncio
@@ -131,7 +140,8 @@ async def test_unauthenticated_request_omits_header_when_oauth_disabled():
     async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
         resp = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert resp.status_code == 401
-    assert "www-authenticate" not in {k.lower() for k in resp.headers.keys()}
+    assert "www-authenticate" not in resp.headers
+    assert resp.json()["error"]["code"] == -32001
 
 
 @pytest.mark.asyncio
@@ -173,23 +183,3 @@ async def test_user_api_key_is_allowed_on_mcp_data_plane_in_api_key_mode():
         "account_id": "default",
         "user_id": "alice",
     }
-
-
-@pytest.mark.asyncio
-async def test_www_authenticate_honors_x_forwarded_proto():
-    app = _build_test_app(oauth_enabled=True)
-    _mount_mcp(app)
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://ov.test") as client:
-        resp = await client.post(
-            "/mcp",
-            json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
-            headers={
-                "X-Forwarded-Proto": "https",
-                "X-Forwarded-Host": "public.example.com",
-            },
-        )
-    assert resp.status_code == 401
-    auth_header = resp.headers.get("www-authenticate", "")
-    assert "https://public.example.com/.well-known/oauth-protected-resource" in auth_header

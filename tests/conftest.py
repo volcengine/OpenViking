@@ -159,6 +159,8 @@ async def service(
     )
     try:
         await instance.initialize()
+        await instance.recover()
+        await instance.start_background()
         yield instance
     finally:
         await instance.close()
@@ -190,6 +192,7 @@ def public_resource_dns(monkeypatch):
         if host in {
             "example.com",
             "example.org",
+            "github.com",
             "example.feishu.cn",
             "example.larkoffice.com",
             "alidocs.dingtalk.com",

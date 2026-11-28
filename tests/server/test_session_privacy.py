@@ -564,7 +564,14 @@ async def test_restore_leaves_foreign_missing_and_nested_references_unchanged(
     unconfigured = build_privacy_field_reference(ctx.user.user_id, "credential", "absent", "pat")
     foreign = build_privacy_field_reference("alice", "credential", "demo", "pat")
     nested = build_privacy_field_reference(ctx.user.user_id, "credential", "other", "pat")
-    await service.privacy_configs.upsert(ctx, "credential", "demo", {"pat": nested})
+    # Writes now copy referenced values; seed a literal reference as legacy data would hold it.
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            service.privacy_configs,
+            "_resolve_value_references",
+            AsyncMock(side_effect=lambda _ctx, _category, _target, values: (values, [])),
+        )
+        await service.privacy_configs.upsert(ctx, "credential", "demo", {"pat": nested})
     await service.privacy_configs.upsert(ctx, "credential", "other", {"pat": "nested-secret"})
     session = await service.sessions.create(ctx, "reference-boundary")
     await session.add_message_async("user", [TextPart(f"{own} {missing} {unconfigured} {foreign}")])

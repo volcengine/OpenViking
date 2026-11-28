@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1142" viewBox="0 0 1500 1142" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif">
+<rect x="0" y="0" width="1500" height="1142" rx="20" fill="#FFFFFF"/>
+<text x="40" y="46" font-size="26" font-weight="700" fill="#1F2329" text-anchor="start">一个新 token 走完一轮：模型厂商看到引用，工具拿到真值</text>
+<text x="40" y="75" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">封存层是 OpenViking 网关，它调用 OpenViking 的封存接口和识别规则</text>
+<rect x="40" y="96" width="1420" height="160" rx="0" fill="#F5F9FF" stroke="none" stroke-width="0"/>
+<text x="105" y="168.5" font-size="17" font-weight="700" fill="#3370FF" text-anchor="middle">你和你的工具</text>
+<text x="105" y="194.5" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">用的是真值</text>
+<rect x="40" y="256" width="1420" height="144" rx="0" fill="#F7F3FF" stroke="none" stroke-width="0"/>
+<text x="105" y="311" font-size="17" font-weight="700" fill="#7F3BF5" text-anchor="middle">封存层</text>
+<text x="105" y="337" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">OpenViking</text>
+<text x="105" y="356" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">网关</text>
+<rect x="40" y="400" width="1420" height="176" rx="0" fill="#F1EBFF" stroke="none" stroke-width="0"/>
+<text x="105" y="452" font-size="17" font-weight="700" fill="#6425D0" text-anchor="middle">OpenViking</text>
+<text x="105" y="478" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Privacy 保险箱，</text>
+<text x="105" y="497" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">按用户隔离；</text>
+<text x="105" y="516" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">识别规则</text>
+<text x="105" y="535" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">也在这里</text>
+<rect x="40" y="576" width="1420" height="260" rx="0" fill="#FFF8F0" stroke="none" stroke-width="0"/>
+<text x="105" y="698.5" font-size="17" font-weight="700" fill="#FF8800" text-anchor="middle">模型厂商</text>
+<text x="105" y="724.5" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">看到的是引用</text>
+<rect x="40" y="96" width="1420" height="740" rx="0" fill="none" stroke="#E5E6EB" stroke-width="1"/>
+<path d="M 40 256 L 1460 256" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 40 400 L 1460 400" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 40 576 L 1460 576" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 170 96 L 170 836" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 170 576 L 1460 576" fill="none" stroke="#8F959E" stroke-width="2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<rect x="248" y="553" width="264" height="46" rx="14" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5"/>
+<text x="380" y="571.5" font-size="14" font-weight="700" fill="#646A73" text-anchor="middle">封存生效时，已登记和识别出的密钥</text>
+<text x="380" y="590.5" font-size="14" font-weight="700" fill="#646A73" text-anchor="middle">只以引用形式越过这条线</text>
+<rect x="196" y="112" width="300" height="128" rx="10" fill="#FFFFFF" stroke="#3370FF" stroke-width="1.8"/>
+<text x="214" y="144" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">你贴了一个新 token</text>
+<circle cx="198" cy="114" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="198" y="119.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="214" y="170" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">“这是新的 GitHub token</text>
+<rect x="214" y="182.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="264" y="200" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="314" y="200" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">，以后用它”</text>
+<rect x="880" y="112" width="360" height="128" rx="10" fill="#FFFFFF" stroke="#3370FF" stroke-width="1.8"/>
+<text x="898" y="144" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">你的工具执行</text>
+<text x="898" y="174" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">curl … Bearer</text>
+<rect x="998.98" y="156.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="1048.98" y="174" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="898" y="206" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">输出：…</text>
+<rect x="962.17" y="188.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="1012.17" y="206" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="1068.17" y="206" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">…</text>
+<rect x="196" y="272" width="300" height="96" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
+<text x="214" y="304" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">登记并替换</text>
+<circle cx="198" cy="274" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="198" y="279.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="214" y="328" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">把原文交给 OpenViking 封存，</text>
+<text x="214" y="350" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">新 token 登记为临时条目</text>
+<rect x="600" y="272" width="440" height="96" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
+<text x="618" y="304" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">工具拿到真值执行</text>
+<circle cx="602" cy="274" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="602" y="279.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">6</text>
+<text x="618" y="328" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">向 OpenViking 换回引用对应的真值，</text>
+<text x="618" y="350" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">再交给你的工具</text>
+<rect x="1080" y="272" width="364" height="96" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
+<text x="1098" y="304" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">输出再封存一次</text>
+<circle cx="1082" cy="274" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="1082" y="279.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">7</text>
+<text x="1098" y="328" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">这个 token 已经存过，</text>
+<text x="1098" y="350" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">输出交给模型时已换成引用</text>
+<rect x="260" y="428" width="236" height="108" rx="10" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.8" stroke-dasharray="6 4"/>
+<text x="278" y="460" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">临时条目</text>
+<text x="278" y="484" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">auto/github-k3j2m8</text>
+<rect x="278" y="496.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="328" y="514" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<rect x="650" y="428" width="300" height="108" rx="10" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.8"/>
+<text x="668" y="460" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">正式条目</text>
+<text x="668" y="484" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">credential/github · token</text>
+<rect x="668" y="496.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="718" y="514" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<rect x="196" y="620" width="300" height="196" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="214" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">模型收到引用和一段说明</text>
+<circle cx="198" cy="622" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="198" y="627.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<text x="214" y="678" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">“…新的 GitHub token</text>
+<rect x="214" y="690.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="281" y="708" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="348" y="708" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">，以后用它…”</text>
+<text x="214" y="736" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">说明：存到正式名字下</text>
+<rect x="516" y="620" width="274" height="196" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="534" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">模型把它存好</text>
+<circle cx="518" cy="622" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="518" y="627.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<text x="534" y="678" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">privacy_upsert，值 =</text>
+<rect x="534" y="690.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="601" y="708" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="534" y="734" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">→ credential/github</text>
+<text x="534" y="758" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">引用原样交给 OpenViking，</text>
+<text x="534" y="780" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">由服务端取值保存</text>
+<rect x="810" y="620" width="270" height="128" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="828" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">模型在工具调用里写引用</text>
+<circle cx="812" cy="622" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="812" y="627.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
+<text x="828" y="678" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">curl … Bearer</text>
+<rect x="828" y="690.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="895" y="708" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<rect x="1100" y="620" width="344" height="128" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="1118" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">模型读到的输出</text>
+<text x="1118" y="682" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">输出：…</text>
+<rect x="1182.17" y="664.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="1249.17" y="682" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="1322.17" y="682" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">…</text>
+<text x="1118" y="710" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">和模型已经在用的引用相同</text>
+<polygon points="300,272 294.5,262 305.5,262" fill="#F54A45"/>
+<path d="M 300 240 L 300 262" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="320,428 314.5,418 325.5,418" fill="#F54A45"/>
+<path d="M 320 368 L 320 418" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="440,368 445.5,378 434.5,378" fill="#14A8A0"/>
+<path d="M 440 428 L 440 378" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<text x="330" y="388" font-size="14" font-weight="400" fill="#D83931" text-anchor="start">原文</text>
+<text x="450" y="388" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="start">带引用的原文</text>
+<polygon points="232,620 226.5,610 237.5,610" fill="#14A8A0"/>
+<path d="M 232 368 L 232 610" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="700,536 705.5,546 694.5,546" fill="#14A8A0"/>
+<path d="M 700 620 L 700 546" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<rect x="706" y="555" width="186.7" height="42" rx="4" fill="#FFFFFF" stroke="none" stroke-width="0"/>
+<text x="710" y="571.5" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="start">privacy_upsert 工具调用，</text>
+<text x="710" y="590.5" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="start">封存层原样放行</text>
+<polygon points="650,482 640,487.5 640,476.5" fill="#F54A45"/>
+<path d="M 496 482 L 640 482" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<text x="573" y="472" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">值移过来</text>
+<text x="573" y="505" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">临时条目随之删除</text>
+<polygon points="1000,368 1005.5,378 994.5,378" fill="#14A8A0"/>
+<path d="M 1000 620 L 1000 378" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="760,428 754.5,418 765.5,418" fill="#14A8A0"/>
+<path d="M 760 368 L 760 418" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="840,368 845.5,378 834.5,378" fill="#F54A45"/>
+<path d="M 840 428 L 840 378" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<text x="750" y="388" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="end">引用</text>
+<text x="850" y="388" font-size="14" font-weight="400" fill="#D83931" text-anchor="start">真值</text>
+<polygon points="960,240 965.5,250 954.5,250" fill="#F54A45"/>
+<path d="M 960 272 L 960 250" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1180,272 1174.5,262 1185.5,262" fill="#F54A45"/>
+<path d="M 1180 240 L 1180 262" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1300,620 1294.5,610 1305.5,610" fill="#14A8A0"/>
+<path d="M 1300 368 L 1300 610" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<text x="40" y="880" font-size="18" font-weight="700" fill="#1F2329" text-anchor="start">引用长什么样</text>
+<text x="760" y="880" font-size="18" font-weight="700" fill="#1F2329" text-anchor="start">边界</text>
+<rect x="40" y="896" width="700" height="174" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="62" y="930" font-size="14.5" font-weight="700" fill="#0B7E78" text-anchor="start">{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}</text>
+<text x="62" y="960" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">写明归属、条目和字段。它本身不是密钥：引用绑定所有者，</text>
+<text x="62" y="984" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">只有 alice 的 OpenViking 身份能换回真值。</text>
+<rect x="760" y="896" width="700" height="174" rx="12" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.5"/>
+<text x="782" y="930" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">新 token 只有 OpenViking 的探测器认得才登记。</text>
+<text x="782" y="954" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">只认完整的值；被截断或改写的值会原样发出。</text>
+<text x="782" y="978" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">只出现在工具输出里的新 token，只有打开额外选项才登记</text>
+<text x="782" y="1002" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">「同时登记工具输出中的密钥」。</text>
+<text x="782" y="1026" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">第 7 步能封存这段输出，是因为这个 token 已经存过。</text>
+<text x="782" y="1050" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">无法封存时请求会被拒绝，不会未经封存发出。</text>
+<polygon points="70,1107 60,1112.5 60,1101.5" fill="#F54A45"/>
+<path d="M 40 1107 L 60 1107" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<rect x="78" y="1094.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="128" y="1112" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="188" y="1112" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">真值</text>
+<polygon points="278.45,1107 268.45,1112.5 268.45,1101.5" fill="#14A8A0"/>
+<path d="M 248.45 1107 L 268.45 1107" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<rect x="286.45" y="1094.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="353.45" y="1112" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="430.45" y="1112" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">引用</text>
+<circle cx="502.9" cy="1107" r="12" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="502.9" y="1112" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="524.9" y="1112" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">步骤顺序</text>
+</svg>

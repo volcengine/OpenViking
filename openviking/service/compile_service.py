@@ -62,6 +62,7 @@ logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"accepted", "pending", "running", "committing"})
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+_MAX_SOURCE_DIRECTORIES = 100
 
 # Sentinel --skill value that routes a Compile request to in-process memory
 # consolidation instead of the VikingBot agent path. It is not a real Skill URI.
@@ -108,14 +109,13 @@ class CompileInputs(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> "CompileInputs":
-        sources: list[str] = []
+        sources: dict[str, None] = {}
         for source in self.from_:
             normalized = source.strip().rstrip("/")
             if not normalized:
                 raise ValueError("from must not contain empty values")
-            if normalized not in sources:
-                sources.append(normalized)
-        self.from_ = sources
+            sources[normalized] = None
+        self.from_ = list(sources)
         if self.to is not None:
             self.to = self.to.strip().rstrip("/")
         self.skill = self.skill.strip().rstrip("/")
@@ -1236,6 +1236,11 @@ class CompileService:
     ) -> CompileInputs | CompileRequest:
         """Validate inputs for new admissions without revalidating recovered submissions."""
         request = self._normalize_request_uris(request, ctx)
+        if len(request.from_) > _MAX_SOURCE_DIRECTORIES:
+            raise InvalidArgumentError(
+                f"Compile --from supports at most {_MAX_SOURCE_DIRECTORIES} distinct source directories. "
+                "Move the source directories into the same folder and use that folder's URI for --from."
+            )
         assert request.to is not None
         parts = uri_parts(request.to)
         if parts[:1] == ["user"] and parts[2:4] == ["memories", "experiences"]:

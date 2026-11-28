@@ -352,6 +352,9 @@ class SQLWatchStore(WatchStore):
     async def _validate_schema(self, session: Any) -> None:
         await session.execute(select(*self._tasks.c).limit(1))
 
+    async def _prepare_engine(self, engine: Any) -> None:
+        """Configure provider-specific connections and local schema before validation."""
+
     async def initialize(self) -> None:
         if self._engine is not None:
             return
@@ -364,6 +367,7 @@ class SQLWatchStore(WatchStore):
         engine = None
         try:
             engine = create_async_engine(self._url, **self._engine_options)
+            await self._prepare_engine(engine)
             sessions = async_sessionmaker(engine, class_=SQLAsyncSession, expire_on_commit=False)
             async with sessions() as session:
                 await self._validate_schema(session)

@@ -66,6 +66,12 @@ def _build_grep_scope_filter(
 class _GrepMixin:
     """Grep and search-backend methods."""
 
+    async def _validate_grep_scope(self, uri: str, ctx: Optional[RequestContext]) -> RequestContext:
+        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
+        await self._ensure_traversable(uri, ctx)
+        await self.stat(uri, ctx=ctx, skip_count=True)
+        return ctx
+
     async def grep(
         self,
         uri: str,
@@ -109,12 +115,7 @@ class _GrepMixin:
         Returns:
             Dict with matches, count, match_count, files_scanned
         """
-        # stat() authorizes the requested path.
-        # Skip vector_store.count() — the count field is not needed for grep,
-        # and avoiding it saves one VikingDB API call.
-        ctx = self.authorize_read(self._ctx_or_default(ctx), [uri])
-        await self._ensure_traversable(uri, ctx)
-        await self.stat(uri, ctx=ctx, skip_count=True)
+        ctx = await self._validate_grep_scope(uri, ctx)
 
         # Read engine and threshold from grep_config (ov.conf)
         engine = self.grep_config.engine if self.grep_config else "auto"

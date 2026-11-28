@@ -85,7 +85,7 @@ async def move_resource(
 async def delete_resource(
     uri: str = Query(..., description="URI below viking://resources/"),
     recursive: bool = Query(False, description="Remove a directory recursively"),
-    wait: bool = Query(True, description="Wait for semantic index cleanup"),
+    wait: bool = Query(True, description="Confirm that the deletion task has completed"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete one shared resource without exposing general filesystem deletion."""

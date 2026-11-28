@@ -7,9 +7,8 @@ from openviking.storage.acl import AclLevel, DirectAcl
     "record",
     [
         {},
-        {"acl_direct_grants": None},
-        {"acl_direct_grants": []},
         {"acl_direct_grants": ["none"]},
+        {"acl_direct_grants": ("", "")},
     ],
 )
 def test_context_fields_roundtrip_empty_grants(record):
@@ -19,23 +18,38 @@ def test_context_fields_roundtrip_empty_grants(record):
     assert acl.context_fields("acl_direct") == {"acl_direct_grants": ["none"]}
 
 
-def test_context_fields_preserve_valid_grants():
-    raw_grants = ["3:user:alice", "1:group:readers"]
+@pytest.mark.parametrize("prefix", ["acl_direct", "acl_inherited"])
+@pytest.mark.parametrize(
+    "raw_grants",
+    [
+        ["3:user:alice", "1:group:readers"],
+        ("", "3:user:alice", "1:group:readers", ""),
+    ],
+)
+def test_context_fields_preserve_valid_grants(prefix, raw_grants):
     acl = DirectAcl.from_context_fields(
-        {"acl_inherited_grants": raw_grants},
-        "acl_inherited",
+        {f"{prefix}_grants": raw_grants},
+        prefix,
     )
 
     assert {(entry.principal, entry.level) for entry in acl.entries} == {
         ("user:alice", AclLevel.WRITE),
         ("group:readers", AclLevel.READ),
     }
-    assert set(acl.context_fields("acl_inherited")["acl_inherited_grants"]) == set(raw_grants)
+    assert set(acl.context_fields(prefix)[f"{prefix}_grants"]) == {
+        "3:user:alice",
+        "1:group:readers",
+    }
 
 
 @pytest.mark.parametrize(
     "raw_grants",
-    [[""], ["none", "3:user:alice"], ["none", "none"], [1]],
+    [
+        [" "],
+        ["", 1],
+        ["", "none"],
+        ["none", "3:user:alice"],
+    ],
 )
 def test_context_fields_reject_invalid_grants(raw_grants):
     with pytest.raises(RuntimeError, match="Invalid ACL grant token"):

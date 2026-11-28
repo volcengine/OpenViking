@@ -1,4 +1,3 @@
-import i18n from '#/i18n/core'
 import {
   cancelCompile,
   createCompile,
@@ -24,10 +23,6 @@ export async function runCompileCommand(
   const tokens = tokenize(input)
   if (tokens[0] === 'compile') {
     const task = await createCompile(parseCompile(tokens), key)
-    if (!('task_id' in task))
-      return {
-        body: `${i18n.t('compile:schedule.saved')}\n${task.to}\n${task.next_run_at || ''}`,
-      }
     return {
       body: `${task.task_id}\n${localizeStatus(task.status || 'unknown')}\n${task.meta?.request?.to || ''}`,
       taskId: task.task_id,
