@@ -22,6 +22,7 @@ const activity = {
       confirmDelete: 'Delete',
       deleting: 'Deleting...',
       deleteSuccess: 'Session deleted',
+      createFailed: 'Could not create session: {{error}}',
       deleteFailed: 'Could not delete session: {{error}}',
       shortcut: '⌘ N to create a new session',
     },
