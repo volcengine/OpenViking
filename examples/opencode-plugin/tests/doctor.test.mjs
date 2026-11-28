@@ -38,15 +38,27 @@ test("on a machine without the plugin the doctor fails the install checks", () =
 
 test("a file-plugin install reports no install problem", () => withHome((home) => {
   const plugins = join(home, ".config", "opencode", "plugins")
-  mkdirSync(join(plugins, "openviking"), { recursive: true })
-  writeFileSync(join(plugins, "openviking.js"), 'export { OpenVikingPlugin, default } from "./openviking/index.mjs"\n')
-  writeFileSync(join(plugins, "openviking", "index.mjs"), "")
+  const pluginRoot = join(home, ".config", "opencode", "openviking-plugin")
+  mkdirSync(plugins, { recursive: true })
+  mkdirSync(pluginRoot, { recursive: true })
+  writeFileSync(join(plugins, "openviking.js"), 'export { OpenVikingPlugin, default } from "../openviking-plugin/index.mjs"\n')
+  writeFileSync(join(pluginRoot, "index.mjs"), "")
   // The installer's MCP fallback, in a file with a comment and a trailing comma.
   writeFileSync(join(home, ".config", "opencode", "opencode.json"),
     '{\n  // kept by the user\n  "mcp": { "openviking": { "type": "local", "command": ["node", "mcp-proxy.mjs"] }, },\n}\n')
   const { report, problems } = runDoctor(home)
   assert.equal(report.harness, "opencode")
   assert.deepEqual(problems, [])
+}))
+
+test("a leftover plugins/openviking directory from an old install is reported", () => withHome((home) => {
+  const plugins = join(home, ".config", "opencode", "plugins")
+  mkdirSync(join(plugins, "openviking"), { recursive: true })
+  mkdirSync(join(home, ".config", "opencode", "openviking-plugin"), { recursive: true })
+  writeFileSync(join(plugins, "openviking.js"), 'export { OpenVikingPlugin, default } from "../openviking-plugin/index.mjs"\n')
+  writeFileSync(join(home, ".config", "opencode", "openviking-plugin", "index.mjs"), "")
+  const { problems } = runDoctor(home)
+  assert.ok(problems.some((f) => f.level === "warn" && f.title === "OpenCode v2 loads this plugin twice"), JSON.stringify(problems))
 }))
 
 test("an npm-package install reports no install problem", () => withHome((home) => {
