@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   addMessage,
+  extractErrorMessage,
   interruptChatSession,
   sendChatStream,
   serializeParts,
@@ -851,6 +852,11 @@ export function useChat(options: UseChatOptions): UseChatReturn {
                 await yieldToRenderer()
               }
               break
+            }
+
+            case 'error': {
+              const detail = streamEventDataToText(event.data)
+              throw new Error(extractErrorMessage(detail, detail))
             }
 
             case 'interrupt': {

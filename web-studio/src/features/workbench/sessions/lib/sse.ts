@@ -13,6 +13,7 @@ const VALID_EVENT_TYPES = new Set<string>([
   'iteration',
   'content_delta',
   'reasoning_delta',
+  'error',
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
