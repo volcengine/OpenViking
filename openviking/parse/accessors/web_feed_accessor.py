@@ -578,6 +578,8 @@ class WebFeedAccessor(DataAccessor):
             contents = item.get("content")
             if isinstance(contents, list) and contents and contents[0].get("value"):
                 inline_html = contents[0]["value"]
+                if contents[0].get("type") == "text/plain":
+                    inline_html = html_lib.escape(inline_html)
 
             entries.append(
                 FeedEntry(
