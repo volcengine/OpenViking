@@ -51,6 +51,7 @@ class OpenAIRerankClient(RerankBase):
         model_name: str,
         extra_headers: Optional[Dict[str, str]] = None,
         timeout: float = 30.0,
+        extra_body: Optional[Dict[str, object]] = None,
     ) -> None:
         """
         Initialize OpenAI-compatible rerank client.
@@ -62,12 +63,15 @@ class OpenAIRerankClient(RerankBase):
             extra_headers: Optional extra headers for API requests
             timeout: HTTP request timeout in seconds. Defaults to 30. Increase for
                 local LLM servers that incur model cold-start latency on the first call.
+            extra_body: Extra JSON body fields merged into every request; the
+                client's own protocol fields win on conflict.
         """
         super().__init__()
         self.api_key = api_key
         self.api_base = api_base
         self.model_name = model_name
         self.extra_headers = extra_headers or {}
+        self.extra_body = extra_body
         self.timeout = timeout
         self.provider = "openai"
         self._uses_nested_envelope = _uses_nested_envelope(api_base)
@@ -82,24 +86,34 @@ class OpenAIRerankClient(RerankBase):
             {"model": ..., "query": ..., "documents": [...]}
         """
         if self._uses_nested_envelope:
-            return {
+            return self._merge_extra_body(
+                {
+                    "model": self.model_name,
+                    "input": {
+                        "query": query,
+                        "documents": documents,
+                    },
+                    "parameters": {
+                        "return_documents": False,
+                    },
+                }
+            )
+        return self._merge_extra_body(
+            {
                 "model": self.model_name,
-                "input": {
-                    "query": query,
-                    "documents": documents,
-                },
-                "parameters": {
-                    "return_documents": False,
-                },
+                "query": query,
+                "documents": documents,
+                # Required by some OpenAI-compatible providers (e.g. Scaleway);
+                # matches CohereRerankClient and is harmless elsewhere.
+                "top_n": len(documents),
             }
-        return {
-            "model": self.model_name,
-            "query": query,
-            "documents": documents,
-            # Required by some OpenAI-compatible providers (e.g. Scaleway);
-            # matches CohereRerankClient and is harmless elsewhere.
-            "top_n": len(documents),
-        }
+        )
+
+    def _merge_extra_body(self, body: dict) -> dict:
+        """Merge configured routing fields; the client's own fields win."""
+        if not self.extra_body:
+            return body
+        return {**self.extra_body, **body}
 
     def _extract_results(self, response_json: dict) -> Optional[List[dict]]:
         """Extract the results list from an API response.
@@ -215,4 +229,5 @@ class OpenAIRerankClient(RerankBase):
             model_name=config.model or "qwen3-rerank",
             extra_headers=config.extra_headers,
             timeout=config.timeout,
+            extra_body=getattr(config, "extra_body", None),
         )

@@ -571,3 +571,47 @@ class TestJevDispatch:
         client = RerankClient.from_config(config)
         assert client.model_name == "typesafe-ai/jev"
         assert client.api_url == "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
+
+
+class TestJevExtraBody:
+    """Regression for #7620: rerank.extra_body was silently dropped, so provider
+    routing preferences (for example data_collection) never reached the request."""
+
+    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
+    def test_extra_body_merged_into_request(self, mock_client_class):
+        mock_client_class.return_value.post.return_value = _mock_response(_systemone_payload([0.8]))
+        client = JevRerankClient(
+            api_key="key",
+            extra_body={"data_collection": "deny", "provider": {"order": ["x"]}},
+        )
+        assert client.rerank_batch("q", ["d"]) == [0.8]
+        body = mock_client_class.return_value.post.call_args.kwargs["json"]
+        assert body["data_collection"] == "deny"
+        assert body["provider"] == {"order": ["x"]}
+        # Protocol fields are still present with their original values.
+        assert set(body["questions"]) == {"relevance_0"}
+        assert body["state"] == {"query": "q"}
+
+    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
+    def test_client_fields_win_over_extra_body(self, mock_client_class):
+        mock_client_class.return_value.post.return_value = _mock_response(_systemone_payload([0.5]))
+        client = JevRerankClient(
+            api_key="key", model_name="real-model", extra_body={"model": "override"}
+        )
+        client.rerank_batch("q", ["d"])
+        body = mock_client_class.return_value.post.call_args.kwargs["json"]
+        assert body["model"] == "real-model"
+
+    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
+    def test_no_extra_body_leaves_body_unchanged(self, mock_client_class):
+        mock_client_class.return_value.post.return_value = _mock_response(_systemone_payload([0.5]))
+        client = JevRerankClient(api_key="key")
+        client.rerank_batch("q", ["d"])
+        body = mock_client_class.return_value.post.call_args.kwargs["json"]
+        assert set(body) == {"model", "state", "questions"}
+
+    @patch("openviking.models.rerank.jev_rerank.httpx.Client")
+    def test_from_config_propagates_extra_body(self, mock_client_class):
+        config = RerankConfig(provider="jev", api_key="key", extra_body={"data_collection": "deny"})
+        client = RerankClient.from_config(config)
+        assert client.extra_body == {"data_collection": "deny"}

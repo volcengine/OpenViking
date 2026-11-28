@@ -136,6 +136,7 @@ class JevRerankClient(RerankBase):
         mode: str = MODE_NOUL,
         extra_headers: Optional[Dict[str, str]] = None,
         candidates_visible: bool = False,
+        extra_body: Optional[Dict[str, object]] = None,
     ):
         super().__init__()
         if mode not in (MODE_NOUL, MODE_CHOICE):
@@ -157,6 +158,7 @@ class JevRerankClient(RerankBase):
         )
         self.timeout = timeout
         self.log_payloads = log_payloads
+        self.extra_body = extra_body
         self.provider = "jev"
         self._client = httpx.Client(
             headers={
@@ -186,6 +188,10 @@ class JevRerankClient(RerankBase):
                 "state": state,
                 "questions": self._strategy.build_questions(documents),
             }
+            if self.extra_body:
+                # Protocol fields win on conflict; routing fields such as
+                # data_collection only ever come from the config.
+                body = {**self.extra_body, **body}
             if self.log_payloads:
                 logger.debug(
                     "rerank request summary total=%d payload=true",
@@ -270,4 +276,5 @@ class JevRerankClient(RerankBase):
             mode=getattr(config, "mode", None) or MODE_NOUL,
             extra_headers=extra_headers,
             candidates_visible=config.candidates_visible,
+            extra_body=getattr(config, "extra_body", None),
         )
