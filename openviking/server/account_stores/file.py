@@ -8,6 +8,7 @@ import fnmatch
 import hashlib
 import hmac
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Dict, Optional
@@ -69,6 +70,10 @@ ARGON2_TIME_COST = 3
 ARGON2_MEMORY_COST = 65536
 ARGON2_PARALLELISM = 2
 ARGON2_HASH_LENGTH = 32
+
+# Keep API key verification available when the default executor is busy.
+# Bound concurrent checks separately because each hash can use 64 MiB.
+_KEY_VERIFICATION_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ov-api-key")
 
 
 def validate_file_account_id(account_id: str) -> None:
@@ -1795,7 +1800,9 @@ class FileStore(AccountStore):
         if not material.startswith("$argon2"):
             return hmac.compare_digest(material, api_key)
         try:
-            return await asyncio.to_thread(PasswordHasher().verify, material, api_key)
+            return await asyncio.get_running_loop().run_in_executor(
+                _KEY_VERIFICATION_EXECUTOR, PasswordHasher().verify, material, api_key
+            )
         except VerificationError:
             return False
 
