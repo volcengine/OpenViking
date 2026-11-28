@@ -99,15 +99,29 @@ class _AnyDocMarkdownRenderer:
         return assets
 
     def render(self) -> str:
-        parts = [part for block in _items(self.document.blocks) if (part := self._render_block(block))]
-        parts.extend(self._render_note_definitions())
-        markdown = "\n\n".join(parts)
+        parts = [self._render_blocks(self.document.blocks), *self._render_note_definitions()]
+        markdown = "\n\n".join(part for part in parts if part)
         return f"{markdown}\n" if markdown else ""
 
     def _render_blocks(self, blocks: list[Any] | None) -> str:
-        return "\n\n".join(
-            rendered for block in _items(blocks) if (rendered := self._render_block(block))
-        )
+        parts = []
+        previous_decimal_delimiter = None
+        for block in _items(blocks):
+            list_model = block.list if _kind(block) == "list" else None
+            if (
+                list_model is not None
+                and list_model.marker == "decimal"
+                and list_model.items
+                and all(not item.marker_label for item in list_model.items)
+            ):
+                # CommonMark joins adjacent ordered lists that use the same delimiter.
+                delimiter = ")" if previous_decimal_delimiter == "." else "."
+                parts.append(self._render_list(list_model, decimal_delimiter=delimiter))
+                previous_decimal_delimiter = delimiter
+            elif rendered := self._render_block(block):
+                parts.append(rendered)
+                previous_decimal_delimiter = None
+        return "\n\n".join(parts)
 
     def _render_block(self, block: Any) -> str:
         kind = _kind(block)
@@ -377,14 +391,16 @@ class _AnyDocMarkdownRenderer:
         self.asset_paths[reference] = relative
         return relative
 
-    def _render_list(self, list_model: Any, *, in_table_cell: bool = False) -> str:
+    def _render_list(
+        self, list_model: Any, *, in_table_cell: bool = False, decimal_delimiter: str = "."
+    ) -> str:
         if list_model is None or not list_model.items:
             return ""
         rendered_items: list[str] = []
         loose = False
         for index, item in enumerate(list_model.items):
             ordinal = int(list_model.start) + index
-            marker = self._list_marker(list_model, item, ordinal)
+            marker = self._list_marker(list_model, item, ordinal, decimal_delimiter=decimal_delimiter)
             if in_table_cell:
                 body = "\n".join(self._render_cell_parts(item.blocks))
             else:
@@ -666,13 +682,15 @@ class _AnyDocMarkdownRenderer:
         )
 
     @staticmethod
-    def _list_marker(list_model: Any, item: Any, ordinal: int) -> str:
+    def _list_marker(
+        list_model: Any, item: Any, ordinal: int, *, decimal_delimiter: str = "."
+    ) -> str:
         if item.marker_label:
             return f"- {item.marker_label} "
         if list_model.marker == "bullet":
             return "- "
         if list_model.marker == "decimal":
-            return f"{ordinal}. "
+            return f"{ordinal}{decimal_delimiter} "
         return f"- {_AnyDocMarkdownRenderer._marker_label(list_model.marker, ordinal)} "
 
     @staticmethod
