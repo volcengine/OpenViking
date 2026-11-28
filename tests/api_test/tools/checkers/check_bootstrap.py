@@ -1,6 +1,3 @@
-bootstrap_path = "/usr/local/lib/python3.11/site-packages/openviking/server/bootstrap.py"
-print(f"Reading {bootstrap_path}...")
-print("=" * 80)
+from source_reader import read_source
 
-with open(bootstrap_path, "r") as f:
-    print(f.read())
+print(read_source("openviking/server/bootstrap.py", "openviking.server.bootstrap"))
