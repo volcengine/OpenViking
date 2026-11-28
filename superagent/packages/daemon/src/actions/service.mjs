@@ -41,6 +41,7 @@ const HANDLERS = {
   reply_message: 'replyMessage',
   react_to_message: 'reactToMessage',
   retract_message: 'retractMessage',
+  update_card: 'updateCard',
   stay_silent: 'staySilent',
   message_check: 'messageCheck',
   task_create: 'taskCreate',
@@ -1429,6 +1430,45 @@ export class ActionService {
       inboundSeq: fence?.seq ?? null,
     });
     return this.deliveryResult(result, `retraction of message_id=${input.message_id}`);
+  }
+
+  // Replaces the content of a card this bot sent, in place. Not a delivery: it
+  // records no decision, so whatever the input asked for still gets its own
+  // answer, and a status card can move several times while the work goes on.
+  // Only a card that went out through a delivery of this daemon is updatable,
+  // and the platform takes no card older than 14 days.
+  async updateCard(input, caller) {
+    const connector = this.route(caller, 'card.update', 'actions', input.source, { messageId: input.message_id });
+    const target = this.store.deliveredCard(input.message_id, connector);
+    if (!target) {
+      throw blocked('invalid_target', `message_id=${input.message_id} is not an interactive card this daemon delivered: only a card a delivery sent can be updated. ${NO_ACTION}`);
+    }
+    const fence = this.fence(input, caller);
+    this.authorize(fence);
+    const content = await this.content(input, connector, 'card.update', { chatId: target.chat_id, fence, caller });
+    try {
+      const result = await this.deliver({
+        caller, connector, action: 'card.update',
+        input: { message_id: input.message_id, card: content.payload.card },
+        key: this.key(null, 'card-update', connector, eventRef(fence), input.message_id, content.canonical),
+        summary: '[card updated]',
+        scope: { chatId: target.chat_id, convKey: target.conv_key },
+        fence,
+        inboundSeq: fence.seq,
+        final: false,
+      });
+      return this.cardUpdateResult(result, input.message_id);
+    } finally {
+      content.cleanup();
+    }
+  }
+
+  cardUpdateResult(result, messageId) {
+    if (result.dry_run) return { text: `Dry run only: card message_id=${messageId} was not updated.`, data: result };
+    const text = result.duplicate
+      ? `Already updated with this content: card message_id=${messageId} says that already, and nothing changed. This is not a delivery of an answer: still answer the request.`
+      : `Updated card message_id=${messageId} in place. This is not a delivery of an answer: still answer the request when its work is done.`;
+    return { text, data: { ...result, updated: !result.duplicate } };
   }
 
   key(requested, ...parts) {

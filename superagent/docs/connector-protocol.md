@@ -378,6 +378,7 @@ Results report the delivered `message_id` and, where known, `chat_id`,
 | `message.send` | markdown, file, file key, card; mentions; idempotent; to a chat or the owner | markdown (plain text), file | markdown (plain text), file; verified owner only | markdown (as mrkdwn), file; mentions; to a channel the bot is in, or a DM | plain text, file; verified owner, proactive quota | markdown (plain text), file; mentions in groups; to a connected group or private chat | — |
 | `message.reply` | as `message.send`, plus threads; to a document comment: plain text, not retried | markdown (plain text), file | as `message.send`, with quoted reply | as `message.send`, into the target's thread | plain text, file; passive quota, quote when indexed | as `message.send`, with quoted reply | markdown (plain text); owner approval on the primary IM |
 | `message.react`, `message.retract` | yes | — | — | yes | — | group reactions where the implementation has them; retract own messages | — |
+| `card.update` | replace one card this app sent, in place, within 14 days; the same content twice leaves the same card, so an uncertain attempt may be retried | — | — | — | — | — | — |
 | `message.media` (query) | download by image/file key | downloaded inbound media | lazy download by message ID | lazy download by message ID and file ID | lazy download by message ID | lazy download by message ID; forwarded chats as text | — |
 | `chat.list`, `chat.messages`, `thread.messages` (queries) | yes | — | — | bot identity, cursor pagination | — | connected groups; newest history page; no threads | — |
 | `chat.members.list` (query) | — | — | — | member IDs and optional profiles | — | — | — |
@@ -393,7 +394,7 @@ Replies go over SMTP to Reply-To (else From) with `Re:`, `In-Reply-To` and
 is never resent.
 
 The Lark Connector also serves Core-internal operations that are not agent
-tools: `message.reaction.delete` (temporary working reactions), `card.update`,
+tools: `message.reaction.delete` (temporary working reactions),
 `chat.members.list`, `chat.get` and the meeting operations.
 
 ## QQ provider contract

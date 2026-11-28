@@ -1723,6 +1723,19 @@ export class Store {
       WHERE remote_message_id = ? AND connector = ? ORDER BY id DESC LIMIT 1`).get(messageId, connector) ?? null;
   }
 
+  // The card a delivery of this bot sent as that message: its place, for an
+  // in-place update. Updates themselves are excluded, so only a card's own
+  // delivery can be updated, never a message that merely shares its id.
+  deliveredCard(messageId, connector) {
+    const row = this.db.prepare(`SELECT connector, chat_id, conv_key, payload_json FROM outbox
+      WHERE remote_message_id = ? AND connector = ? AND action IN ('message.send', 'message.reply')
+      ORDER BY id DESC LIMIT 1`).get(messageId, connector);
+    if (!row?.payload_json) return null;
+    let payload = null;
+    try { payload = JSON.parse(row.payload_json); } catch { return null; }
+    return payload?.content?.type === 'card' ? row : null;
+  }
+
   prune(retentionMs, now = Date.now()) {
     const cutoff = now - retentionMs;
     const removed = this.transaction(() => {

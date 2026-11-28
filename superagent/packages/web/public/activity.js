@@ -301,7 +301,7 @@ function buildModel(rows) {
         key: `delivery:${row.id}`,
         delivery: {
           mode: ({ 'message.send': '发送', 'message.reply': '回复', 'message.react': '表态',
-            'message.retract': '撤回', 'message.reaction.delete': '移除表态' })[meta.action] || '投递',
+            'message.retract': '撤回', 'message.reaction.delete': '移除表态', 'card.update': '更新卡片' })[meta.action] || '投递',
           text: row.summary || '',
         },
       });

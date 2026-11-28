@@ -235,6 +235,8 @@ Two Lark voice trade-offs are chosen per instance, both off by default. For a ma
 
 `choices` sends a single-choice button question and returns immediately. After a click, the daemon validates answerer, expiry, and duplicate submissions, delivers a new input, and best-effort updates the card. Question state and thread routes persist in SQLite. Ordinary cards also enter the agent, showing `[card]` when text is unavailable. See [message formats](../packages/daemon/agent/lark-message-formats.md). Outbound schemas are runtime-independent; only Agent-tool cards register callbacks.
 
+`update_card` replaces the whole content of one interactive card the bot sent, in place: `message_id` is the id that card's delivery returned, and the card keeps it. Lark takes cards sent within 14 days; `card_images` cannot be uploaded through an update, so an updated card keeps the image keys it already has. An update is not a delivery: it records no decision, and the input still needs its own answer. It goes through the same authority, freshness, and outbox path as the other actions.
+
 Enable long-connection `card.action.trigger` in Feishu callback configuration before deployment; see [manual setup](installation-reference.md#manual-feishu-setup).
 
 ## Interaction rules

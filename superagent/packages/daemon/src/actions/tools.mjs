@@ -176,6 +176,22 @@ export const TOOLS = [
     annotations: { ...WRITE, destructiveHint: true },
   },
   {
+    // Changes what one card says without posting another message: one status
+    // card that stays current while the work goes on.
+    name: 'update_card',
+    action: 'card.update',
+    title: 'Update a card you sent',
+    description: 'Replace the content of one interactive card this bot already sent, in place: the message keeps its id and everyone who can see the card sees the change. Only a card a delivery of this daemon sent (the message_id its result returned), where the connector updates cards (Lark: cards sent within 14 days), and the whole card is replaced by this one. An update is not a delivery: what the input asked for still needs its own answer. Use it to keep one card current while the work goes on, not to send progress messages.',
+    inputSchema: schema({
+      source: SOURCE,
+      message_id: { type: 'string', pattern: ID, description: 'Full message id (msg= or card=) of the card to update: the message_id an earlier card delivery returned. Never guess or shorten.' },
+      card: { type: 'object', description: 'Lark only: the whole new inline card JSON (Card 1.0 elements or Card 2.0 body.elements), at most 30 KiB. Keep image keys the card already has; card_images cannot be uploaded through an update.' },
+      decision_id: DECISION,
+      decision_instance: DECISION_INSTANCE,
+    }, ['message_id', 'card', 'decision_id']),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  {
     // A decision, not a delivery: sends nothing. Offered on every connector,
     // but only on an instance with explicitSilence on (OV_SUPERAGENT_EXPLICIT_SILENCE).
     name: 'stay_silent',
