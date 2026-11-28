@@ -678,6 +678,56 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
   }
 });
 
+for (const acceptedBeforeFailure of [0, 100]) {
+  test(`SubagentStop retries the rejected suffix after accepting ${acceptedBeforeFailure} turns`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "ov-cc-subagent-retry-"));
+    const transcriptPath = join(root, "subagent.jsonl");
+    const texts = Array.from({ length: acceptedBeforeFailure + 2 }, (_, index) => `Turn ${index}`);
+    const received = [];
+    let rejectWrites = true;
+
+    try {
+      const lines = texts.map((content, index) => ccRecord(index % 2 === 0 ? "user" : "assistant", content));
+      lines.splice(1, 0, ccRecord("user", "scratch: filtered before sending"));
+      lines.unshift(ccRecord("user", "host-generated context", { isMeta: true }));
+      lines.splice(acceptedBeforeFailure + 2, 0, ccRecord("user", "host-generated summary", { isCompactSummary: true }));
+      await writeFile(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"));
+      await withMockOpenViking(async (req, res) => {
+        const path = new URL(req.url, "http://127.0.0.1").pathname;
+        if (req.method === "POST" && path.endsWith("/messages/batch")) {
+          const { messages } = await readRequestBody(req);
+          if (rejectWrites && received.length >= acceptedBeforeFailure) {
+            writeJson(res, { status: "error", error: { code: "UNAUTHORIZED" } }, 401);
+            return;
+          }
+          received.push(...messages.map((message) => message.parts.map((part) => part.text).join("")));
+        } else if (req.method === "POST") {
+          await readRequestBody(req);
+        }
+        writeJson(res, { status: "ok", result: {} });
+      }, async (baseUrl) => {
+        const env = { ...hookEnv(root, baseUrl), OPENVIKING_CAPTURE_FILTERS: "user:d/^scratch:/" };
+        const input = {
+          session_id: "parent-retry",
+          agent_id: "child-retry",
+          agent_transcript_path: transcriptPath,
+          cwd: root,
+        };
+        await runHook("subagent-start.mjs", input, env);
+        await runHook("subagent-stop.mjs", input, env);
+        assert.deepEqual(received, texts.slice(0, acceptedBeforeFailure));
+
+        rejectWrites = false;
+        await runHook("subagent-stop.mjs", input, env);
+        await runHook("subagent-stop.mjs", input, env);
+      });
+      assert.deepEqual(received, texts);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
 async function captureFinalAnswer(root, transcriptPath, input) {
   const batches = [];
   await withMockOpenViking(async (req, res) => {
