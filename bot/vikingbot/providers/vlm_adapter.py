@@ -115,9 +115,11 @@ def _sanitize_error_value(value: Any, *, depth: int = 0) -> Any:
                 sanitized["<truncated>"] = f"{len(value) - _MAX_ERROR_LOG_ITEMS} more items"
                 break
             key_text = str(key)
-            normalized_key = key_text.lower().replace("-", "_")
+            # Compare spelling variants without case or separator boundaries.
+            normalized_key = key_text.lower().replace("-", "").replace("_", "")
             if normalized_key in _SENSITIVE_ERROR_KEYS or any(
-                normalized_key.endswith(f"_{suffix}") for suffix in _SENSITIVE_ERROR_KEY_SUFFIXES
+                normalized_key.endswith(suffix.replace("_", ""))
+                for suffix in _SENSITIVE_ERROR_KEY_SUFFIXES
             ):
                 sanitized[key_text] = "<redacted>"
             else:
