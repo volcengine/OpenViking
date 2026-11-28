@@ -225,6 +225,7 @@ class MarkdownParser(BaseParser):
         self._frontmatter_pattern = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
         self._html_comment_pattern = re.compile(r"<!--.*?-->", re.DOTALL)
         self._indented_code_pattern = re.compile(r"^(?:    |\t).+$", re.MULTILINE)
+        self._fence_pattern = re.compile(r"^ {0,3}(`{3,}|~{3,}).*$")
 
         # Cache for VikingFS instance
         self._viking_fs = None
@@ -665,33 +666,77 @@ class MarkdownParser(BaseParser):
 
         return headings
 
+    def _split_markdown_blocks(self, content: str) -> List[str]:
+        """Split on blank lines without breaking fenced code blocks.
+
+        A blank line inside a fitting fence is content, not a paragraph
+        boundary; keeping the fence in one block prevents the section budget
+        from writing the opening and closing markers into different files.
+        """
+        blocks: List[str] = []
+        lines: List[str] = []
+        fence: Optional[str] = None
+        for line in content.split("\n"):
+            if fence is None:
+                if not line.strip():
+                    if lines:
+                        blocks.append("\n".join(lines))
+                        lines = []
+                    continue
+                lines.append(line)
+                match = self._fence_pattern.match(line)
+                if match:
+                    fence = match.group(1)
+            else:
+                lines.append(line)
+                stripped = line.strip()
+                if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):
+                    fence = None
+        if lines:
+            blocks.append("\n".join(lines))
+        return blocks
+
+    def _contains_code_fence(self, content: str) -> bool:
+        """Return whether ``content`` contains a fenced code block opener."""
+        return any(self._fence_pattern.match(line) for line in content.split("\n"))
+
     def _smart_split_content(self, content: str, max_size: int) -> List[str]:
-        """Split by character budget, preserving an indivisible Markdown table row."""
+        """Split by character budget, preserving fences and indivisible table rows."""
         max_chars = min(max_size, self.config.max_section_chars)
-        paragraphs = content.split("\n\n")
+        # Fence-aware blocks only where a fence exists: documents without code
+        # keep the previous byte-preserving split (CRLF prose in particular).
+        if self._contains_code_fence(content):
+            blocks = self._split_markdown_blocks(content)
+        else:
+            blocks = content.split("\n\n")
         parts = []
         current = ""
 
-        for para in paragraphs:
-            if len(para) > max_chars:
+        for block in blocks:
+            if len(block) > max_chars:
                 if current:
                     if len(current) < self.DEFAULT_MIN_SECTION_CHARS:
-                        para = current + "\n\n" + para
+                        block = current + "\n\n" + block
                     else:
                         parts.append(current.strip())
                     current = ""
-                table_parts = self._split_markdown_table_by_rows(para, max_chars=max_chars)
+                table_parts = self._split_markdown_table_by_rows(block, max_chars=max_chars)
                 if table_parts:
                     parts.extend(table_parts)
+                elif self._contains_code_fence(block):
+                    # Never cut a fence: the raw fallback would leave an
+                    # unclosed opener in one file and prose in the next
+                    # (issue #8522).
+                    parts.append(block.strip())
                 else:
                     parts.extend(
-                        para[i : i + max_chars].strip() for i in range(0, len(para), max_chars)
+                        block[i : i + max_chars].strip() for i in range(0, len(block), max_chars)
                     )
-            elif current and len(current) + len(para) + 2 > max_chars:
+            elif current and len(current) + len(block) + 2 > max_chars:
                 parts.append(current.strip())
-                current = para
+                current = block
             else:
-                current = current + "\n\n" + para if current else para
+                current = current + "\n\n" + block if current else block
 
         if current.strip():
             tail = current.strip()
