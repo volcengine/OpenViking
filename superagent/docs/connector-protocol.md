@@ -37,7 +37,9 @@ The Core starts a Connector and calls these operations in order:
    (Lark: the app's bot `open_id` from `/open-apis/bot/v3/info`; OneBot: the
    account's QQ number). The Core then marks each chat input whose
    mentions include anyone with `mention=me|other|mixed` by id, never by display
-   name; without `self` the field is left out. A failed lookup reports no
+   name. `self.id` identifies the inbound mention target. Connectors choose the
+   outbound sender independently. Without `self` the mention field is left out.
+   A failed lookup reports no
    `self` rather than failing `check`.
 3. `start`: begin receiving events.
 4. `action`: execute a typed external action.
@@ -659,12 +661,22 @@ a stranger's `/`). There is no catch-up read after downtime.
 
 ### DingTalk
 
-DingTalk Stream receives internal group text that mentions the bot.
-`message.send` and `message.reply` take Markdown; a reply is a new message in
-the group, since `msg=dtm_<group>.<message>` carries the group (base64url
-DingTalk ids). Owner notices and email approvals go to the primary IM.
+DingTalk Stream receives internal group text that mentions the bot. The group
+policy can select DWS for ordinary group text and structured quotes, or turn a
+group off. DWS `ambient` releases ordinary messages in batches. DWS
+`reply-only` keeps ordinary text as context and releases replies quoting the
+configured sender in that group. The current DWS event format omits structured
+mentions. The [installation reference](installation-reference.md#dingtalk-group-setup)
+describes the scope of opt-in `allGroups`.
 
-A message is committed to `<dataDir>/dingtalk/state.sqlite3` before the Stream
-callback is acknowledged and removed once written to the Core, as Slack does.
-The SDK reconnects a dropped Stream; one down for 60 seconds is reported as a
-failed Connector and restarted by the Core.
+`message.send` and `message.reply` accept Markdown from Core. Robot sends and
+replies create new group messages. Opt-in DWS user delivery sends Markdown on
+`message.send` and uses a plain-text quoted reply on `message.reply`.
+`msg=dtm_<group>.<message>` carries both base64url DingTalk IDs. Owner notices and
+email approvals go to the primary IM.
+
+Stream commits each event to `<dataDir>/dingtalk/state.sqlite3` before
+acknowledging its callback and removes it after writing it to Core's pipe.
+DWS stages pending messages by configured profile and discards them when the
+profile changes. Transport recovery follows the existing Connector lifecycle.
+DWS reconnection provides no missed-event replay guarantee.

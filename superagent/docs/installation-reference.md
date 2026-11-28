@@ -196,6 +196,84 @@ Select **DingTalk (group bot)** and an owner-capable IM in `ov-superagent setup`
 
 Setup prompts for the app's AppKey, AppSecret (hidden input) and optional RobotCode (defaults to AppKey). It validates the credentials and writes `<dataDir>/dingtalk.json` for the daemon's account. For manual provisioning, create that private file with `clientId`, `clientSecret` and an optional `robotCode`, then include `dingtalk` in `connectors`. To rotate credentials, run `ov-superagent login dingtalk [instance]` for the existing instance.
 
+For a DWS pilot, install DingTalk Workspace CLI 1.0.69 in the Connector's
+execution environment and authorize the dedicated user's profile with
+`dws auth login --device`. Put the group policy in
+`<dataDir>/dingtalk-policy.json`. This file contains routes and identity
+identifiers. DWS retains the user credential in its own profile store.
+
+```json
+{
+  "dws": {
+    "cliBin": "dws",
+    "profile": "corpId:userId",
+    "tenantId": "corpId",
+    "robotOpenId": "robot-sender-open-id-as-seen-by-dws"
+  },
+  "groups": {
+    "authorizedOpenConversationId": { "channel": "dws", "strategy": "ambient" },
+    "disabledOpenConversationId": { "channel": "off" }
+  }
+}
+```
+
+Use a group joined by both the DWS user and the robot. `tenantId` should match
+`chatbotCorpId` from the original Stream events to keep the Core conversation
+key when changing routes. `robotOpenId` is the robot's sender identifier in
+the DWS payload, used to suppress its outgoing echoes. Use an executable path
+for `cliBin` when the instance cannot resolve the binary on PATH.
+Copy the exact `corpId:userId` selector from DWS. Display names and
+organization-only selectors may resolve to a different account over time;
+pending messages are scoped to the configured selector.
+
+By default, unlisted groups keep Stream mention-only reception. Set
+`"defaultChannel": "off"` to use only explicit group routes when `allGroups`
+is disabled.
+An explicit DWS route
+opens one targeted group subscription. Change that group's route to
+`{"channel":"stream","strategy":"mention"}` and restart the instance to roll
+it back. `{"channel":"off"}` blocks both inbound processing and robot sends for
+that group. The route is checked again before forwarding persisted messages.
+
+DWS `ambient` lets ordinary group text trigger model processing through
+ReleaseGate batches. DWS `reply-only` stages ordinary text as context and
+triggers processing on a same-group quote of the configured sender identity
+(the robot by default, or the authorized user with `sendAs: "user"`). Stream
+`mention` continues to use actual robot mentions. DWS 1.0.69 exposes structured
+quote data and omits structured mentions from its flattened events. DWS
+currently processes text content only. There is no independent per-group
+model-call limit or outbound rate limit in this Connector.
+
+For opt-in personal sending, add `"sendAs": "user"` and `"userOpenId"` to
+the `dws` object. Set `userOpenId` to the authenticated account's open
+DingTalk ID as represented in DWS events. Personal sends and quoted replies
+reuse the Core idempotency key and wait for a DWS receipt. Confirmed Agent
+sends are matched to incoming echoes by message ID. Other messages from the
+same account are staged as context. A failed DWS user send stays on the user
+route. Personal proactive messages and timers use Markdown, and quoted
+replies use plain text. Inline local image links in that Markdown are replaced
+with their alt text so missing files do not block the send. HTTP(S) images and
+DingTalk media references are preserved. Robot sends and replies are new group
+messages.
+Personal automation is subject to DingTalk account and messaging controls.
+Stream groups retain robot sending.
+
+Set `"allGroups": true` under `dws` to subscribe to all group messages visible
+to this profile with one consumer. This setting authorizes the instance to
+process unlisted groups in DWS ambient mode. Explicit `off` and `stream`
+routes still apply. Use a dedicated account that joins only internal groups
+authorized for processing and storage. The DWS events contain no reliable
+external-group marker, so operators enforce this boundary through account
+membership. Admitted messages may be stored in local SQLite and synced to
+the instance's configured OpenViking memory. Leave `allGroups` disabled to
+limit DWS to explicitly configured DWS groups. Pending DWS messages belong to
+the configured profile
+and are discarded when the profile changes. A personal-only configuration
+with zero Stream routes uses the DWS profile and requires no robot credentials
+at runtime. The installation UI still provisions DingTalk as a secondary
+connector. The Core's reply, task and authorization policies continue to apply
+in both modes. DWS reconnect does not establish missed-event replay.
+
 Mention the bot in a group text message to test delivery. Group replies are Markdown, and native timers can send Markdown to the original group. See [DingTalk](connector-protocol.md#dingtalk) for message ids and persistence.
 
 ## Managing instances with setup
