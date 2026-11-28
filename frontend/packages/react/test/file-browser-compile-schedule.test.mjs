@@ -78,6 +78,7 @@ test('schedule uses visible radio choices, the shared weekday picker and preserv
       auto_update: true,
       update_schedule: {
         frequency: 'weekly',
+        timezone: 'Asia/Shanghai',
         hour: 10,
         minute: 45,
         weekday: 7,

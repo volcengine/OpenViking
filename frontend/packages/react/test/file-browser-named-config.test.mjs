@@ -21,7 +21,13 @@ const config = (name) => ({
   instruction: 'Keep these instructions',
   args: { model_name: 'existing-model', max_rounds: 8 },
   auto_update: true,
-  update_schedule: { frequency: 'weekly', hour: 9, minute: 30, weekday: 2 },
+  update_schedule: {
+    frequency: 'weekly',
+    timezone: 'Asia/Shanghai',
+    hour: 9,
+    minute: 30,
+    weekday: 2,
+  },
 });
 function backend(configs) {
   return fixture(target, true, (call) => {

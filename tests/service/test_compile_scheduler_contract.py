@@ -1,5 +1,6 @@
 """Expiry retries and executor credentials for saved Compile configurations."""
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,7 +10,12 @@ from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
 from openviking.scheduling.expiry import CallbackRequest, CallbackStatus, ItemIdentity
 from openviking.server.identity import RequestContext, ResolvedIdentity, Role
-from openviking.service.compile_scheduler import CompileScheduler, _ExpiryHandler
+from openviking.service.compile_scheduler import (
+    CompileScheduler,
+    _ExpiryHandler,
+    current_slot,
+    next_slot,
+)
 from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -86,3 +92,35 @@ async def test_scheduled_credential_uses_current_key_identity():
     with pytest.raises(FailedPreconditionError) as exc:
         await scheduler._executor(record)
     assert exc.value.details["reason"] == "COMPILE_CREDENTIAL_INVALID"
+
+
+def test_schedule_uses_saved_timezone_across_dst():
+    schedule = {
+        "frequency": "daily",
+        "timezone": "America/Los_Angeles",
+        "hour": 9,
+        "minute": 30,
+    }
+    now = datetime.fromisoformat("2026-03-08T17:00:00+00:00")
+
+    current = current_slot(schedule, now)
+    following = next_slot(schedule, now)
+
+    assert current.isoformat() == "2026-03-08T09:30:00-07:00"
+    assert following.isoformat() == "2026-03-09T09:30:00-07:00"
+
+
+def test_schedule_uses_first_occurrence_of_fall_back_time():
+    schedule = {
+        "frequency": "daily",
+        "timezone": "America/Los_Angeles",
+        "hour": 1,
+        "minute": 30,
+    }
+    now = datetime.fromisoformat("2026-11-01T09:45:00+00:00")
+
+    current = current_slot(schedule, now)
+    following = next_slot(schedule, now)
+
+    assert current.isoformat() == "2026-11-01T01:30:00-07:00"
+    assert following.isoformat() == "2026-11-02T01:30:00-08:00"

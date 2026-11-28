@@ -1025,9 +1025,13 @@ class CompileService:
             raise InvalidArgumentError(
                 "Use top-level scheduling fields when updating a configuration"
             )
+        schedule = body.update_schedule or configuration["update_schedule"]
+        # Records created before timezone became required retain their Beijing-time meaning.
+        if schedule is not None and "timezone" not in schedule:
+            schedule = {**schedule, "timezone": "Asia/Shanghai"}
         args.update(
             auto_update=body.auto_update,
-            update_schedule=body.update_schedule or configuration["update_schedule"],
+            update_schedule=schedule,
         )
         inputs = CompileInputs.model_validate(
             {

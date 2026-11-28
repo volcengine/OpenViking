@@ -40,7 +40,7 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
     "instruction": "整理成保留证据引用的中文知识库。",
     "args": {
       "auto_update": true,
-      "update_schedule": {"frequency": "daily", "hour": 10, "minute": 0}
+      "update_schedule": {"frequency": "daily", "timezone": "Asia/Singapore", "hour": 10, "minute": 0}
     }
   }'
 ```
@@ -57,7 +57,7 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 
 创建接口校验输入和权限，必要时创建 `to`，无需等待目标标签可查询。创建配置不会执行 Compile，也不会产生运行记录。
 
-调度控制与 Runtime 参数分开保存。非空计划默认开启自动更新，除非显式指定 `auto_update=false`。计划必填 `frequency`（`daily` 或 `weekly`），使用北京时间（`Asia/Shanghai`）。
+调度控制与 Runtime 参数分开保存。非空计划默认开启自动更新，除非显式指定 `auto_update=false`。计划必填 `frequency`（`daily` 或 `weekly`）及 IANA `timezone`（如 `Asia/Singapore` 或 `UTC`）。触发时间按该时区的当地时间计算，并遵循夏令时变化。
 
 只传频率时，服务端在 00:00–03:59 中为计划分配固定时间。每周计划省略 `weekday` 时也会分配固定执行日（1 为周一，7 为周日）。只传 `hour`（0–23）时，在该小时内分配固定分钟，例如 `hour: 10` 对应 10:00–10:59。只传 `minute`（0–59）时，小时取 0。查询配置的 `update_schedule` 可查看分配结果。
 
@@ -122,7 +122,7 @@ POST /api/v1/compile
 ```bash
 ov compile create --compile-name research-summary --from viking://resources/research \
   --to viking://resources/research-wiki --skill viking://agent/skills/llm-wiki \
-  --args '{"auto_update":true,"update_schedule":{"frequency":"daily","hour":10}}'
+  --args '{"auto_update":true,"update_schedule":{"frequency":"daily","timezone":"Asia/Singapore","hour":10}}'
 ov compile --compile-name research-summary
 ```
 

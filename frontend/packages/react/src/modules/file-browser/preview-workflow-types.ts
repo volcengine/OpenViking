@@ -89,6 +89,7 @@ export interface CompileConfig {
   auto_update: boolean;
   update_schedule: {
     frequency: 'daily' | 'weekly';
+    timezone: string;
     hour: number;
     minute: number;
     weekday?: number;

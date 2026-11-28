@@ -61,12 +61,17 @@ export const compileHelp = {
         },
         {
           token: 'update_schedule',
-          description: '使用北京时间的定时计划。auto_update 为 true 时必填。',
+          description: '定时计划。auto_update 为 true 时必填。',
         },
         {
           token: 'update_schedule.frequency',
           required: true,
           description: '执行频率，仅支持 daily（每天）或 weekly（每周）。',
+        },
+        {
+          token: 'update_schedule.timezone',
+          required: true,
+          description: 'IANA 时区，例如 Asia/Shanghai 或 UTC。',
         },
         {
           token: 'update_schedule.weekday',
@@ -137,13 +142,17 @@ export const compileHelp = {
         },
         {
           token: 'update_schedule',
-          description:
-            'Schedule in Beijing time. Required when auto_update is true.',
+          description: 'Schedule. Required when auto_update is true.',
         },
         {
           token: 'update_schedule.frequency',
           required: true,
           description: 'Run frequency, either daily or weekly.',
+        },
+        {
+          token: 'update_schedule.timezone',
+          required: true,
+          description: 'IANA timezone, such as Asia/Shanghai or UTC.',
         },
         {
           token: 'update_schedule.weekday',

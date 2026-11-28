@@ -68,6 +68,7 @@ export function PreviewCompileEdit({
                 ? null
                 : {
                     frequency: schedule.mode,
+                    timezone: initialSchedule?.timezone ?? 'Asia/Shanghai',
                     hour: Number(schedule.time.split(':')[0]),
                     minute: Number(schedule.time.split(':')[1]),
                     ...(schedule.mode === 'weekly'

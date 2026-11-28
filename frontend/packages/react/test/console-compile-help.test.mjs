@@ -53,6 +53,7 @@ test('Console shows the Compile guide and extended parameters in the selected lo
           'auto_update',
           'update_schedule',
           'update_schedule.frequency',
+          'update_schedule.timezone',
           'update_schedule.weekday',
           'update_schedule.hour',
           'update_schedule.minute',
