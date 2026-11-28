@@ -146,11 +146,6 @@ def _message_tokens(messages: Iterable[Message]) -> int:
     return sum(int(message.estimated_tokens or 0) for message in messages)
 
 
-def _fit_message_group_to_budget(messages: List[Message], token_budget: int) -> List[Message]:
-    fitted, _ = _truncate_message_group(messages, token_budget)
-    return fitted or list(messages)
-
-
 def _truncate_message_group(
     messages: List[Message],
     token_budget: int,
@@ -387,8 +382,8 @@ def _partial_latest_turn_plan(
     min_tail = max(1, int(min_raw_tail_steps or 0)) if steps else 0
 
     retained_steps: List[AssistantStep] = list(steps[-min_tail:]) if min_tail else []
-    retained_tokens = int(anchor.estimated_tokens or 0) if anchor is not None else 0
-    retained_tokens += sum(step.estimated_tokens for step in retained_steps)
+    anchor_tokens = int(anchor.estimated_tokens or 0) if anchor is not None else 0
+    retained_tokens = anchor_tokens + sum(step.estimated_tokens for step in retained_steps)
 
     # Leave room for the dedicated checkpoint summary generated alongside the
     # existing Working Memory output during Phase 2.
@@ -411,28 +406,18 @@ def _partial_latest_turn_plan(
 
     archived_prefix = steps[:first_retained_step]
     archived_source_messages = [message for step in archived_prefix for message in step.messages]
-    retained_messages: List[Message] = []
-    if anchor is not None:
-        retained_messages.append(anchor)
-    retained_messages.extend(message for step in retained_steps for message in step.messages)
+    retained_tail = [message for step in retained_steps for message in step.messages]
+    if retained_tokens > token_budget and retained_tail:
+        preview, truncated_ids = _truncate_message_group(
+            retained_tail, max(1, token_budget - anchor_tokens)
+        )
+        if truncated_ids:
+            # Archive the whole tail so tool calls and their results stay together.
+            archived_source_messages.extend(retained_tail)
+        retained_tail = preview or retained_tail
+    retained_messages = [anchor, *retained_tail] if anchor is not None else retained_tail
 
     archive_messages = _flatten_turns(older_turns)
-    if retained_tokens > token_budget and retained_steps:
-        retained_source_messages = [
-            message for step in retained_steps for message in step.messages
-        ]
-        archived_source_messages = [*archived_source_messages, *retained_source_messages]
-        retained_budget = max(
-            1,
-            token_budget - (int(anchor.estimated_tokens or 0) if anchor else 0),
-        )
-        retained_messages = []
-        if anchor is not None:
-            retained_messages.append(anchor)
-        retained_messages.extend(
-            _fit_message_group_to_budget(retained_source_messages, retained_budget)
-        )
-
     if archived_source_messages:
         # A copy of the anchor (same message id) makes the partial archive
         # understandable during Phase 2. Context assembly stable-deduplicates it
