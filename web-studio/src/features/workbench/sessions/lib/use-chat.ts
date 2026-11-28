@@ -1,8 +1,10 @@
 import i18n from '#/i18n/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { queryClient } from '#/app/providers/query-client'
 import {
   addMessage,
+  fetchSession,
   interruptChatSession,
   sendChatStream,
   serializeParts,
@@ -27,6 +29,8 @@ import type {
   ToolResultPart,
 } from '#/features/workbench/sessions/lib/types/message'
 import { setSessionTitle } from '#/features/workbench/sessions/lib/use-session-titles'
+import { SESSIONS_KEY } from '#/features/workbench/sessions/lib/use-sessions'
+import { isBotOwnedWebSession } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 import { ovClient } from '#/shared/api/ov-client/index'
 import { createBrowserId } from '#/shared/lib/browser-crypto'
 
@@ -171,6 +175,7 @@ export interface UseChatOptions {
   initialMessages?: Message[]
   /** Whether to persist messages via the sessions API after each exchange. */
   persistMessages?: boolean
+  onBotSessionAvailable?: () => void
 }
 
 export interface UseChatReturn {
@@ -195,6 +200,7 @@ export function useChat(options: UseChatOptions): UseChatReturn {
     sessionId,
     initialMessages,
     persistMessages = true,
+    onBotSessionAvailable,
   } = options
 
   const [messages, setMessages] = useState<Message[]>(initialMessages ?? [])
@@ -706,6 +712,9 @@ export function useChat(options: UseChatOptions): UseChatReturn {
 
         stream: for await (const event of parseSseStream(response)) {
           if (controller.signal.aborted) break
+          if (event.event === 'error') {
+            throw new Error(streamEventDataToText(event.data))
+          }
           streamStarted = true
           queueInitialUserPersistence()
 
@@ -942,6 +951,21 @@ export function useChat(options: UseChatOptions): UseChatReturn {
           await persistTimeline(true)
         }
       } finally {
+        if (
+          streamStarted &&
+          isSameConnection() &&
+          isBotOwnedWebSession(sessionId)
+        ) {
+          void queryClient.invalidateQueries({ queryKey: SESSIONS_KEY })
+          if (onBotSessionAvailable && isCurrent()) {
+            void fetchSession(sessionId).then(
+              () => {
+                if (isCurrent()) onBotSessionAvailable()
+              },
+              () => {}, // A failed first write leaves the conversation as a draft.
+            )
+          }
+        }
         discardPartialControllersRef.current.delete(controller)
         interruptedControllersRef.current.delete(controller)
         if (abortRef.current === controller) {
@@ -952,7 +976,13 @@ export function useChat(options: UseChatOptions): UseChatReturn {
         }
       }
     },
-    [identityScopeKey, persistMessages, queuePersistence, sessionId],
+    [
+      identityScopeKey,
+      onBotSessionAvailable,
+      persistMessages,
+      queuePersistence,
+      sessionId,
+    ],
   )
 
   return {

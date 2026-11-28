@@ -26,7 +26,11 @@ vi.mock('#/features/connection/hooks/use-app-connection', () => ({
   }),
 }))
 vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
-  useBotHealth: () => ({ isError: false, isPending: false }),
+  useBotHealth: () => ({
+    data: { studio_session_persistence: true },
+    isError: false,
+    isPending: false,
+  }),
   useSessionListByRecency: () => ({
     data: [
       {
@@ -64,7 +68,7 @@ it('keeps web chat usable without mounting management APIs even when Root is sav
   expect(screen.queryByText('manageBots')).toBeNull()
   expect(screen.queryByText('external-group')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'newChat' }))
-  expect(screen.getByTestId('thread').textContent).toMatch(/^vikingbot-web-/)
+  expect(screen.getByTestId('thread').textContent).toMatch(/^vikingbot-web-v2-/)
   expect(admin.capabilities).not.toHaveBeenCalled()
   expect(admin.connections).not.toHaveBeenCalled()
   expect(admin.histories).not.toHaveBeenCalled()

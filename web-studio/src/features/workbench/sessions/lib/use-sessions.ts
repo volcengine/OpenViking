@@ -15,7 +15,7 @@ import type { SessionMemoryDiff } from '#/features/workbench/sessions/lib/memory
 import type { Message } from '#/features/workbench/sessions/lib/types/message'
 import type { SessionMeta } from '@ov-server/api/v1/sessions'
 
-const SESSIONS_KEY = ['sessions'] as const
+export const SESSIONS_KEY = ['sessions'] as const
 const BOT_HEALTH_KEY = ['bot', 'health'] as const
 
 export function useBotHealth() {

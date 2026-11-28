@@ -1008,9 +1008,9 @@ async def test_add_message_rejects_openai_style_image_content(client: httpx.Asyn
     assert resp.status_code == 400
 
 
-async def test_batch_add_message_accepts_mixed_parts(client: httpx.AsyncClient, service):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
+async def test_first_batch_add_creates_session_with_mixed_parts(client: httpx.AsyncClient, service):
+    session_id = "first-batch-session"
+    assert (await client.get(f"/api/v1/sessions/{session_id}/context")).status_code == 404
 
     resp = await client.post(
         f"/api/v1/sessions/{session_id}/messages/batch",

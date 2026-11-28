@@ -448,7 +448,9 @@ function buildFetchHeaders(): Record<string, string> {
   return headers
 }
 
-export async function fetchBotHealth(): Promise<unknown> {
+export async function fetchBotHealth(): Promise<{
+  studio_session_persistence?: boolean
+}> {
   const baseUrl = ovClient.getOptions().baseUrl
   const response = await fetch(`${baseUrl}/bot/v1/health`, {
     method: 'GET',

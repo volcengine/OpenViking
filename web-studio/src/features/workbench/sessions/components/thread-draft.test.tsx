@@ -10,6 +10,7 @@ const m = vi.hoisted(() => ({
   history: vi.fn(),
   send: vi.fn(),
   onSend: undefined as undefined | ((text: string) => Promise<boolean>),
+  onBotSessionAvailable: undefined as (() => void) | undefined,
 }))
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -29,13 +30,20 @@ vi.mock('#/features/workbench/sessions/lib/use-sessions', () => ({
   useSessionMessages: m.history,
 }))
 vi.mock('#/features/workbench/sessions/lib/use-chat', () => ({
-  useChat: () => ({
-    messages: [],
-    status: 'idle',
-    streamingParts: [],
-    streamingInsertIndex: undefined,
-    send: m.send,
-  }),
+  useChat: ({
+    onBotSessionAvailable,
+  }: {
+    onBotSessionAvailable?: () => void
+  }) => {
+    m.onBotSessionAvailable = onBotSessionAvailable
+    return {
+      messages: [],
+      status: 'idle',
+      streamingParts: [],
+      streamingInsertIndex: undefined,
+      send: m.send,
+    }
+  },
 }))
 vi.mock('#/features/workbench/sessions/components/memory-impact', () => ({
   MemoryImpact: () => null,
@@ -110,7 +118,9 @@ it('loads the correct history when switching existing sessions', () => {
   expect(m.create).not.toHaveBeenCalled()
 })
 
-it('loads persisted history and continues after switching tabs', async () => {
+it('opens Bot-written draft history after switching tabs', async () => {
+  const id = 'vikingbot-web-v2-9b4cd043-4afd-487a-9f32-7dc64004029f'
+  const startNew = vi.fn()
   let showThread!: (visible: boolean) => void
   function Workspace() {
     const [draft, setDraft] = useState(true)
@@ -118,26 +128,30 @@ it('loads persisted history and continues after switching tabs', async () => {
     showThread = setVisible
     return visible ? (
       <Thread
-        sessionId="draft"
+        sessionId={id}
         draft={draft}
         onPersisted={() => setDraft(false)}
+        onNewConversation={startNew}
       />
     ) : null
   }
-  m.create
-    .mockResolvedValueOnce({ session_id: 'draft' })
-    .mockRejectedValue(new Error('Session already exists'))
+  m.send.mockImplementationOnce(async () => m.onBotSessionAvailable?.())
   render(<Workspace />)
   await act(async () => {
     expect(await m.onSend!('first')).toBe(true)
   })
   act(() => showThread(false))
   act(() => showThread(true))
-  expect(m.history).toHaveBeenLastCalledWith('draft')
+  expect(m.history).toHaveBeenLastCalledWith(id)
   await act(async () => {
     expect(await m.onSend!('second')).toBe(true)
   })
-  expect(m.create).toHaveBeenCalledExactlyOnceWith('draft')
+  expect(m.create).not.toHaveBeenCalled()
+  expect(m.send).toHaveBeenLastCalledWith('second')
+  await act(async () => {
+    await m.onSend!('/new')
+  })
+  expect(startNew).toHaveBeenCalledOnce()
   expect(m.send).toHaveBeenLastCalledWith('second')
 })
 

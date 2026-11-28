@@ -14,6 +14,7 @@ import {
   useSession,
   useSessionMessages,
 } from '#/features/workbench/sessions/lib/use-sessions'
+import { isBotOwnedWebSession } from '#/features/workbench/sessions/lib/vikingbot-sessions'
 
 const PixelBlast = lazy(() => import('#/shared/ui/pixel-blast'))
 const PRODUCT_NAME = 'OpenViking'
@@ -22,6 +23,7 @@ interface ThreadProps {
   sessionId: string
   draft?: boolean
   onPersisted?: () => void
+  onNewConversation?: () => void
 }
 
 export function Thread(props: ThreadProps) {
@@ -31,13 +33,19 @@ export function Thread(props: ThreadProps) {
   )
 }
 
-function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
+function SessionThread({
+  sessionId,
+  draft = false,
+  onPersisted,
+  onNewConversation,
+}: ThreadProps) {
   const { t } = useTranslation('sessions')
   const service = useStudioService()
   const canChat = service.ready && service.provider === 'opensource'
   const { identityScopeKey } = useAppConnection()
   const { getTitle } = useSessionTitles(identityScopeKey)
   const title = getTitle(sessionId)
+  const botOwned = isBotOwnedWebSession(sessionId)
 
   const [historyId] = useState(draft ? undefined : sessionId)
   const persisted = useRef(!draft)
@@ -51,7 +59,9 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
       mounted.current = false
     }
   }, [])
-  const { data: session } = useSession(historyId)
+  const { data: session } = useSession(
+    botOwned && !draft ? sessionId : historyId,
+  )
   const {
     data: historyMessages,
     isPending: historyLoading,
@@ -62,7 +72,14 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
     identityScopeKey,
     sessionId,
     initialMessages: historyMessages,
-    persistMessages: true,
+    persistMessages: !botOwned,
+    onBotSessionAvailable:
+      botOwned && !persisted.current
+        ? () => {
+            persisted.current = true
+            onPersisted?.()
+          }
+        : undefined,
   })
 
   const isStreaming = chat.status === 'streaming'
@@ -70,7 +87,11 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
   const handleSend = useCallback(
     async (message: string) => {
       if (!canChat || !message.trim() || creating.current) return false
-      if (!persisted.current) {
+      if (botOwned && message.toLowerCase() === '/new' && onNewConversation) {
+        onNewConversation()
+        return true
+      }
+      if (!persisted.current && !botOwned) {
         creating.current = true
         setCreationError(undefined)
         try {
@@ -94,7 +115,15 @@ function SessionThread({ sessionId, draft = false, onPersisted }: ThreadProps) {
       }
       return true
     },
-    [canChat, chat, createSession, sessionId, onPersisted],
+    [
+      botOwned,
+      canChat,
+      chat,
+      createSession,
+      sessionId,
+      onPersisted,
+      onNewConversation,
+    ],
   )
 
   // ---- Auto-scroll ----
