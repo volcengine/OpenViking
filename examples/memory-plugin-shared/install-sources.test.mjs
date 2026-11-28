@@ -318,7 +318,7 @@ test("Codex moves to the git marketplace, falls back to the bundle, and says how
   const moved = install();
   assert.ok(moved.calls.includes("plugin marketplace remove openviking"), moved.calls.join("\n"));
   assert.ok(moved.calls.includes(`plugin marketplace add file://${tosBase}/plugins/memory-plugins.git`), moved.calls.join("\n"));
-  assert.match(moved.stdout, /Codex\n {4}Next: .*\n {4}Updates: automatic; Codex upgrades the marketplace when it starts\n/);
+  assert.match(moved.stdout, /Codex\n {4}Next: trust OpenViking's hooks in Codex Settings → Hooks, then restart Codex\n {4}Updates: automatic; Codex upgrades the marketplace when it starts\n/);
   assert.match(moved.stdout, /Uninstall: codex plugin remove openviking-memory@openviking && codex plugin marketplace remove openviking\n/);
   assert.match(readFileSync(join(home, ".codex", "config.toml"), "utf8"), /\[plugins\."openviking-memory@openviking"\]\nenabled = true/);
   assert.equal(existsSync(join(home, ".openviking", "memory-plugin-marketplace")), false);
