@@ -445,9 +445,21 @@ export const TOOLS = [
       title: { type: 'string', minLength: 1, maxLength: 200 },
       text: { type: 'string', minLength: 1, maxLength: 4000 },
       timezone: { type: 'string', minLength: 1, maxLength: 100 },
-      schedule: { type: 'object' },
+      schedule: {
+        type: 'object',
+        description: 'Choose one schedule shape: {"type":"once","run_at":"2030-01-01T09:00:00Z"}, '
+          + '{"type":"interval","interval_ms":600000}, {"type":"daily","time":"09:00"}, '
+          + 'or {"type":"weekly","time":"09:00","days":[1,5]} (0=Sunday through 6=Saturday). '
+          + 'Use run_at_ms for a Unix timestamp in milliseconds. Intervals take a positive whole number of milliseconds '
+          + 'and an optional anchor_at (ISO time) or anchor_at_ms (default: now). '
+          + 'Recurring schedules can set timezone, defaulting to the tool timezone or local time zone.',
+      },
       max_runs: { type: 'integer', minimum: 1, maximum: 1_000_000 },
-      delivery: { type: 'object' },
+      delivery: {
+        type: 'object',
+        description: 'Use {"mode":"owner"} for the owner, or {"mode":"chat","source":"lark","chat_id":"oc_…"} '
+          + 'with the source and ID of the target chat.',
+      },
       ...DECISION_FIELDS,
     }, ['title', 'text', 'schedule', 'delivery', 'decision_id']),
     annotations: LOCAL_WRITE,
