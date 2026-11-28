@@ -220,13 +220,22 @@ function isMissingSessionState(error) {
 // Main
 // ---------------------------------------------------------------------------
 
-// last_assistant_message is the text of the turn's final message, which
-// follows its last tool result; the transcript writes each block as a line.
+// The Stop payload contains the final assistant message. Earlier assistant
+// narration may also be present after the latest user turn.
 function holdsAnswer(turns, answer) {
   const start = turns.findLastIndex((turn) => turn.role === "user") + 1;
-  const text = turns.slice(start).flatMap((turn) => turn.parts)
-    .filter((part) => part.type === "text").map((part) => part.text).join("");
-  return text.replace(/\s+/g, "") === answer.replace(/\s+/g, "");
+  const parts = turns.slice(start).flatMap((turn) => turn.parts);
+  const expected = answer.replace(/\s+/g, "");
+  let offset = expected.length;
+
+  for (const part of parts.reverse()) {
+    if (part.type !== "text") continue;
+    const text = part.text.replace(/\s+/g, "");
+    offset -= text.length;
+    if (offset < 0 || !expected.startsWith(text, offset)) return false;
+    if (offset === 0) return true;
+  }
+  return false;
 }
 
 async function main({ cfg, input, cwd }) {
