@@ -1463,8 +1463,7 @@ export function FilePreview({
   const [saving, setSaving] = useState(false)
   const [loadingEditor, setLoadingEditor] = useState(false)
   const [editorContent, setEditorContent] = useState('')
-  const fileUriRef = useRef(file?.uri)
-  fileUriRef.current = file?.uri
+  const editorSessionRef = useRef(0)
   const editorRef = useRef<CodeEditorHandle>(null)
   const { invalidatePreview } = useInvalidateVikingFs()
 
@@ -1481,9 +1480,15 @@ export function FilePreview({
     setMarkdownMode('preview')
     setJsonMode('preview')
     setEditing(false)
+    setSaving(false)
     setLoadingEditor(false)
     setEditorContent('')
     setActiveDirectoryLevels(new Set(['abstract', 'overview']))
+    return () => {
+      // Navigating away ends this editing session, even when returning to the
+      // same URI before an outstanding read or save completes.
+      editorSessionRef.current += 1
+    }
   }, [file?.uri])
 
   const [imageUrl, setImageUrl] = useState<string | null>(null)
@@ -1600,6 +1605,7 @@ export function FilePreview({
   const handleEdit = async () => {
     if (!file || loadingEditor || !canEdit) return
     const uri = file.uri
+    const session = editorSessionRef.current
     setLoadingEditor(true)
     try {
       // A limited preview must never become a replace write. Download the
@@ -1611,7 +1617,7 @@ export function FilePreview({
             throwOnError: true,
           })
         : null
-      if (fileUriRef.current !== uri) return
+      if (editorSessionRef.current !== session) return
       const content = response ? response.data : preview.content
       if (
         typeof content !== 'string' ||
@@ -1622,24 +1628,26 @@ export function FilePreview({
       setEditorContent(content)
       setEditing(true)
     } catch (err) {
-      if (fileUriRef.current === uri)
+      if (editorSessionRef.current === session)
         toast.error(t('filePreview.editFailed'), { description: String(err) })
     } finally {
-      if (fileUriRef.current === uri) setLoadingEditor(false)
+      if (editorSessionRef.current === session) setLoadingEditor(false)
     }
   }
 
   const handleSave = async () => {
     if (!file || !editorRef.current) return
+    const session = editorSessionRef.current
     setSaving(true)
     try {
       await saveFileContent(file.uri, editorRef.current.getContent())
       invalidatePreview(file.uri)
-      setEditing(false)
+      if (editorSessionRef.current === session) setEditing(false)
     } catch (err) {
+      // A failed write still needs reporting after navigating away.
       toast.error(t('filePreview.saveFailed'), { description: String(err) })
     } finally {
-      setSaving(false)
+      if (editorSessionRef.current === session) setSaving(false)
     }
   }
 
