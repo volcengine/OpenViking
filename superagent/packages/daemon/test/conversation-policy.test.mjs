@@ -19,6 +19,7 @@ import {
   assembleWorkerPolicy,
   docCommentNotice,
   draftRules,
+  LEGACY_OV_SOUL_URI,
   normalizePolicyText,
   policyHashOf,
   OV_SOUL_URI,
@@ -305,7 +306,7 @@ describe('the instance role', () => {
   it('takes the soul loaded from OpenViking, without its comments, under a pointer to where it lives', () => {
     const soulText = '<!-- notes for whoever edits this -->\nYou are {{AGENT_NAME}}, the garden club\'s helper.\n';
     const text = assembleConversationPolicy({ connectors: ['weixin'], agentName: 'Fern', soulText });
-    assert.match(text, /## Role\n\nYour soul \(who you are, what you work on, when you speak, how you sound\) is kept in OpenViking at `viking:\/\/~\/memories\/soul\.md`\.[^\n]*`openviking_write`[^\n]*\n\nYou are Fern, the garden club's helper\.\n\nRole boundary:/);
+    assert.match(text, /## Role\n\nYour soul \(who you are, what you work on, when you speak, how you sound\) is kept in OpenViking at `viking:\/\/~\/SOUL\.md`\.[^\n]*`openviking_write`[^\n]*\n\nYou are Fern, the garden club's helper\.\n\nRole boundary:/);
     assert.doesNotMatch(text, /notes for whoever edits this/);
     assert.equal(rolePrompt({ soulText: '<!-- nothing yet -->\n' }), '');
   });
@@ -313,7 +314,7 @@ describe('the instance role', () => {
   it('keeps only the pointer and the boundary when the soul is empty, at the instance\'s own address', () => {
     for (const config of [{ connectors: ['lark'] }, { connectors: ['lark'], soulText: '<!-- nothing yet -->\n' }]) {
       const text = assembleConversationPolicy(config);
-      assert.match(text, /## Role\n\nYour soul [^\n]*viking:\/\/~\/memories\/soul\.md[^\n]*\n\nRole boundary:/);
+      assert.match(text, /## Role\n\nYour soul [^\n]*viking:\/\/~\/SOUL\.md[^\n]*\n\nRole boundary:/);
       assert.match(text, /The Role decides when you speak\. Where it says nothing, use these defaults:/);
     }
     const custom = assembleConversationPolicy({ connectors: ['lark'], soulUri: 'viking://~/memories/team/soul.md' });
@@ -341,6 +342,19 @@ describe('loading the soul', () => {
     assert.deepEqual(reads.at(-1), ['viking://user/team/memories/soul.md', 0, -1]);
   });
 
+  it('falls back from the uppercase default to the historical lowercase address', async () => {
+    const reads = [];
+    const config = {};
+    assert.equal(await loadSoul(config, { read: async (uri, ...args) => {
+      reads.push([uri, ...args]);
+      if (uri === OV_SOUL_URI) throw failure(404);
+      return 'the historical soul';
+    } }), true);
+    assert.deepEqual(reads, [[OV_SOUL_URI, 0, -1], [LEGACY_OV_SOUL_URI, 0, -1]]);
+    assert.equal(config.soulUri, LEGACY_OV_SOUL_URI);
+    assert.equal(config.soulText, 'the historical soul');
+  });
+
   it('retries a failing read, then runs with the pointer alone and no local fallback', async () => {
     const { warnings, logger } = quiet();
     const sleeps = [];
@@ -366,7 +380,7 @@ describe('loading the soul', () => {
       const { warnings, logger } = quiet();
       calls = 0;
       assert.equal(await loadSoul(config, { read: async () => { calls += 1; throw failure(status); } }, { logger, sleep: async () => {} }), false);
-      assert.equal(calls, 1, `HTTP ${status}`);
+      assert.equal(calls, status === 404 ? 2 : 1, `HTTP ${status}`);
       assert.equal(warnings.length, warned, `HTTP ${status}`);
     }
     assert.equal(await loadSoul(config, { read: async () => '  \n' }), false);

@@ -45,8 +45,12 @@ export function policyHashOf(text, ...parts) {
 }
 
 // Where the soul is kept unless the instance names another place
-// (agents[].soulUri): its own OV user's memories.
-export const OV_SOUL_URI = 'viking://~/memories/soul.md';
+// (agents[].soulUri): its own OV user's memories. The lowercase address was
+// the former default and remains a read fallback for old manifests.
+export const OV_SOUL_URI = 'viking://~/SOUL.md';
+// TODO(2027-03-31): Remove automatic legacy fallback no later than this date.
+// Explicit agents[].soulUri values remain configurable Viking addresses.
+export const LEGACY_OV_SOUL_URI = 'viking://~/memories/soul.md';
 
 // agents[].soulUri may also name a local file (an absolute path), so the soul
 // is not bound to OpenViking.
@@ -247,23 +251,32 @@ export async function loadSoul(config, client, {
     config.soulMissing = missing;
     return text.trim() !== '';
   }
-  for (let attempt = 1; typeof client?.read === 'function'; attempt += 1) {
-    try {
-      text = String(await client.read(uri, 0, -1) ?? '');
-      missing = text.trim() === '';
+  const candidates = uri === OV_SOUL_URI ? [OV_SOUL_URI, LEGACY_OV_SOUL_URI] : [uri];
+  for (const candidate of candidates) {
+    let unavailable = false;
+    for (let attempt = 1; typeof client?.read === 'function'; attempt += 1) {
+      try {
+        text = String(await client.read(candidate, 0, -1) ?? '');
+        missing = text.trim() === '';
+        break;
+      } catch (error) {
+        const status = error?.httpStatus;
+        if (status === 404) {
+          missing = true;
+          break;
+        }
+        const lasting = status >= 400 && status < 500 && status !== 408 && status !== 429;
+        if (lasting || attempt >= attempts) {
+          logger?.warn('ov_soul_unavailable', { attempts: attempt, error: safeError(error) });
+          unavailable = true;
+          break;
+        }
+        await sleep(delayMs * attempt);
+      }
+    }
+    if (unavailable || !missing) {
+      if (text.trim()) config.soulUri = candidate;
       break;
-    } catch (error) {
-      const status = error?.httpStatus;
-      if (status === 404) {
-        missing = true;
-        break;
-      }
-      const lasting = status >= 400 && status < 500 && status !== 408 && status !== 429;
-      if (lasting || attempt >= attempts) {
-        logger?.warn('ov_soul_unavailable', { attempts: attempt, error: safeError(error) });
-        break;
-      }
-      await sleep(delayMs * attempt);
     }
   }
   config.soulText = text;

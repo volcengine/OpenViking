@@ -468,7 +468,7 @@ describe('release-owned prompts and the instance role', () => {
   it('reads every prompt from the release and has no mutable kernel paths', () => {
     const config = getConfig();
     assert.equal(config.promptDir, path.join(projectDir, 'packages', 'daemon', 'agent'));
-    assert.equal(config.soulUri, 'viking://~/memories/soul.md');
+    assert.equal(config.soulUri, 'viking://~/SOUL.md');
     assert.equal('rolePromptPath' in config, false);
     assert.equal(config.naturalWriting, true);
     assert.equal('kernelInnerPath' in config, false);

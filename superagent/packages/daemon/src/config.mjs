@@ -62,7 +62,7 @@ function boolEnv(name, fallback) {
 }
 
 // OV_SUPERAGENT_SOUL_URI (agents[].soulUri): where the instance's soul is kept
-// in OpenViking. Unset, it is the instance's own viking://~/memories/soul.md.
+// in OpenViking. Unset, it is the instance's own viking://~/SOUL.md.
 function soulUriEnv() {
   const uri = (process.env.OV_SUPERAGENT_SOUL_URI ?? '').trim();
   if (!uri) return OV_SOUL_URI;
