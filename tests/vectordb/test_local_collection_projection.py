@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -62,6 +63,8 @@ def _collection(store, labels=(11, 12), scores=(0.9, 0.8)):
     collection = object.__new__(LocalCollection)
     collection.indexes = _FakeIndexes(_FakeIndex(labels, scores))
     collection.store_mgr = store
+    collection._ttl_state_lock = threading.Lock()
+    collection._next_expire_ns = None
     collection.meta = SimpleNamespace(
         primary_key="doc_id",
         vector_key="embedding",
