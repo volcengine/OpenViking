@@ -342,6 +342,8 @@ The current Rust CLI reports connection failures with exit code `1`; it does not
 | `SESSION_EXPIRED` | 410 | Session no longer exists |
 | `NOT_INITIALIZED` | - | Service or component not initialized (need to call initialize() first) |
 
+Upstream model rate limits and exhausted usage quotas return HTTP 429 with code `RESOURCE_EXHAUSTED`. The message identifies the model service. For a single cause, `error.details.model_error_kind` is `rate_limit_error` or `quota_exhausted`. If both limits affect one queued operation, `model_error_kinds` lists both. For Volcengine account limits, `upstream_error_code` can identify `AccountRateLimitExceeded` or `AccountQuotaExceeded`. An open model circuit breaker with no recorded cause returns HTTP 503 (`UNAVAILABLE`).
+
 File/directory type misuse, copying or removing a directory without `recursive=true`, and a definitively nonexistent HTTP source hostname return `INVALID_ARGUMENT` (400). Path-lock contention, including encrypted writes, returns `CONFLICT` (409); corrupt lock tokens, lock I/O failures, and stored-data decryption failures return `INTERNAL` (500). An unavailable HTTP source or temporary network failure returns `UNAVAILABLE` (503), while a fetch timeout returns `DEADLINE_EXCEEDED` (504).
 
 ---

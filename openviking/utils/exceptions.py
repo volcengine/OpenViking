@@ -2,7 +2,17 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Common exception helpers."""
 
-from openviking.models.model_error import ModelErrorKind
+from openviking.models.model_error import (
+    ACCOUNT_RATE_LIMIT_CODE,
+    MODEL_LIMIT_KINDS,
+    MODEL_RATE_LIMIT_MESSAGE,
+    ModelError,
+    ModelErrorKind,
+    exception_chain,
+    model_error_from_exception,
+    model_error_kind,
+)
+from openviking_cli.exceptions import OpenVikingError, ResourceExhaustedError
 
 HTTP_STATUS_TO_ERROR_CODE = {
     400: "INVALID_ARGUMENT",
@@ -62,6 +72,12 @@ class AllCredentialsFailedError(Exception):
         )
         super().__init__(message)
 
+    @property
+    def common_kind(self) -> ModelErrorKind:
+        """Only report a single cause when every credential failed the same way."""
+        kinds = {kind for _, kind, _, _ in self.errors}
+        return kinds.pop() if len(kinds) == 1 else ModelErrorKind.UNKNOWN
+
     @staticmethod
     def _aggregate_kind(kinds: list[ModelErrorKind]) -> ModelErrorKind:
         for kind in (
@@ -75,3 +91,69 @@ class AllCredentialsFailedError(Exception):
         if kinds and all(kind is kinds[0] for kind in kinds):
             return kinds[0]
         return ModelErrorKind.UNKNOWN
+
+
+def reported_model_error_kind(exc: Exception) -> ModelErrorKind | None:
+    for cause in exception_chain(exc):
+        if isinstance(cause, AllCredentialsFailedError):
+            return cause.common_kind
+    return model_error_kind(exc)
+
+
+class ModelLimitError(ResourceExhaustedError):
+    """A public RESOURCE_EXHAUSTED error originating at the model provider."""
+
+    def __init__(self, details: dict) -> None:
+        kind = details.get("model_error_kind")
+        if kind == ModelErrorKind.QUOTA_EXHAUSTED:
+            message = "The upstream model provider's usage quota has been exhausted."
+        elif details.get("upstream_error_code") == ACCOUNT_RATE_LIMIT_CODE:
+            message = "The upstream model provider's account rate limit was exceeded. Please try again later."
+        elif kind == ModelErrorKind.RATE_LIMIT_ERROR:
+            message = MODEL_RATE_LIMIT_MESSAGE
+        else:
+            message = "Upstream model requests exceeded rate and usage quota limits."
+        super().__init__(message, details=details)
+
+
+def model_limit_error(exc: Exception) -> ModelLimitError | None:
+    """Classify a provider failure before an HTTP response or task serializes it."""
+    for cause in exception_chain(exc):
+        if isinstance(cause, ModelLimitError):
+            return cause
+        if isinstance(cause, OpenVikingError):
+            return None
+        if isinstance(cause, AllCredentialsFailedError):
+            # The retry policy's aggregate kind can represent just one credential.
+            kinds = {kind for _, kind, _, _ in cause.errors}
+            if not kinds or not kinds.issubset(MODEL_LIMIT_KINDS):
+                return None
+            aggregate: dict = {"upstream_error_type": type(cause).__name__}
+            if len(kinds) == 1:
+                aggregate["model_error_kind"] = kinds.pop().value
+            else:
+                aggregate["model_error_kinds"] = sorted(kind.value for kind in kinds)
+            return ModelLimitError(aggregate)
+        if isinstance(cause, ModelError):
+            model_error = cause
+            break
+    else:
+        model_error = model_error_from_exception(exc)
+        # A bare HTTP client error could have come from storage or a connector.
+        if model_error is None or model_error.provider in {"http", "network"}:
+            return None
+        cause = exc
+
+    if model_error.kind not in MODEL_LIMIT_KINDS:
+        return None
+    details: dict = {
+        "model_error_kind": model_error.kind.value,
+        "upstream_error_type": type(cause).__name__,
+    }
+    if model_error.provider:
+        details["provider"] = model_error.provider
+    if model_error.code:
+        details["upstream_error_code"] = model_error.code
+    if model_error.status_code is not None:
+        details["upstream_status_code"] = model_error.status_code
+    return ModelLimitError(details)

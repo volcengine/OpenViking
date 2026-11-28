@@ -3,6 +3,7 @@
 
 """A failed Skill package settles one queue item, regardless of file count."""
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from tests.server.test_api_skills import _add_skill, _skill_md
@@ -25,6 +26,33 @@ def _fail_package_summaries(monkeypatch, name):
 
     monkeypatch.setattr(SemanticProcessor, "_generate_single_file_summary", fail_selected)
     return failed_paths, original
+
+
+async def test_skill_reindex_keeps_rate_limit_details_out_of_warnings(client, monkeypatch):
+    root = (await _add_skill(client, "reindex-limited"))["root_uri"]
+
+    async def rate_limited(self, file_path, *args, **kwargs):
+        raise ModelError(
+            ModelErrorKind.RATE_LIMIT_ERROR,
+            "Too many requests",
+            status_code=429,
+            code="AccountRateLimitExceeded",
+        )
+
+    monkeypatch.setattr(SemanticProcessor, "_generate_single_file_summary", rate_limited)
+    response = await client.post(
+        "/api/v1/content/reindex",
+        json={"uri": root, "mode": "semantic_and_vectors", "force": True, "wait": True},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["failed_records"] == 1
+    assert result["warnings"] == [f"{root}/SKILL.md: Too many requests"]
+    [error] = result["queue_status"]["Semantic"]["errors"]
+    assert error["uri"] == f"{root}/SKILL.md"
+    assert error["model_error_kind"] == "rate_limit_error"
+    assert error["upstream_status_code"] == 429
+    assert error["upstream_error_code"] == "AccountRateLimitExceeded"
 
 
 async def _assert_failed_package_settled(client, failed_paths):

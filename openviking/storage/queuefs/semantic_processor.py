@@ -45,6 +45,7 @@ from openviking.parse.parsers.media.utils import (
 from openviking.prompts import render_prompt
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import make_work_error
 from openviking.service.task_tracker import (
     get_task_tracker,
     run_tracked_operation,
@@ -81,6 +82,7 @@ from openviking.telemetry import (
 )
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from openviking.utils.exceptions import model_limit_error
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
@@ -613,7 +615,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         return ProcessResult.success()
                     semantic_lock = work.scope
                     assert semantic_lock is not None
-                    dag_stats = None
+                    tree_stats: list[SemanticTreeStats] = []
                     processing_succeeded = False
                     try:
                         if msg.plan is not None:
@@ -636,9 +638,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                     generation_trigger=msg.generation_trigger,
                                 )
                                 await executor.run(run_uri)
-                                self._cache_tree_stats(
-                                    msg.telemetry_id, run_uri, executor.get_stats()
-                                )
+                                stats = executor.get_stats()
+                                tree_stats.append(stats)
+                                self._cache_tree_stats(msg.telemetry_id, run_uri, stats)
                                 if not executor.stale:
                                     write_result = getattr(
                                         executor,
@@ -770,12 +772,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 telemetry_id=msg.telemetry_id,
                             )
                             await executor.run(run_uri)
-                            dag_stats = executor.get_stats()
-                            self._cache_tree_stats(
-                                msg.telemetry_id,
-                                run_uri,
-                                dag_stats,
-                            )
+                            stats = executor.get_stats()
+                            tree_stats.append(stats)
+                            self._cache_tree_stats(msg.telemetry_id, run_uri, stats)
                             if executor.stale and directory_refresh:
                                 processing_succeeded = True
                                 return ProcessResult.success({"skipped": True})
@@ -814,7 +813,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         processing_succeeded = True
                     finally:
                         await work.finish_processing(processing_succeeded)
-                    failure = work.failure_result(dag_stats)
+                    failure = work.failure_result(tree_stats)
                     if failure is not None:
                         return failure
                     self._merge_request_stats(msg.telemetry_id, processed=1)
@@ -894,6 +893,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                     await self._cleanup_local_artifact(msg)
+                if limited := model_limit_error(e):
+                    detail = make_work_error(
+                        str(e),
+                        msg.uri if msg else None,
+                        model_limit=limited,
+                    )
+                    return ProcessResult.failed(limited.message, errors=(detail,))
                 return ProcessResult.failed(str(e))
         finally:
             if msg is not None and execute_started_at is not None:

@@ -8,6 +8,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from openviking.server.identity import RequestContext
+from openviking.service.task_domain import project_work_error
 from openviking.service.task_tracker import wait_for_enqueued_work
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.queuefs.process_result import ProcessResult
@@ -75,7 +76,7 @@ class SemanticMessageWork:
             await self.scope.close()
             self._lock_closed = True
 
-    def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
+    def failure_result(self, trees: list[SemanticTreeStats]) -> ProcessResult | None:
         return None
 
     async def reenqueue(self) -> None:
@@ -167,14 +168,15 @@ class SkillSemanticMessageWork(SemanticMessageWork):
         # On failure retain the lease until reenqueue hands it to the retry.
         await run_to_completion(finish)
 
-    def failure_result(self, stats: SemanticTreeStats | None) -> ProcessResult | None:
-        if stats is None or not stats.failures:
+    def failure_result(self, trees: list[SemanticTreeStats]) -> ProcessResult | None:
+        failures = tuple(error for tree in trees for error in tree.failures)
+        if not failures:
             return None
         # Report every file error, but settle this queue item only once.
-        self.processor._merge_request_stats(self.msg.telemetry_id, error_count=len(stats.failures))
+        self.processor._merge_request_stats(self.msg.telemetry_id, error_count=len(failures))
         return ProcessResult.failed(
-            "\n".join(stats.failures),
-            errors=tuple(stats.failures),
+            "\n".join(project_work_error(error)["message"] for error in failures),
+            errors=failures,
         )
 
     async def reenqueue(self) -> None:

@@ -32,9 +32,11 @@ from openviking.pyagfs.exceptions import (
     GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.circuit_breaker import CircuitBreakerOpen
 from openviking.utils.exceptions import (
     AllCredentialsFailedError,
     error_code_from_http_status,
+    model_limit_error,
 )
 from openviking_cli.exceptions import (
     ConflictError,
@@ -298,6 +300,7 @@ def _build_upstream_error(
     status: int | None = None,
     source: BaseException | None = None,
     vlm_context: BaseException | None = None,
+    label: str | None = None,
 ) -> OpenVikingError:
     labels = {
         "INVALID_ARGUMENT": "Upstream model request was rejected",
@@ -310,7 +313,7 @@ def _build_upstream_error(
         "UNAVAILABLE": "Upstream model service unavailable",
     }
     detail_message = _trim_message(message)
-    display = labels.get(code, "Upstream model error")
+    display = label or labels.get(code, "Upstream model error")
     if status is not None:
         display = f"{display} (HTTP {status})"
     if detail_message:
@@ -336,6 +339,18 @@ def _build_upstream_error(
 
 
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
+    limited = model_limit_error(exc)
+    if limited is not None:
+        mapped = _build_upstream_error(
+            code=limited.code,
+            message=_upstream_detail_message(exc),
+            status=limited.details.get("upstream_status_code"),
+            vlm_context=exc,
+            label=limited.message.rstrip("."),
+        )
+        mapped.details.update(limited.details)
+        return mapped
+
     for item in _iter_exception_chain(exc):
         if isinstance(item, AllCredentialsFailedError):
             failures = [_map_upstream_api_error(error) for _, _, error, _ in item.errors]
@@ -378,6 +393,16 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             message=_upstream_detail_message(exc),
             vlm_context=exc,
         )
+
+    for item in _iter_exception_chain(exc):
+        if (
+            isinstance(item, CircuitBreakerOpen)
+            and item.__cause__ is None
+            and item.__context__ is None
+        ):
+            return _build_upstream_error(
+                code="UNAVAILABLE", message=str(item), source=item, vlm_context=exc
+            )
 
     if _is_model_api_key_configuration_error(exc):
         return FailedPreconditionError(
@@ -505,7 +530,7 @@ def map_exception(
     if isinstance(exc, FileNotFoundError):
         return _not_found_error(resource, resource_type)
     if isinstance(exc, ValueError):
-        if _is_model_api_key_configuration_error(exc):
+        if model_limit_error(exc) is not None or _is_model_api_key_configuration_error(exc):
             return _map_upstream_api_error(exc)
         message = str(exc)
         if is_invalid_uri_error(exc):
