@@ -40,9 +40,11 @@ from openviking.session.memory.constants import (
 )
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryOperationSkipCode,
     MemoryOperationSource,
     ResolvedOperation,
     ResolvedOperations,
+    SkippedMemoryOperation,
     StoredLink,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -811,6 +813,28 @@ class SessionCompressorV3:
             tracer.info("[v3_patch_merge] No memory operations generated")
             return _V3ExtractionResult()
 
+        # Apply the session policy before streaming groups the resolved operations.
+        replaceable_deletes: list[MemoryFile] = []
+        skipped_deletes: list[SkippedMemoryOperation] = []
+        for file in operations.delete_file_contents:
+            if operations.delete_replacements.get(file.uri or ""):
+                replaceable_deletes.append(file)
+            else:
+                skipped_deletes.append(
+                    SkippedMemoryOperation(
+                        uri=file.uri,
+                        memory_type=file.memory_type or "unknown",
+                        reason_code=MemoryOperationSkipCode.MISSING_DELETE_REPLACEMENT,
+                        reason="Session extraction requires a replacement for whole-page deletion",
+                    )
+                )
+        if skipped_deletes:
+            operations.delete_file_contents = replaceable_deletes
+            logger.info(
+                "memory extraction skipped deletes without replacements",
+                extra={"skipped": len(skipped_deletes)},
+            )
+
         # Attach caller-provided custom scalar tags to event memories so they
         # ride the same first write into the vector index (人填标量).
         _apply_event_search_tags(operations, event_search_tags)
@@ -852,6 +876,7 @@ class SessionCompressorV3:
         )
 
         result = update_result.apply_result
+        result.skipped_operations.extend(skipped_deletes)
         patch_operations = update_result.operations
         _report_extraction_telemetry(result, patch_operations)
         if strict_extract_errors and result.errors:

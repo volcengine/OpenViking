@@ -21,14 +21,17 @@ from openviking.server.identity import RequestContext
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
-from openviking.session.memory.dataclass import ResolvedOperation, ResolvedOperations
+from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_updater import (
     MemoryReadError,
     MemoryUpdateError,
     MemoryUpdateResult,
 )
+from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.streaming_memory_updater import StreamingMemoryUpdaterConfig
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.utils.time_utils import parse_iso_datetime
+from openviking_cli.utils.config import get_openviking_config
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -53,13 +56,101 @@ async def _marker_exists(session, archive_uri: str, name: str) -> bool:
 class TestCommit:
     """Test commit"""
 
+    @pytest.mark.parametrize("with_writes", [False, True], ids=["delete-only", "mixed"])
+    async def test_commit_preserves_memory_without_replacement(
+        self, session_with_messages, monkeypatch, with_writes
+    ):
+        session = session_with_messages
+        fs = session._viking_fs
+        compressor = session._session_compressor
+        config = get_openviking_config().memory
+        monkeypatch.setattr(config, "extraction_output_format", "json")
+        monkeypatch.setattr(config, "eager_prefetch", True)
+        monkeypatch.setattr(compressor, "vikingdb", None)
+        monkeypatch.setattr(
+            "openviking.session.memory.streaming_memory_updater._streaming_memory_updater_registry",
+            {},
+        )
+        monkeypatch.setattr(
+            compressor,
+            "streaming_memory_updater_config",
+            StreamingMemoryUpdaterConfig(max_operations_per_update=1),
+        )
+        monkeypatch.setattr(
+            "openviking.utils.embedding_utils.vectorize_directory_meta", AsyncMock()
+        )
+
+        root = f"viking://user/{session.ctx.user.user_id}/memories/entities/people"
+        source, duplicate, canonical = [
+            f"{root}/{name}.md" for name in ("source", "alias", "alice")
+        ]
+        original = MemoryFileUtils.write(
+            MemoryFile(memory_type="entities", content="# Bob\nBob restores antique clocks.")
+        )
+        await fs.write_file(source, original, ctx=session.ctx)
+        prefetched = [source]
+        if with_writes:
+            alias = MemoryFile(memory_type="entities", content="# Alice\nAlice is a teacher.")
+            await fs.write_file(duplicate, MemoryFileUtils.write(alias), ctx=session.ctx)
+            prefetched.append(duplicate)
+        monkeypatch.setattr(
+            SessionExtractContextProvider, "search_files", AsyncMock(return_value=prefetched)
+        )
+
+        async def complete(messages, **kwargs):
+            reads = [json.loads(m["content"]) for m in messages if m["content"].startswith("{")]
+            page_ids = {
+                read["args"]["uri"]: read["result"]["page_id"]
+                for read in reads
+                if read.get("tool_call_name") == "read"
+            }
+            plan = {
+                "delete_ids": [{"delete_page_id": page_ids[source], "replacement_page_id": None}]
+            }
+            if with_writes:
+                plan["entities"] = [
+                    {
+                        "page_id": 100,
+                        "category": "people",
+                        "name": "alice",
+                        "content": "Alice is a teacher.",
+                    }
+                ]
+                plan["delete_ids"].append(
+                    {"delete_page_id": page_ids[duplicate], "replacement_page_id": 100}
+                )
+            return json.dumps(plan)
+
+        completion = AsyncMock(side_effect=complete)
+        vlm = SimpleNamespace(model="local-test", max_tokens=4096, get_completion_async=completion)
+        monkeypatch.setattr(compressor.vlm_resolver, "get_vlm", AsyncMock(return_value=vlm))
+
+        commit = await session.commit_async(memory_policy={"memory_types": ["entities"]})
+        task = await _wait_for_task(commit["task_id"])
+        assert task["status"] == "completed", task
+        assert await _marker_exists(session, commit["archive_uri"], ".done")
+        completion.assert_awaited_once()
+        raw_diff = await fs.read_file(f"{commit['archive_uri']}/memory_diff.json", ctx=session.ctx)
+        diff = json.loads(raw_diff)
+        operations = diff["operations"]
+        assert [entry["uri"] for entry in operations["adds"]] == (
+            [canonical] if with_writes else []
+        )
+        if with_writes:
+            assert not await fs.exists(duplicate, ctx=session.ctx)
+            assert "Alice is a teacher." in await fs.read_file(canonical, ctx=session.ctx)
+        assert await fs.exists(source, ctx=session.ctx), "unreplaced memory was deleted"
+        assert await fs.read_file(source, ctx=session.ctx) == original
+        [skipped] = diff["skipped_operations"]
+        assert (skipped["uri"], skipped["reason_code"]) == (source, "missing_delete_replacement")
+        assert task["result"]["memory_extraction"]["skipped_operations"] == [skipped]
+        assert [entry["uri"] for entry in operations["deletes"]] == (
+            [duplicate] if with_writes else []
+        )
+
     async def test_commit_completes_after_memory_parse_retries(
         self, session_with_messages, monkeypatch
     ):
-        from openviking.session.memory.session_extract_context_provider import (
-            SessionExtractContextProvider,
-        )
-
         session = session_with_messages
         completion = AsyncMock(return_value="invalid code!")
         vlm = SimpleNamespace(model="local-test", max_tokens=4096, get_completion_async=completion)

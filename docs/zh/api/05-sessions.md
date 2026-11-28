@@ -1701,6 +1701,8 @@ curl -X POST http://localhost:1933/api/v1/sessions/session-id/archives/archive_0
 
 如果长记忆抽取已运行但没有产生实际变更或策略性跳过，也会写入空结构的 `memory_diff.json`（所有计数为零）。
 
+会话记忆抽取只有在明确指定保留的替代记忆后才能删除整个记忆页面。缺少替代记忆的删除提议会被跳过，原因码 `missing_delete_replacement` 会记录在归档差异和提交任务的 `memory_extraction.skipped_operations` 中。其他有效操作仍可执行。
+
 <a id="内置记忆类型"></a>
 
 ## 完整示例
