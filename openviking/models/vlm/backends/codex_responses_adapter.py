@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import ExitStack
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
 
@@ -227,6 +228,8 @@ def _build_final_response_from_stream_events(
 
 
 class CodexCompletionsAdapter:
+    """Adapt Responses requests and close the per-request clients supplied by the factories."""
+
     def __init__(
         self,
         client_factory: Callable[[], Any],
@@ -238,7 +241,6 @@ class CodexCompletionsAdapter:
         self._auth_retry_client_factory = auth_retry_client_factory
 
     def _create_response(self, **kwargs) -> Any:
-        client = self._client_factory()
         messages = kwargs.get("messages") or []
         model = kwargs.get("model") or self._model
         instructions_parts: List[str] = []
@@ -269,38 +271,42 @@ class CodexCompletionsAdapter:
         collected_text_deltas: List[str] = []
         has_function_calls = False
         completed_response = None
-        try:
-            stream = client.responses.create(**response_kwargs, stream=True)
-        except Exception as exc:
-            status_code = getattr(exc, "status_code", None)
-            if status_code is None:
-                status_code = getattr(getattr(exc, "response", None), "status_code", None)
-            if status_code != 401 or self._auth_retry_client_factory is None:
-                raise
-            client = self._auth_retry_client_factory()
-            stream = client.responses.create(**response_kwargs, stream=True)
-        try:
-            for event in stream:
-                event_type = getattr(event, "type", "")
-                if event_type == "response.output_item.done":
-                    item = getattr(event, "item", None)
-                    if item is not None:
-                        collected_output_items.append(item)
-                    continue
-                if "output_text.delta" in event_type:
-                    delta = getattr(event, "delta", "")
-                    if delta:
-                        collected_text_deltas.append(delta)
-                    continue
-                if "function_call" in event_type:
-                    has_function_calls = True
-                    continue
-                if event_type == "response.completed":
-                    completed_response = getattr(event, "response", None)
-        finally:
-            close = getattr(stream, "close", None)
-            if callable(close):
-                close()
+        with ExitStack() as stack:
+            client = self._client_factory()
+            stack.callback(client.close)
+            try:
+                stream = client.responses.create(**response_kwargs, stream=True)
+            except Exception as exc:
+                status_code = getattr(exc, "status_code", None)
+                if status_code is None:
+                    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if status_code != 401 or self._auth_retry_client_factory is None:
+                    raise
+                client = self._auth_retry_client_factory()
+                stack.callback(client.close)
+                stream = client.responses.create(**response_kwargs, stream=True)
+            try:
+                for event in stream:
+                    event_type = getattr(event, "type", "")
+                    if event_type == "response.output_item.done":
+                        item = getattr(event, "item", None)
+                        if item is not None:
+                            collected_output_items.append(item)
+                        continue
+                    if "output_text.delta" in event_type:
+                        delta = getattr(event, "delta", "")
+                        if delta:
+                            collected_text_deltas.append(delta)
+                        continue
+                    if "function_call" in event_type:
+                        has_function_calls = True
+                        continue
+                    if event_type == "response.completed":
+                        completed_response = getattr(event, "response", None)
+            finally:
+                close = getattr(stream, "close", None)
+                if callable(close):
+                    close()
         final_response = _build_final_response_from_stream_events(
             completed_response,
             collected_output_items,
