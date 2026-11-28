@@ -208,6 +208,61 @@ class TestWatchTaskCreation:
     """Tests for watch task creation in add_resource."""
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("public_resource_dns")
+    @pytest.mark.parametrize("first_extension", [".pdf", ".txt"])
+    async def test_watch_restores_caller_key_on_pdf_refresh(
+        self, resource_service, request_context, monkeypatch, tmp_path, watch_vfs, first_extension
+    ):
+        from openviking.parse.accessors.base import LocalResource, SourceType
+        from openviking.parse.parser_router import ParserRouter
+        from openviking_cli.utils.config.encryption_config import EncryptionConfig
+
+        config = resource_service_module.get_openviking_config()
+        monkeypatch.setattr(config.parser_api, "enable", True)
+        monkeypatch.setattr(config.parser_api, "extensions", ["pdf"])
+        monkeypatch.setattr(
+            config, "encryption", EncryptionConfig(local={"key_file": str(tmp_path / "master.key")})
+        )
+        request_context.api_key = "watch-caller-key"
+        url = "https://example.org/download"
+        to = "viking://resources/report"
+        pdf = tmp_path / "report.pdf"
+        pdf.write_bytes(b"%PDF-1.7")
+        txt = tmp_path / "report.txt"
+        txt.write_text("first version")
+        processor = resource_service._resource_processor
+        processor.prepare_durable_source = AsyncMock(
+            side_effect=[
+                LocalResource(
+                    path=path, source_type=SourceType.HTTP, original_source=url, is_temporary=False
+                )
+                for path in (pdf.with_suffix(first_extension), pdf)
+            ]
+        )
+        processor.should_use_understanding_api = ParserRouter(Mock()).should_use_understanding_api
+        processor.submit_understanding = AsyncMock(return_value="response-1")
+        resource_service._plan_source_job_target = AsyncMock(return_value=(to, None, False, False))
+
+        await resource_service.add_resource(path=url, to=to, ctx=request_context, watch_interval=30)
+        if first_extension == ".pdf":
+            processor.submit_understanding.assert_awaited_once()
+            assert (
+                processor.submit_understanding.await_args.kwargs["ctx"].api_key
+                == request_context.api_key
+            )
+        else:
+            processor.submit_understanding.assert_not_awaited()
+        task = await get_task_by_uri(resource_service, to, request_context)
+        assert request_context.api_key not in str(task.to_storage_dict())
+        processor.submit_understanding.reset_mock()
+        await run_watch_now(monkeypatch, resource_service, watch_vfs, task)
+        processor.submit_understanding.assert_awaited_once()
+        assert (
+            processor.submit_understanding.await_args.kwargs["ctx"].api_key
+            == request_context.api_key
+        )
+
+    @pytest.mark.asyncio
     async def test_create_watch_task_with_positive_interval(
         self, resource_service: ResourceService, request_context: RequestContext
     ):

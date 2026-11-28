@@ -22,6 +22,7 @@ from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.tree_builder import TreeBuilder
+from openviking.parse.understanding_api import parser_key_scope
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -803,13 +804,15 @@ class ResourceProcessor:
         self, source: Union[str, "LocalResource"], *, ctx: RequestContext, **kwargs
     ) -> str:
         kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
-        return await self._get_media_processor().submit_understanding(source, **kwargs)
+        with parser_key_scope(ctx.api_key):
+            return await self._get_media_processor().submit_understanding(source, **kwargs)
 
     async def upload_understanding_file(
         self, source: Union[str, "LocalResource"], *, ctx: RequestContext
     ) -> str:
         kwargs = await self._parser_api_config_kwargs(ctx, {})
-        return await self._get_media_processor().upload_understanding_file(source, **kwargs)
+        with parser_key_scope(ctx.api_key):
+            return await self._get_media_processor().upload_understanding_file(source, **kwargs)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
@@ -914,7 +917,10 @@ class ResourceProcessor:
                     await _set_stage("parsing")
                 kwargs = await self._source_config_kwargs(path, ctx, kwargs)
                 kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
-                with viking_fs.bind_request_context(ctx):
+                with (
+                    viking_fs.bind_request_context(ctx),
+                    parser_key_scope(getattr(ctx, "api_key", None)),
+                ):
                     parse_result = await media_processor.process(
                         source=path,
                         instruction=effective_instruction,

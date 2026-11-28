@@ -19,6 +19,7 @@ from openviking.parse.understanding_api import (
     PREPARED_FILE_ID_ARG,
     UnderstandingAPI,
     UnderstandingAPIError,
+    parser_key_scope,
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.media_processor import UnifiedResourceProcessor
@@ -160,7 +161,7 @@ async def test_upload_file_validates_input_and_returns_file_id(monkeypatch, tmp_
 
 @pytest.mark.asyncio
 async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tmp_path):
-    """Prepared work survives source cleanup and key rotation without resubmission."""
+    """Uploads and responses use each caller's OV key after source cleanup."""
     cluster = OpenVikingConfig.from_dict(
         {
             "parser_api": {
@@ -168,16 +169,17 @@ async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tm
                 "host": "https://parser.example.test",
                 "api_key": "legacy-key",
                 "extensions": ["pdf"],
-            }
+            },
         }
     )
     monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
     manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
     await manager.patch_account("a", {"parser_api": {"api_key": "key-a"}})
     contexts = [
-        RequestContext(user=UserIdentifier(account, "alice"), role=Role.USER)
-        for account in ("a", "b")
+        RequestContext(user=UserIdentifier(account, user), role=Role.USER, api_key=f"ov-key-{user}")
+        for account, user in (("a", "alice"), ("b", "bob"))
     ]
+    expected_bearer = {"alice": "Bearer key-a", "bob": "Bearer legacy-key"}
     requests = []
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as zipped:
@@ -185,12 +187,14 @@ async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tm
 
     async def handler(request):
         await asyncio.sleep(0)
-        auth = request.headers.get("Authorization")
+        auth = request.headers.get("X-API-Key")
         requests.append((request.method, request.url.path, auth))
         if request.url.path == "/result.zip":
             assert auth is None
+            assert "Authorization" not in request.headers
             return httpx.Response(200, content=archive.getvalue())
-        owner = {"Bearer key-a": "a", "Bearer rotated-a": "a", "Bearer legacy-key": "b"}[auth]
+        owner = {"ov-key-alice": "alice", "ov-key-bob": "bob"}[auth]
+        assert request.headers["Authorization"] == expected_bearer[owner]
         if request.url.path.endswith("/files"):
             return httpx.Response(200, json={"id": f"file-{owner}"})
         if request.method == "POST":
@@ -217,48 +221,45 @@ async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tm
     file_ids = await asyncio.gather(
         *[processor.upload_understanding_file(source, ctx=ctx) for ctx in contexts]
     )
-    assert file_ids == ["file-a", "file-b"]
+    assert file_ids == ["file-alice", "file-bob"]
     source.unlink()
     store = LocalParseOutputStore(str(tmp_path / "artifacts"))
     router = ParserRouter(object())
-    configs = [await get_effective_parser_api_config(manager, ctx.account_id) for ctx in contexts]
-    results = await asyncio.gather(
-        *[
-            router.parse(
+
+    async def parse_for(ctx, **kwargs):
+        with parser_key_scope(ctx.api_key):
+            return await router.parse(
                 source,
                 parser_backend="understanding",
-                parser_api_config=config,
-                understanding_file_id=file_id,
-                resolved_extension=".pdf",
+                parser_api_config=await get_effective_parser_api_config(manager, ctx.account_id),
                 parse_output_store=store,
+                resolved_extension=".pdf",
+                **kwargs,
             )
-            for file_id, config in zip(file_ids, configs, strict=True)
+
+    results = await asyncio.gather(
+        *[
+            parse_for(ctx, understanding_file_id=file_id)
+            for ctx, file_id in zip(contexts, file_ids, strict=True)
         ]
     )
-    assert [result.meta["response_id"] for result in results] == ["response-a", "response-b"]
+    assert [result.meta["response_id"] for result in results] == ["response-alice", "response-bob"]
     assert all(result.source_format == "pdf" for result in results)
     assert sum(path.endswith("/files") for _, path, _ in requests) == 2
     for result in results:
         await store.cleanup(result.artifact_ref)
 
     await manager.patch_account("a", {"parser_api": {"api_key": "rotated-a"}})
-    restored = manager_over_source(manager._source, base_config=cluster)
+    expected_bearer["alice"] = "Bearer rotated-a"
     requests.clear()
-    configs = [await get_effective_parser_api_config(restored, ctx.account_id) for ctx in contexts]
     results = await asyncio.gather(
         *[
-            router.parse(
-                source,
-                parser_backend="understanding",
-                parser_api_config=config,
-                understanding_response_id=f"response-{ctx.account_id}",
-                parse_output_store=store,
-            )
-            for ctx, config in zip(contexts, configs, strict=True)
+            parse_for(ctx, understanding_response_id=f"response-{ctx.user.user_id}")
+            for ctx in contexts
         ]
     )
     assert all(method == "GET" for method, _, _ in requests)
-    assert {auth for _, _, auth in requests if auth} == {"Bearer rotated-a", "Bearer legacy-key"}
+    assert {auth for _, _, auth in requests if auth} == {"ov-key-alice", "ov-key-bob"}
     for result in results:
         await store.cleanup(result.artifact_ref)
 
@@ -317,7 +318,7 @@ async def _return(value):
 def _api_with_transport(monkeypatch, handler):
     api = UnderstandingAPI.__new__(UnderstandingAPI)
     api._api_base = "https://parser.example.test/api/v3"
-    api._api_key = "test-key"
+    api._api_key = "parser-key"
     api._http_timeout_sec = 1.0
     api._timeout_sec = 2.0
     api._default_poll_interval_ms = 0
@@ -505,19 +506,62 @@ async def test_api_calls_do_not_retry_transient_http_error(monkeypatch, method):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "target", ["https://other.example.test/end", "https://parser.example.test/end"]
+)
+@pytest.mark.parametrize("parser_key", ["", "parser-key"])
+async def test_parser_redirects_and_calls_without_caller_key(monkeypatch, target, parser_key):
+    observed = []
+
+    def handler(request):
+        observed.append(
+            (
+                request.url.path,
+                request.headers.get("X-API-Key"),
+                request.headers.get("Authorization"),
+            )
+        )
+        if request.url.path.endswith("/responses"):
+            return httpx.Response(307, headers={"Location": "/local"})
+        if request.url.path == "/local":
+            return httpx.Response(307, headers={"Location": target})
+        return httpx.Response(200, json={"id": "response-1"})
+
+    api = _api_with_transport(monkeypatch, handler)
+    api._api_base = "http://parser.example.test/api/v3"
+    api._api_key = parser_key
+    for key in (None, "caller"):
+        with parser_key_scope(key):
+            await api._submit_response({})
+        bearer = f"Bearer {parser_key}" if parser_key else None
+        assert observed == [
+            ("/api/v3/responses", key, bearer),
+            ("/local", key, bearer),
+            ("/end", None, None),
+        ]
+        observed.clear()
+
+
+@pytest.mark.asyncio
 async def test_parse_http_failure_preserves_message_and_remote_ids(monkeypatch, tmp_path, caplog):
     requests = []
 
     def handler(request):
         requests.append(request)
-        assert request.headers["Authorization"] == "Bearer test-key"
+        assert request.headers["X-API-Key"] == "test-key"
+        assert request.headers["Authorization"] == "Bearer parser-key"
         if request.method == "POST":
             assert request.url.path == "/api/v3/responses"
             return httpx.Response(200, json={"id": "response-1"})
-        return httpx.Response(403, json={"message": "credential test-key cannot access response"})
+        return httpx.Response(
+            403, json={"message": "test-key and parser-key cannot access response"}
+        )
 
     api = _api_with_transport(monkeypatch, handler)
-    with pytest.raises(UnderstandingAPIError, match="cannot access response") as exc_info:
+    with (
+        parser_key_scope("test-key"),
+        pytest.raises(UnderstandingAPIError, match="cannot access response") as exc_info,
+    ):
         await api.parse(tmp_path / "removed.pdf", understanding_file_id="file-1")
 
     assert exc_info.value.meta["file_id"] == "file-1"
@@ -527,6 +571,8 @@ async def test_parse_http_failure_preserves_message_and_remote_ids(monkeypatch, 
     assert len(requests) == 2  # One submission and one denied poll; no fallback or resubmission.
     assert "test-key" not in str(exc_info.value)
     assert "test-key" not in caplog.text
+    assert "parser-key" not in str(exc_info.value)
+    assert "parser-key" not in caplog.text
 
 
 @pytest.mark.asyncio

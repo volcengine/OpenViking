@@ -1,9 +1,11 @@
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.crypto.encryptor import build_credential_encryptor
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
@@ -12,6 +14,15 @@ from openviking.storage.queuefs import QueueManager
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.encryption_config import EncryptionConfig
+
+
+@pytest.fixture(autouse=True)
+def task_credential_encryptor(monkeypatch, tmp_path):
+    encryptor = build_credential_encryptor(
+        EncryptionConfig(local={"key_file": str(tmp_path / "master.key")})
+    )
+    monkeypatch.setattr(ResourceService, "_task_credential_encryptor", encryptor)
 
 
 @pytest.mark.asyncio
@@ -334,6 +345,22 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     processor.process_resource.assert_not_awaited()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
     agfs.pathlock_handoff.assert_awaited_once_with(lock)
+
+    # The consumer reconstructs an identity-only context for every delivery.
+    stored_auth = tracker.create.await_args.kwargs["auth"]
+    assert ctx.api_key not in json.dumps(stored_auth)
+    ingest = AsyncMock(return_value={"status": "success"})
+    monkeypatch.setattr(service, "_execute_resource_ingestion", ingest)
+    for _ in range(2):
+        await service.execute_add_resource_job(
+            queued,
+            ctx=replace(ctx, api_key=None),
+            task_auth=stored_auth,
+            resource_lock=None,
+            stage_callback=AsyncMock(),
+        )
+        assert ingest.await_args.kwargs["ctx"].api_key == ctx.api_key
+        assert ingest.await_args.kwargs["understanding_file_id"] == "file-1"
 
 
 @pytest.mark.asyncio

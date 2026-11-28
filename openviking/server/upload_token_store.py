@@ -34,7 +34,7 @@ from __future__ import annotations
 import secrets
 import string
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
@@ -70,6 +70,7 @@ class _TokenInfo:
     acl: AclSpec | None = None
     from_oauth: bool = False
     uri: str = ""
+    api_key: Optional[str] = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ class ConsumedUploadToken:
     acl: AclSpec | None = None
     from_oauth: bool = False
     uri: str = ""
+    api_key: Optional[str] = field(default=None, repr=False)
 
 
 class UploadTokenStore:
@@ -122,6 +124,7 @@ class UploadTokenStore:
         acl: AclSpec | None = None,
         from_oauth: bool = False,
         uri: str = "",
+        api_key: Optional[str] = None,
     ) -> Tuple[str, float]:
         """Mint a fresh token bound to the caller identity and ingestion parameters.
 
@@ -152,6 +155,7 @@ class UploadTokenStore:
             acl,
             from_oauth,
             uri,
+            api_key,
         )
         for _ in range(8):
             token = "".join(secrets.choice(_TOKEN_ALPHABET) for _ in range(_TOKEN_LENGTH))
@@ -188,6 +192,7 @@ class UploadTokenStore:
             acl=info.acl,
             from_oauth=info.from_oauth,
             uri=info.uri,
+            api_key=info.api_key,
         )
 
     def peek(self, token: str) -> Optional[_TokenInfo]:

@@ -721,11 +721,9 @@ PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 
 {"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
 ```
 
-外部解析的上传、提交、轮询和恢复使用任务所属 Account 的 Key，运行参数仍由
-Cluster `parser_api` 维护。Account 未配置该段时保留旧 Cluster Key 兼容路径。
-队列保存 owner 和远端 ID，不保存凭证。一次执行保持已取得的 Key，下次执行或恢复
-读取最新 Key。轮换必须保持同一远端身份并可访问已有 ID；远端失败不触发凭证回退
-或重新提交。配置沿用现有配置源，开启 AGFS 文件加密时加密存储；这不加密 `ov.conf`。
+Understanding 请求通过 `Authorization: Bearer` 发送此 Account 的解析服务 key，通过 `X-API-Key` 发送调用方的 OpenViking key。
+Account 未配置解析服务 key 时，Bearer 取 Cluster 配置。详见[外部解析 API](../guides/01-configuration.md#parser-api)。
+Account 配置沿用现有配置源，开启 AGFS 文件加密时加密存储。
 
 **其他 Account 配置段**
 

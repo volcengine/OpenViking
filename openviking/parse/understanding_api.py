@@ -18,6 +18,8 @@ import mimetypes
 import tempfile
 import time
 import zipfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
@@ -52,6 +54,16 @@ logger = get_logger(__name__)
 
 PREPARED_RESPONSE_ID_ARG = "understanding_response_id"
 PREPARED_FILE_ID_ARG = "understanding_file_id"
+_caller_api_key: ContextVar[str | None] = ContextVar("understanding_caller_key", default=None)
+
+
+@contextmanager
+def parser_key_scope(api_key: str | None):
+    token = _caller_api_key.set(api_key)
+    try:
+        yield
+    finally:
+        _caller_api_key.reset(token)
 
 
 class UnderstandingAPIError(RuntimeError):
@@ -75,7 +87,7 @@ class UnderstandingAPI(BaseParser):
         raw_host = (parser_api.host or "").rstrip("/")
         self._api_host = raw_host
         self._api_base = raw_host if raw_host.endswith("/api/v3") else f"{raw_host}/api/v3"
-        self._api_key = parser_api.api_key
+        self._api_key = parser_api.api_key.strip()
         self._enable_resumable_upload = bool(parser_api.enable_resumable_upload)
         self._upload_simple_max_bytes = int(parser_api.upload_simple_max_bytes)
         self._upload_part_size_bytes = int(parser_api.upload_part_size_bytes)
@@ -86,8 +98,6 @@ class UnderstandingAPI(BaseParser):
 
         if not self._api_host:
             raise ValueError("parser_api.host is required for UnderstandingAPI")
-        if not self._api_key.strip():
-            raise ValueError("parser_api.api_key is required for UnderstandingAPI")
 
         self._video_exts = {e.lstrip(".") for e in VIDEO_EXTENSIONS}
         self._video_exts.add(MPEG_TS_EXTENSION_ALIAS)
@@ -409,13 +419,25 @@ class UnderstandingAPI(BaseParser):
         return json.dumps(obj, ensure_ascii=False).encode("utf-8")
 
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "x-kb-env": "snake",
-        }
+        headers = {"x-kb-env": "snake"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        if key := _caller_api_key.get():
+            headers["X-API-Key"] = key
         if extra:
             headers.update(extra)
         return headers
+
+    def _api_client(self, timeout: float) -> httpx.AsyncClient:
+        async def strip_foreign_key(request: httpx.Request) -> None:
+            if request.url.scheme != origin.scheme or request.url.netloc != origin.netloc:
+                request.headers.pop("X-API-Key", None)
+                request.headers.pop("Authorization", None)
+
+        origin = httpx.URL(self._api_base)
+        return httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True, event_hooks={"request": [strip_foreign_key]}
+        )
 
     def _safe_error_summary(self, obj: Any) -> Dict[str, Any]:
         if not isinstance(obj, dict):
@@ -460,8 +482,10 @@ class UnderstandingAPI(BaseParser):
         return redact(summary)
 
     def _redact_error(self, message: str) -> str:
-        api_key = getattr(self, "_api_key", "")
-        return message.replace(api_key, "[redacted]") if api_key else message
+        keys = (getattr(self, "_api_key", ""), _caller_api_key.get() or "")
+        for key in sorted(filter(None, keys), key=len, reverse=True):
+            message = message.replace(key, "[redacted]")
+        return message
 
     def _error_message(self, obj: Any) -> str:
         """Extract the failure reason without adding remote identifiers."""
@@ -533,7 +557,7 @@ class UnderstandingAPI(BaseParser):
         content_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
         with open(local_path, "rb") as f:
             files = {"file": (file_name, f, content_type)}
-            async with httpx.AsyncClient(timeout=1200.0, follow_redirects=True) as client:
+            async with self._api_client(1200.0) as client:
                 rsp = await client.post(
                     f"{self._api_base}/files",
                     headers=self._auth_headers(),
@@ -588,9 +612,7 @@ class UnderstandingAPI(BaseParser):
         status = "error"
         model_name = "unknown"
         try:
-            async with httpx.AsyncClient(
-                timeout=self._http_timeout_sec, follow_redirects=True
-            ) as client:
+            async with self._api_client(self._http_timeout_sec) as client:
                 rsp = await client.post(
                     f"{self._api_base}/responses",
                     content=self._json_bytes(payload),
@@ -671,9 +693,7 @@ class UnderstandingAPI(BaseParser):
     async def _poll_response(self, *, response_id: str) -> Dict[str, Any]:
         deadline = asyncio.get_running_loop().time() + float(self._timeout_sec)
         last_status = None
-        async with httpx.AsyncClient(
-            timeout=self._http_timeout_sec, follow_redirects=True
-        ) as client:
+        async with self._api_client(self._http_timeout_sec) as client:
             while True:
                 rsp = await client.get(
                     f"{self._api_base}/responses/{response_id}",
@@ -719,7 +739,7 @@ class UnderstandingAPI(BaseParser):
             "content_type": mimetypes.guess_type(file_name)[0] or "application/octet-stream",
             "part_size": int(self._upload_part_size_bytes),
         }
-        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        async with self._api_client(120.0) as client:
             rsp = await client.post(
                 f"{self._api_base}/files?uploads",
                 content=self._json_bytes(payload),
@@ -728,7 +748,7 @@ class UnderstandingAPI(BaseParser):
         return self._read_api_response(rsp, context="uploads init error")
 
     async def _uploads_status(self, *, upload_id: str, object_key: str) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with self._api_client(60.0) as client:
             rsp = await client.get(
                 f"{self._api_base}/files?upload_id={upload_id}&object_key={object_key}",
                 headers=self._auth_headers(),
@@ -739,7 +759,7 @@ class UnderstandingAPI(BaseParser):
         self, *, upload_id: str, object_key: str, part_number: int, data: bytes
     ) -> Dict[str, Any]:
         headers = self._auth_headers({"Content-Type": "application/octet-stream"})
-        async with httpx.AsyncClient(timeout=1200.0, follow_redirects=True) as client:
+        async with self._api_client(1200.0) as client:
             rsp = await client.put(
                 f"{self._api_base}/files?upload_id={upload_id}&object_key={object_key}&part_number={part_number}",
                 headers=headers,
@@ -751,7 +771,7 @@ class UnderstandingAPI(BaseParser):
         self, *, upload_id: str, object_key: str, parts: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         payload = {"parts": parts}
-        async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:
+        async with self._api_client(600.0) as client:
             rsp = await client.post(
                 f"{self._api_base}/files?upload_id={upload_id}&object_key={object_key}",
                 content=self._json_bytes(payload),
