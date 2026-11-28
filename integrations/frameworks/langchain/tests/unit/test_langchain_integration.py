@@ -918,6 +918,54 @@ def test_openviking_tool_result_restores_without_duplicate_ai_tool_call(fields):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
+    ("kind", "result_fields", "output", "status"),
+    [
+        (
+            {"message_kind": "tool_transport"},
+            {"tool_status": "completed", "tool_output": "ready"},
+            "ready",
+            "success",
+        ),
+        ({}, {"tool_status": "error"}, "", "error"),
+    ],
+)
+async def test_history_restores_user_role_tool_results(
+    asynchronous, kind, result_fields, output, status
+):
+    client = InMemoryOpenVikingClient()
+    call = {
+        "type": "tool",
+        "tool_id": "call-1",
+        "tool_name": "read_notes",
+        "tool_input": {},
+        "tool_status": "pending",
+    }
+    stored = [
+        {"role": "assistant", "parts": [call]},
+        {"role": "user", **kind, "parts": [{**call, **result_fields}]},
+        {
+            "role": "user",
+            "parts": [{"type": "text", "text": "Thanks."}, call],
+        },
+    ]
+    client.sessions["tool-transport"] = deepcopy(stored)
+    history = OpenVikingChatMessageHistory("tool-transport", client=client, async_client=client)
+    try:
+        messages = await history.aget_messages() if asynchronous else history.messages
+    finally:
+        await history.aclose()
+
+    assert [type(message) for message in messages] == [AIMessage, ToolMessage, HumanMessage]
+    assert messages[0].tool_calls[0]["id"] == messages[1].tool_call_id == "call-1"
+    assert messages[1].content == output
+    assert messages[1].status == status
+    assert messages[2].content == "Thanks."
+    assert client.sessions["tool-transport"] == stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
     "followup",
     [
         "none",
