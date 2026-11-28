@@ -221,6 +221,17 @@ def _read_result_statuses(value: Any) -> dict[str, bool]:
     return statuses
 
 
+def _section_start_re(uri: str) -> re.Pattern[str]:
+    """Match a multi-read section header, including a bounded-range suffix.
+
+    ``openviking_multi_read`` renders ``--- START OF <uri> ---`` for unbounded
+    reads and appends `` (lines a..b)`` (or `` (lines a..end)``) whenever the
+    caller passes ``limit``/``offset``. Both shapes delimit one section, so
+    matching only the unbounded form treats every bounded read as missing.
+    """
+    return re.compile(rf"--- START OF {re.escape(uri)}(?: \(lines [^)]*\))? ---")
+
+
 def _read_failed_in_text(uri: str, texts: Iterable[str], context: UsageContext) -> bool:
     aliases = [uri]
     canonical_prefix = f"viking://user/{context.user_id}/memories/"
@@ -231,9 +242,9 @@ def _read_failed_in_text(uri: str, texts: Iterable[str], context: UsageContext) 
         for alias in aliases:
             if f"(nothing found at {alias})" in text:
                 return True
-            section_marker = f"--- START OF {alias} ---"
-            if section_marker in text:
-                section = text.split(section_marker, 1)[1].split(f"--- END OF {alias} ---", 1)[0]
+            section_match = _section_start_re(alias).search(text)
+            if section_match is not None:
+                section = text[section_match.end() :].split(f"--- END OF {alias} ---", 1)[0]
                 if section.lstrip().startswith("ERROR:"):
                     return True
     return False

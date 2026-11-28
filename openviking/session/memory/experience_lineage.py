@@ -221,14 +221,25 @@ def _iter_text_fields(value: Any) -> Iterable[str]:
             yield from _iter_text_fields(child)
 
 
+def _section_start_re(uri: str) -> re.Pattern[str]:
+    """Match a multi-read section header, including a bounded-range suffix.
+
+    ``openviking_multi_read`` renders ``--- START OF <uri> ---`` for unbounded
+    reads and appends `` (lines a..b)`` (or `` (lines a..end)``) whenever the
+    caller passes ``limit``/``offset``. Both shapes delimit one section, so
+    matching only the unbounded form treats every bounded read as successful.
+    """
+    return re.compile(rf"--- START OF {re.escape(uri)}(?: \(lines [^)]*\))? ---")
+
+
 def _read_failed_in_text(uri: str, texts: Iterable[str]) -> bool:
     missing_marker = f"(nothing found at {uri})"
     for text in texts:
         if missing_marker in text:
             return True
-        section_marker = f"--- START OF {uri} ---"
-        if section_marker in text:
-            section = text.split(section_marker, 1)[1].split(f"--- END OF {uri} ---", 1)[0]
+        section_match = _section_start_re(uri).search(text)
+        if section_match is not None:
+            section = text[section_match.end() :].split(f"--- END OF {uri} ---", 1)[0]
             if section.lstrip().startswith("ERROR:"):
                 return True
     return False
