@@ -518,6 +518,21 @@ def _main(recovery):
 
             workers = config.workers
             if workers > 1:
+                # Each worker keeps its own in-memory read cache and cannot see
+                # invalidations performed by its peers, so turn it off unless
+                # the operator explicitly configured OPENVIKING_CONTENT_CACHE.
+                from openviking.storage.viking_fs._read_cache import (
+                    disable_for_multi_worker,
+                )
+
+                if disable_for_multi_worker(workers):
+                    print(
+                        "OpenViking content cache disabled: multi-worker mode "
+                        f"({workers} workers) cannot share invalidation across "
+                        "processes. Cross-process content caching is available via "
+                        "CacheFS (storage.agfs.cachefs.backend=cache plus a shared "
+                        "cache.provider)."
+                    )
                 # Multi-worker mode requires an import string so each worker
                 # can independently import the application.  We stash the
                 # resolved config path in an env-var so that the factory can
