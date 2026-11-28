@@ -3,7 +3,8 @@
 """Runtime dispatch, recovery and cancellation contracts with persistent Tasks."""
 
 import asyncio
-from datetime import timedelta
+import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -449,3 +450,43 @@ async def test_git_watch_pauses_only_on_auth_failure(make_runtime, watch_tracker
     saved = await runtime.watch_manager.get_task(task.task_id)
     assert saved.is_active is (code != GIT_AUTH_FAILED)
     assert (saved.next_execution_time is None) is (code == GIT_AUTH_FAILED)
+
+
+class TestWatchTimestampNormalization:
+    @pytest.mark.asyncio
+    async def test_persisted_aware_due_time_does_not_break_due_check(self, watch_vfs):
+        """Offset-aware persisted due times must not crash the due check (#3268)."""
+        aware_past = (datetime.now(timezone.utc) - timedelta(minutes=10)).astimezone(
+            timezone(timedelta(hours=8))
+        )
+        document = {
+            "tasks": [
+                {
+                    "task_id": "aware-task",
+                    "path": "/test/aware",
+                    "to_uri": "viking://resources/aware",
+                    "watch_interval": 60.0,
+                    "created_at": (
+                        datetime.now(timezone.utc) - timedelta(hours=1)
+                    ).isoformat(),
+                    "next_execution_time": aware_past.isoformat(),
+                    "is_active": True,
+                }
+            ],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await watch_vfs.write_file(
+            FileWatchStore.STORAGE_URI,
+            json.dumps(document),
+            ctx=FileWatchStore._ctx(),
+            auto_pathlock=False,
+        )
+
+        store = FileWatchStore(watch_vfs)
+        await store.initialize()
+        try:
+            candidates = await store.due_candidates(10)
+        finally:
+            await store.close()
+
+        assert [candidate.task_id for candidate in candidates] == ["aware-task"]
