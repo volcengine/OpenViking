@@ -392,7 +392,11 @@ class _AnyDocMarkdownRenderer:
             if len(item.blocks) > 1:
                 loose = True
             lines = body.splitlines() or [""]
-            indent = " " * len(marker)
+            continuation_width = len(marker)
+            if not in_table_cell and not item.marker_label and marker.startswith("- "):
+                # Generated alphabetic and Roman labels are part of the item text.
+                continuation_width = 2
+            indent = " " * continuation_width
             rendered = f"{marker}{lines[0]}"
             for line in lines[1:]:
                 if not line:
