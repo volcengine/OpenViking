@@ -609,6 +609,24 @@ use super::*;
         assert_eq!(metrics.waiting_lock_count, 0);
     }
 
+    #[tokio::test]
+    async fn concurrent_filesystem_batches_grant_one_lease() {
+        let (first, second) = make_filesystem_managers().await;
+        let paths = vec!["/data/a/b".to_string(), "/data/a/c".to_string()];
+        let (first_result, second_result) = tokio::join!(
+            first.acquire_exact_batch(&paths, Duration::from_millis(250), None),
+            second.acquire_exact_batch(&paths, Duration::from_millis(250), None),
+        );
+
+        match (first_result, second_result) {
+            (Ok(lease), Err(PathLockError::Timeout { .. })) => first.release(&lease).await.unwrap(),
+            (Err(PathLockError::Timeout { .. }), Ok(lease)) => second.release(&lease).await.unwrap(),
+            (first_result, second_result) => {
+                panic!("expected one winner, got {first_result:?} and {second_result:?}");
+            }
+        }
+    }
+
     #[test]
     fn poll_interval_bounds_back_off_and_saturate() {
         assert_eq!(PathLockManager::poll_interval_bounds(0), (50, 60));
