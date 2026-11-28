@@ -35,6 +35,7 @@ async def run(runtime, node, sources):
                     ]
                 },
                 refs,
+                map_worker=True,
             )
         except BaseException:
             for ref in refs:
