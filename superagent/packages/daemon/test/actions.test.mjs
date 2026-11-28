@@ -1107,6 +1107,66 @@ describe('decision references', () => {
     assert.equal(new Set(connectors.calls.map((entry) => entry.input.idempotency_key)).size, 4);
   });
 
+  // Regression for #8276: a final delivery is unique per decision and
+  // destination. A paraphrased second final must not become a second send
+  // merely because the rendered content changed the idempotency key.
+  it('sends only one final reply per decision when the model changes the wording', async (t) => {
+    const { store, call, connectors, inbound } = setup(t);
+    inbound({ messageId: 'om_target12345678', chatId: 'oc_chat12345678' });
+    const decision = 'message:om_target12345678';
+    const reply = (markdown, extra = {}) => call('reply_message', {
+      message_id: 'om_target12345678', decision_id: decision, response_to_id: decision, markdown, ...extra,
+    });
+
+    const first = await reply('The task is still running.');
+    const second = await reply('Still working on the task.');
+    assert.equal(first.data.duplicate, undefined);
+    assert.equal(second.data.duplicate, true, 'the second final must be reported as a duplicate');
+    assert.equal(connectors.calls.length, 1, 'the provider must be invoked only once');
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 1);
+    assert.deepEqual(connectors.calls[0].input.content, { type: 'markdown', text: 'The task is still running.' });
+
+    // An explicit caller idempotency key is still an intentional second send.
+    await reply('A separately intended message.', { idempotency_key: 'intentional-second-final' });
+    assert.equal(connectors.calls.length, 2);
+  });
+
+  it('sends only one final chat message per decision when the model changes the wording', async (t) => {
+    const { store, call, connectors, inbound } = setup(t);
+    inbound({ messageId: 'om_target12345678', chatId: 'oc_chat12345678' });
+    const decision = 'message:om_target12345678';
+    const sendFinal = (markdown) => call('send_message', {
+      chat_id: 'oc_chat12345678', decision_id: decision, response_to_id: decision, markdown,
+    });
+
+    assert.equal((await sendFinal('The task is still running.')).data.duplicate, undefined);
+    assert.equal((await sendFinal('Still working on the task.')).data.duplicate, true);
+    assert.equal(connectors.calls.length, 1);
+    assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM outbox').get().n, 1);
+  });
+
+  it('still sends distinct decisions and interim staged replies', async (t) => {
+    const { call, connectors, inbound } = setup(t, { stagedReplies: true });
+    const first = 'om_first12345678';
+    const second = 'om_second12345678';
+    inbound({ messageId: first, chatId: 'oc_chat12345678' });
+
+    // Two finals for two different decisions are two deliveries.
+    await call('reply_message', { message_id: first, decision_id: `message:${first}`, response_to_id: `message:${first}`,
+      markdown: 'first answer' });
+    inbound({ messageId: second, chatId: 'oc_chat12345678' });
+    await call('reply_message', { message_id: second, decision_id: `message:${second}`, response_to_id: `message:${second}`,
+      markdown: 'second answer' });
+    assert.equal(connectors.calls.length, 2);
+
+    // An interim message is not the final: different wording still sends.
+    await call('send_message', { chat_id: 'oc_chat12345678', decision_id: `message:${second}`,
+      response_to_id: `message:${second}`, markdown: 'working on it', interim: true });
+    await call('send_message', { chat_id: 'oc_chat12345678', decision_id: `message:${second}`,
+      response_to_id: `message:${second}`, markdown: 'still working on it', interim: true });
+    assert.equal(connectors.calls.length, 4);
+  });
+
   it('re-checks the decision event after an awaited preparation, also against a newer event for the same message', async (t) => {
     let finishLookup = null;
     const roster = { resolveNames: (_chatId, names) => new Promise((resolve) => {
@@ -1168,8 +1228,9 @@ describe('owner notices and owner-only actions', () => {
 
     // "在飞书上提醒我": the chat message picks the IM, the Core picks the person.
     await call('notify_owner', { markdown: '提醒你', decision_id: 'wx-evt-1', source: 'lark' });
-    // Without source the primary IM is used.
-    await call('notify_owner', { markdown: '提醒你 2', decision_id: 'wx-evt-1' });
+    // Without source the primary IM is used. An explicit caller key marks this
+    // as an intentional second notice rather than a duplicate final.
+    await call('notify_owner', { markdown: '提醒你 2', decision_id: 'wx-evt-1', idempotency_key: 'second-notice' });
     // "在飞书那个群里说一声": a chat decision keeps send_message to any chat.
     await call('send_message', { chat_id: 'oc_group12345678', markdown: '大家好', decision_id: 'wx-evt-1' });
     assert.deepEqual(connectors.calls.map(({ connector, input }) => [connector, input.user_id ?? input.chat_id]), [
