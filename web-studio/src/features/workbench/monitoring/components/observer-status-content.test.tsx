@@ -57,4 +57,20 @@ describe('ObserverStatusContent', () => {
     expect(screen.queryByText('Metric')).toBeNull()
     expect(screen.queryByText('unknown')).toBeNull()
   })
+
+  it('renders a table with ambiguous columns as preformatted text', () => {
+    const status = [
+      '+--------------------+----------+------------+',
+      '|       Model        | Provider |   Status   |',
+      '+--------------------+----------+------------+',
+      '| research | summary | example  | configured |',
+      '+--------------------+----------+------------+',
+    ].join('\n')
+    const { container } = render(<ObserverStatusContent status={status} />)
+
+    expect(screen.queryByRole('table')).toBeNull()
+    const paragraph = container.querySelector('p')
+    expect(paragraph?.textContent).toBe(status)
+    expect(paragraph?.classList.contains('whitespace-pre')).toBe(true)
+  })
 })
