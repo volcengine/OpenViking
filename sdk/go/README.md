@@ -223,6 +223,9 @@ is uploaded to `/api/v1/resources/temp_upload` before the final API call.
 `AddSkill` and `UpdateSkill` also accept inline Markdown strings, including
 content that exceeds local filename limits.
 
+Use `ExportOVPack` with `ImportOVPack` to transfer a resource subtree.
+`BackupOVPack` and `RestoreOVPack` operate on account backups and require ROOT or ADMIN privileges.
+
 ```go
 skill, err := client.AddSkill(ctx, "./skills/search-web", nil)
 if err != nil {
@@ -241,7 +244,7 @@ found, err := client.FindSkills(ctx, "search the web", &openviking.FindSkillsOpt
 _, _ = skills, found
 
 exported, err := client.ExportOVPack(ctx, "viking://resources/docs", "./backups", nil)
-restored, err := client.RestoreOVPack(ctx, exported, &openviking.ImportPackOptions{
+restored, err := client.ImportOVPack(ctx, exported, "viking://resources", &openviking.ImportPackOptions{
 	OnConflict: "overwrite",
 })
 
