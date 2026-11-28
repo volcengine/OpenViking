@@ -98,13 +98,15 @@ class IngestPoller:
         if not await self.replayer.reconcile(name, ref):
             return
         appended = False
+        read_failed = False
         while True:
             cursor = self.store.get_cursor(name, ref.native_session_id, source.cursor_kind)
             try:
                 messages, new_cursor = source.read_messages(ref, cursor, DEFAULT_READ_LIMIT)
             except Exception:  # noqa: BLE001
                 logger.exception("[ingest:%s] read failed for %s", name, ref.native_session_id)
-                return
+                read_failed = True
+                break
             if not messages:
                 from_value = (cursor or Cursor.zero(source.cursor_kind)).value
                 if new_cursor.value != from_value:
@@ -120,14 +122,15 @@ class IngestPoller:
 
         rec = self.store.get(name, ref.native_session_id)
         if appended or (rec and rec.needs_commit):
-            self._dirty[(name, ref.native_session_id)] = _Dirty(
-                name, cfg, source, ref, time.monotonic()
-            )
+            key = (name, ref.native_session_id)
+            # A failed read without new work must not postpone a pending idle commit.
+            if not read_failed or appended or key not in self._dirty:
+                self._dirty[key] = _Dirty(name, cfg, source, ref, time.monotonic())
             committed = await self.replayer.maybe_commit_on_threshold(
                 name, ref, cfg.commit.commit_token_threshold, cfg.commit.keep_recent_count
             )
             if committed:
-                self._dirty.pop((name, ref.native_session_id), None)
+                self._dirty.pop(key, None)
 
     async def _commit_idle(self) -> None:
         now = time.monotonic()
