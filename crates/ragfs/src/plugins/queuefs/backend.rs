@@ -564,6 +564,16 @@ impl SQLiteQueueBackend {
             "ALTER TABLE queue_messages ADD COLUMN schedule_seq INTEGER",
             "CREATE INDEX IF NOT EXISTS idx_queue_message_id ON queue_messages(queue_name, message_id)",
             "CREATE INDEX IF NOT EXISTS idx_queue_serial ON queue_messages(queue_name, serial_key, id)",
+            // list_unacked filters two status values and orders by id, which an
+            // index ending in schedule_seq cannot satisfy: SQLite adds a sorter,
+            // and once the queue is large enough that sorter spills to a temp file
+            // and list_unacked fails with "unable to open database file" when no
+            // temp dir is writable. Startup snapshots every queue before workers
+            // run, so that aborts the server. (queue_name, id) serves the query in
+            // id order without a sorter, while the single-status queries keep
+            // using idx_queue_status. It needs its own name because CREATE INDEX
+            // IF NOT EXISTS cannot redefine an existing index.
+            "CREATE INDEX IF NOT EXISTS idx_queue_unacked ON queue_messages(queue_name, id)",
         ] {
             if let Err(err) = conn.execute(stmt, []) {
                 let text = err.to_string();
@@ -1604,7 +1614,7 @@ mod tests {
             .prepare(
                 "SELECT name FROM sqlite_master
                  WHERE type = 'index'
-                   AND name IN ('idx_queue_message_id', 'idx_queue_status')
+                   AND name IN ('idx_queue_message_id', 'idx_queue_status', 'idx_queue_unacked')
                  ORDER BY name",
             )
             .unwrap()
@@ -1616,7 +1626,8 @@ mod tests {
             migrated_indexes,
             vec![
                 "idx_queue_message_id".to_string(),
-                "idx_queue_status".to_string()
+                "idx_queue_status".to_string(),
+                "idx_queue_unacked".to_string()
             ]
         );
     }
