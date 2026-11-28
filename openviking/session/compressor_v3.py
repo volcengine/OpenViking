@@ -26,6 +26,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
     ExtractionMessageBatch,
+    bound_oversized_extraction_messages,
     plan_extraction_batches,
 )
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
@@ -463,19 +464,36 @@ class SessionCompressorV3:
                 )
 
         completed = completed_memory_steps or {}
-        return [
-            (step, types, batch)
-            for step, types, scope_limits in scopes
-            for batch in plan_extraction_batches(
-                [
-                    message
-                    for message in messages
-                    if message.id not in completed.get("long_term", set())
-                    and message.id not in completed.get(step, set())
-                ],
-                scope_limits,
-            )
-        ]
+        planned: list[tuple[str, Optional[set[str]], ExtractionMessageBatch]] = []
+        for step, types, scope_limits in scopes:
+            pending = [
+                message
+                for message in messages
+                if message.id not in completed.get("long_term", set())
+                and message.id not in completed.get(step, set())
+            ]
+            pending, trimmed = bound_oversized_extraction_messages(pending, scope_limits)
+            if trimmed:
+                logger.warning(
+                    "Trimmed %s over-ceiling message(s) for step=%s to the extraction "
+                    "prompt budget (%s estimated tokens) so the model receives a "
+                    "request it can answer",
+                    trimmed,
+                    step,
+                    scope_limits.max_message_tokens,
+                )
+            for batch in plan_extraction_batches(pending, scope_limits):
+                if batch.oversized:
+                    logger.warning(
+                        "Extraction step=%s still has a pass above the prompt budget "
+                        "(%s estimated tokens, budget %s): the reducible text is not "
+                        "enough to meet it",
+                        step,
+                        batch.estimated_tokens,
+                        scope_limits.max_message_tokens,
+                    )
+                planned.append((step, types, batch))
+        return planned
 
     @tracer(ignore_result=True)
     async def extract_long_term_memories(
