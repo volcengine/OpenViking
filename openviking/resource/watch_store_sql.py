@@ -973,6 +973,7 @@ class SQLWatchStore(WatchStore):
                     update={"run_source_checkpoint_version": task.source_checkpoint_version}
                 ),
                 started_at=started_at,
+                manual=manual,
             )
 
     async def attach_task(
@@ -1046,10 +1047,13 @@ class SQLWatchStore(WatchStore):
             if not rows:
                 return False
             payload = dict(rows[0]["payload"] or {})
-            if result.source_checkpoint is not None and payload.get(
-                "run_source_checkpoint_version"
-            ) == payload.get("source_checkpoint_version", 0):
-                payload["source_checkpoint"] = result.source_checkpoint
+            if payload.get("run_source_checkpoint_version") == payload.get(
+                "source_checkpoint_version", 0
+            ):
+                if result.recovery_attempts is not None:
+                    payload["recovery_attempts"] = result.recovery_attempts
+                if result.source_checkpoint is not None:
+                    payload["source_checkpoint"] = result.source_checkpoint
             payload["run_source_checkpoint_version"] = None
             values["payload"] = payload
             changed = (
