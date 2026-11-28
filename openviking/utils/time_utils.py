@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 
 # Matches fractional seconds with more than 6 digits (e.g. .1470042)
 _EXCESS_FRAC_RE = re.compile(r"(\.\d{6})\d+")
@@ -16,6 +16,18 @@ def parse_iso_datetime(value: str) -> datetime:
     if normalized.endswith("Z"):
         normalized = normalized[:-1] + "+00:00"
     return datetime.fromisoformat(normalized)
+
+
+def parse_iso_datetime_in_timezone(value: str, target_timezone: tzinfo) -> datetime:
+    """Parse an ISO 8601 value and convert it to ``target_timezone``.
+
+    Naive values are treated as UTC so archive dates do not depend on the host
+    process timezone.
+    """
+    dt = parse_iso_datetime(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(target_timezone)
 
 
 def format_iso8601(dt: datetime) -> str:

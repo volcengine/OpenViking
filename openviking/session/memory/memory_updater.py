@@ -13,6 +13,7 @@ import errno
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone, tzinfo
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from openviking.observability.log_safety import safe_uri_for_log
@@ -54,7 +55,7 @@ from openviking.telemetry.tracer import get_trace_id
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.model_retry import retry_async
 from openviking.utils.tags import merge_search_tags
-from openviking.utils.time_utils import parse_iso_datetime
+from openviking.utils.time_utils import parse_iso_datetime_in_timezone
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.utils import VikingURI, get_logger
 
@@ -71,6 +72,24 @@ _RESOURCE_URI_MARKER_RE = re.compile(
     r"[，,；;：:\s]*(?:资源\s*URI\s*为|资源\s*URI|Resource\s+URI)\s*[:：为]?\s*",
     re.IGNORECASE,
 )
+
+
+def _configured_memory_timezone() -> tzinfo:
+    """Resolve the configured memory archive timezone, defaulting to UTC.
+
+    Standalone and test contexts may run without an ov.conf; only a missing
+    configuration file is treated as "use defaults".
+    """
+    from zoneinfo import ZoneInfo
+
+    from openviking_cli.utils.config import get_openviking_config
+
+    try:
+        config = get_openviking_config()
+    except FileNotFoundError:
+        return timezone.utc
+    timezone_name = getattr(getattr(config, "memory", None), "timezone", "UTC") or "UTC"
+    return ZoneInfo(timezone_name)
 
 
 @dataclass(frozen=True)
@@ -318,6 +337,7 @@ class ExtractContext:
         split_long_text_messages: bool = True,
         source_archive_uri: str = "",
         extraction_scope: str = "",
+        timezone: tzinfo | None = None,
     ):
         if chunk_meta is None:
             if split_long_text_messages:
@@ -330,6 +350,7 @@ class ExtractContext:
         self.page_id_map = PageIdMap()
         self.source_archive_uri = (source_archive_uri or "").rstrip("/")
         self.extraction_scope = extraction_scope
+        self.timezone = timezone if timezone is not None else _configured_memory_timezone()
 
     @classmethod
     def _build_extraction_messages(
@@ -438,75 +459,68 @@ class ExtractContext:
 
     def get_year(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的年份，fallback 到当前年份"""
-        from datetime import datetime
-
         if not ranges_str:
-            return str(datetime.now().year)
+            return str(datetime.now(self.timezone).year)
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
         if first_time:
             return first_time.split("-")[0]
-        return str(datetime.now().year)
+        return str(datetime.now(self.timezone).year)
 
     def get_month(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的月份，fallback 到当前月份"""
-        from datetime import datetime
-
         if not ranges_str:
-            return f"{datetime.now().month:02d}"
+            return f"{datetime.now(self.timezone).month:02d}"
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
         if first_time:
             return first_time.split("-")[1]
-        return f"{datetime.now().month:02d}"
+        return f"{datetime.now(self.timezone).month:02d}"
 
     def get_day(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的日期，fallback 到当前日期"""
-        from datetime import datetime
-
         if not ranges_str:
-            return f"{datetime.now().day:02d}"
+            return f"{datetime.now(self.timezone).day:02d}"
         msg_range = self.read_message_ranges(ranges_str)
         first_time = msg_range._first_message_time()
         if first_time:
             return first_time.split("-")[2]
-        return f"{datetime.now().day:02d}"
+        return f"{datetime.now(self.timezone).day:02d}"
 
     def get_timestamp_from_ranges(self, ranges_str: str) -> str:
         """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
 
         Fallback 到 datetime.now() 以保证总是返回非空字符串。
         """
-        from datetime import datetime
-
         msg_range = self.read_message_ranges(ranges_str) if ranges_str else None
         if msg_range:
-            for elem in msg_range.elements:
-                if isinstance(elem, str):
-                    continue
-                created_at = getattr(elem, "created_at", None)
-                if created_at:
-                    try:
-                        return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
-                    except (ValueError, TypeError):
-                        continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+            for msg_group in msg_range.elements:
+                for msg in msg_group:
+                    created_at = getattr(msg, "created_at", None)
+                    if created_at:
+                        try:
+                            return parse_iso_datetime_in_timezone(
+                                created_at, self.timezone
+                            ).strftime("%Y%m%d%H%M%S")
+                        except (ValueError, TypeError):
+                            continue
+        return datetime.now(self.timezone).strftime("%Y%m%d%H%M%S")
 
     def get_session_timestamp(self) -> str:
         """取对话第一条消息的时间戳（YYYYMMDDHHMMSS），用于文件名唯一化。
 
         Fallback 到 datetime.now() 以保证总是返回非空字符串。
         """
-        from datetime import datetime
-
         for msg in self.messages:
             created_at = getattr(msg, "created_at", None)
             if created_at:
                 try:
-                    return datetime.fromisoformat(created_at).strftime("%Y%m%d%H%M%S")
+                    return parse_iso_datetime_in_timezone(created_at, self.timezone).strftime(
+                        "%Y%m%d%H%M%S"
+                    )
                 except (ValueError, TypeError):
                     continue
-        return datetime.now().strftime("%Y%m%d%H%M%S")
+        return datetime.now(self.timezone).strftime("%Y%m%d%H%M%S")
 
     def get_source_archive_suffix(self) -> str:
         """Namespace filenames by archive and optional extraction input scope.
@@ -664,7 +678,7 @@ class ExtractContext:
         - "0-10,15,20-25" - mixed
         """
         if not ranges_str:
-            return MessageRange([])
+            return MessageRange([], timezone=self.timezone)
 
         # 解析所有范围/索引
         ranges = []
@@ -681,7 +695,7 @@ class ExtractContext:
                 ranges.append((idx, idx))
 
         if not ranges:
-            return MessageRange([])
+            return MessageRange([], timezone=self.timezone)
 
         # 按 start 排序
         ranges.sort(key=lambda x: x[0])
@@ -708,7 +722,7 @@ class ExtractContext:
             range_msgs = self.messages[start : end + 1]
             elements.append(range_msgs)
 
-        return MessageRange(elements, chunk_meta=self.chunk_meta)
+        return MessageRange(elements, chunk_meta=self.chunk_meta, timezone=self.timezone)
 
 
 class MessageRange:
@@ -718,9 +732,12 @@ class MessageRange:
         self,
         elements: List[List[Message]],
         chunk_meta: Optional[Dict[int, ChunkMeta]] = None,
+        *,
+        timezone: tzinfo = timezone.utc,
     ):
         self.elements = elements
         self.chunk_meta = chunk_meta or {}
+        self.timezone = timezone
 
     def pretty_print(self) -> str:
         """Pretty print the message range with '...' separator between non-contiguous ranges."""
@@ -807,7 +824,7 @@ class MessageRange:
         for msg_group in self.elements:
             for msg in msg_group:
                 if hasattr(msg, "created_at") and msg.created_at:
-                    dt = parse_iso_datetime(msg.created_at)
+                    dt = parse_iso_datetime_in_timezone(msg.created_at, self.timezone)
                     return dt.strftime("%Y-%m-%d")
         return None
 
@@ -825,7 +842,7 @@ class MessageRange:
         for msg_group in self.elements:
             for msg in msg_group:
                 if hasattr(msg, "created_at") and msg.created_at:
-                    dt = parse_iso_datetime(msg.created_at)
+                    dt = parse_iso_datetime_in_timezone(msg.created_at, self.timezone)
                     weekday = weekday_en[dt.weekday()]
                     return f"{dt.strftime('%Y-%m-%d')} ({weekday})"
         return None

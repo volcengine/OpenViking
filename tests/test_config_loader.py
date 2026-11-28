@@ -459,6 +459,23 @@ def test_memory_maintenance_review_tokens_defaults_and_validates(monkeypatch):
         OpenVikingConfig.from_dict({"memory": {"maintenance_review_tokens": 0}})
 
 
+def test_memory_timezone_defaults_to_utc_and_validates_iana(monkeypatch):
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
+
+    default_config = OpenVikingConfig.from_dict({})
+    assert default_config.memory.timezone == "UTC"
+
+    blank_config = OpenVikingConfig.from_dict({"memory": {"timezone": "   "}})
+    assert blank_config.memory.timezone == "UTC"
+
+    shanghai_config = OpenVikingConfig.from_dict({"memory": {"timezone": " Asia/Shanghai "}})
+    assert shanghai_config.memory.timezone == "Asia/Shanghai"
+
+    for invalid in ("Mars/Olympus", "../etc/passwd", None, 123):
+        with pytest.raises(ValueError):
+            OpenVikingConfig.from_dict({"memory": {"timezone": invalid}})
+
+
 def test_openviking_config_ignores_deprecated_memory_version(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 

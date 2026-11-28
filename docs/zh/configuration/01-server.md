@@ -684,7 +684,8 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
     "prefetch_search_topn": 5,
     "extraction_enabled": true,
     "session_skill_extraction_enabled": false,
-    "link_enabled": false
+    "link_enabled": false,
+    "timezone": "UTC"
   }
 }
 ```
@@ -700,6 +701,7 @@ Provider 和密钥管理配置见[加密指南](../guides/08-encryption.md)。
 | `extraction_enabled` | boolean | `true` | session commit 时是否抽取长期记忆 |
 | `session_skill_extraction_enabled` | boolean | `false` | 是否同时抽取可复用 Skill |
 | `link_enabled` | boolean | `false` | 是否生成和解析记忆链接 |
+| `timezone` | IANA 时区名称 | `"UTC"` | 事件归档目录、ChatLog 日期和记忆抽取提示词使用的时区。底层时间戳仍按 UTC 存储；留空等同 UTC。仅影响后续归档，不迁移已有文件。 |
 
 自动提交还需要单独设置策略：记忆抽取开关不会让会话自动提交。详见[配置指南](../guides/01-configuration.md)的 `memory.session_auto_commit` 和[会话 API](../api/05-sessions.md)。模板目录的加载顺序和生效方式见 [Prompt 指南](../guides/10-prompt-guide.md)。
 

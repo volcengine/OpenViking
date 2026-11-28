@@ -7,7 +7,9 @@ Session Extract Context Provider - 会话提取 Provider 实现
 """
 
 import re
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from openviking.message.part import TextPart, ToolPart
 from openviking.server.identity import RequestContext, ToolContext
@@ -34,7 +36,7 @@ from openviking.session.memory.vision_message_normalizer import (
 )
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry import tracer
-from openviking.utils.time_utils import parse_iso_datetime
+from openviking.utils.time_utils import parse_iso_datetime_in_timezone
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -91,6 +93,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._read_file_contents: Dict[str, MemoryFile] = {}
         # 读取 eager_prefetch 配置
         config = get_openviking_config()
+        timezone_name = (
+            getattr(config.memory, "timezone", "UTC") if config.memory else "UTC"
+        ) or "UTC"
+        self._memory_timezone = ZoneInfo(timezone_name)
         self._eager_prefetch = config.memory.eager_prefetch if config.memory else False
         self._prefetch_search_topn = config.memory.prefetch_search_topn if config.memory else 5
         self._ctx = ctx
@@ -128,6 +134,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
                 split_long_text_messages=self.split_long_text_messages_for_extraction,
                 source_archive_uri=self._source_archive_uri,
                 extraction_scope=self._extraction_scope,
+                timezone=self._memory_timezone,
             )
         return self._extract_context
 
@@ -271,8 +278,6 @@ types when required by their schemas.
 
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
-        from datetime import datetime
-
         if self.messages:
             first_msg_time = getattr(self.messages[0], "created_at", None)
             last_msg_time = getattr(self.messages[-1], "created_at", None)
@@ -281,16 +286,16 @@ types when required by their schemas.
             last_msg_time = None
 
         if first_msg_time:
-            session_time = parse_iso_datetime(first_msg_time)
+            session_time = parse_iso_datetime_in_timezone(first_msg_time, self._memory_timezone)
         else:
-            session_time = datetime.now()
+            session_time = datetime.now(self._memory_timezone)
 
         session_time_str = session_time.strftime("%Y-%m-%d %H:%M")
         day_of_week = session_time.strftime("%A")
 
         # 检查是否需要显示范围
         if last_msg_time and last_msg_time != first_msg_time:
-            last_time = parse_iso_datetime(last_msg_time)
+            last_time = parse_iso_datetime_in_timezone(last_msg_time, self._memory_timezone)
             time_display = f"{session_time_str} - {last_time.strftime('%Y-%m-%d %H:%M')}"
         else:
             time_display = session_time_str

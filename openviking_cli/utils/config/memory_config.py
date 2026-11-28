@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -50,6 +51,13 @@ class MemoryConfig(BaseModel):
     version: str = Field(
         default="v3",
         description="Deprecated and ignored. Memory extraction always uses v3.",
+    )
+    timezone: str = Field(
+        default="UTC",
+        description=(
+            "IANA timezone used to format memory archive dates and chatlog timestamps. "
+            "Stored message timestamps remain UTC. Defaults to UTC."
+        ),
     )
     custom_templates_dir: str = Field(
         default="",
@@ -124,6 +132,20 @@ class MemoryConfig(BaseModel):
         default_factory=SessionAutoCommitConfig,
         description="Server-wide controls for automatic session commits.",
     )
+
+    @field_validator("timezone", mode="before")
+    @classmethod
+    def validate_timezone(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("memory.timezone must be an IANA timezone name")
+        timezone_name = value.strip()
+        if not timezone_name:
+            return "UTC"
+        try:
+            ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"Unknown IANA timezone for memory.timezone: {value!r}") from exc
+        return timezone_name
 
     @model_validator(mode="before")
     @classmethod

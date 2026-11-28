@@ -3,6 +3,7 @@
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -24,6 +25,7 @@ from openviking.session.memory.utils.content_template import (
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.template_utils import TemplateUtils
+from openviking.session.memory.utils.uri import generate_uri
 
 
 @pytest.mark.parametrize("memory_type", ["events"])
@@ -85,6 +87,33 @@ def test_events_default_and_custom_render_real_context(resource_event):
     result = render_content_template(custom, "events", values, context)
     assert result.startswith("# launch")
     assert ("viking://resources/guide" in result) == resource_event
+
+
+def test_events_uri_and_chatlog_use_configured_timezone():
+    context = ExtractContext(
+        [
+            Message(
+                id="m1",
+                role="user",
+                parts=[TextPart("We agreed to launch.")],
+                created_at="2026-11-21T18:18:09.765Z",
+            )
+        ],
+        timezone=ZoneInfo("Asia/Shanghai"),
+    )
+    values = {
+        "event_name": "launch",
+        "goal": "launch",
+        "summary": "Launch agreement",
+        "ranges": "0",
+    }
+    schema = MemoryTypeRegistry().get("events")
+
+    uri = generate_uri(schema, values, user_space="default", extract_context=context)
+
+    assert uri == "viking://user/default/memories/events/2026/11/22/launch.md"
+    content = TemplateUtils.render(schema.content_template, values, context)
+    assert "2026-11-22 (Sunday) ChatLog:" in content
 
 
 @pytest.mark.parametrize("memory_type", ["events"])
