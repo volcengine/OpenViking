@@ -706,8 +706,8 @@ class WebFeedAccessor(DataAccessor):
 # Single-page detect-and-suggest (never auto-crawls)
 # --------------------------------------------------------------------------- #
 def _extract_attr(tag: str, name: str) -> Optional[str]:
-    match = re.search(rf'{name}\s*=\s*"([^"]*)"', tag, re.I) or re.search(
-        rf"{name}\s*=\s*'([^']*)'", tag, re.I
+    match = re.search(rf'(?:^|\s){name}\s*=\s*"([^"]*)"', tag, re.I) or re.search(
+        rf"(?:^|\s){name}\s*=\s*'([^']*)'", tag, re.I
     )
     return match.group(1) if match else None
 
