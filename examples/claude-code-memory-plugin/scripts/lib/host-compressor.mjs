@@ -61,12 +61,13 @@ function runCommand(command, args, { timeoutMs, input = "" }) {
     }
 
     let stdout = "";
+    let stderrBytes = 0;
     let settled = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(result);
+      resolve({ ...result, stderrBytes });
     };
     const timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
@@ -74,7 +75,9 @@ function runCommand(command, args, { timeoutMs, input = "" }) {
     }, Math.max(1000, timeoutMs));
 
     child.stdout.on("data", (chunk) => { stdout += String(chunk); });
-    child.stderr.on("data", () => {});
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.length;
+    });
     child.on("error", () => finish({ ok: false, stdout, code: -1 }));
     child.on("close", (code) => finish({ ok: code === 0, stdout, code }));
 
@@ -87,17 +90,23 @@ function runCommand(command, args, { timeoutMs, input = "" }) {
 }
 
 /**
- * Whether the host CLI is present and runnable. Cached for a week so the probe
- * does not tax every turn.
+ * Host CLI availability and supported isolation. Cached for a week so the
+ * help probe does not tax every turn; older CLIs keep their existing arguments.
  */
 export async function probeHostCli(command = "claude", cachePath = statePath("host-cli-probe.json"), now = Date.now()) {
   const cached = await readJson(cachePath);
-  if (cached && cached.command === command && Number(cached.checkedAt) + PROBE_TTL_MS > now) {
-    return Boolean(cached.available);
+  if (cached && cached.command === command && typeof cached.supportsRestricted === "boolean"
+      && Number(cached.checkedAt) + PROBE_TTL_MS > now) {
+    return cached;
   }
-  const result = await runCommand(command, ["--version"], { timeoutMs: PROBE_TIMEOUT_MS });
-  await writeJson(cachePath, { command, available: result.ok, checkedAt: now });
-  return result.ok;
+  const result = await runCommand(command, ["--help"], { timeoutMs: PROBE_TIMEOUT_MS });
+  const profile = {
+    command, available: result.ok,
+    supportsRestricted: result.ok && /(?:^|\s)--restricted(?:\s|$)/m.test(result.stdout),
+    checkedAt: now,
+  };
+  await writeJson(cachePath, profile);
+  return profile;
 }
 
 /**
@@ -109,7 +118,8 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
   if (mode !== "client" && mode !== "auto") return null;
 
   const command = String(cfg.recallCompressCommand || "claude");
-  if (!(await probeHostCli(command))) {
+  const hostCli = await probeHostCli(command);
+  if (!hostCli.available) {
     log("host_compressor_unavailable", { command });
     return null;
   }
@@ -121,6 +131,7 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
   return async (prompt) => {
     const args = [
       "-p",
+      ...(hostCli.supportsRestricted ? ["--restricted"] : []),
       "--model", model,
       "--effort", effort,
       "--strict-mcp-config",
@@ -128,7 +139,9 @@ export async function createHostCompressor(cfg = {}, log = () => {}) {
     ];
     const result = await runCommand(command, args, { timeoutMs, input: prompt });
     if (!result.ok) {
-      log("host_compressor_failed", { code: result.code, timedOut: Boolean(result.timedOut) });
+      log("host_compressor_failed", {
+        code: result.code, timedOut: Boolean(result.timedOut), stderrBytes: result.stderrBytes ?? 0,
+      });
       return "";
     }
     return result.stdout;
