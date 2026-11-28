@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.pyagfs import AsyncAGFSClient
 from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
@@ -1229,21 +1230,12 @@ class PersistentTaskStore(TaskWorkStore):
     ) -> List[TaskRecord]:
         from openviking.service.task_pagination import matches
 
-        try:
-            entries = await self._ls(self._task_dir(account_id, user_id))
-        except (AGFSNotFoundError, FileNotFoundError):
-            return []
         heap: list[tuple[float, str, TaskRecord]] = []
-        for item in entries:
-            path = (
-                item.get("path") or f"{self._task_dir(account_id, user_id)}/{item.get('name', '')}"
-            )
-            if not path.endswith(".json"):
-                continue
+        async for raw in self._read_owner_files(account_id, user_id):
             try:
-                payload = json.loads(_decode_bytes(await self._read(path)))
+                payload = json.loads(_decode_bytes(raw))
                 record = _task_from_payload(payload, account_id=account_id, user_id=user_id)
-            except (AGFSNotFoundError, FileNotFoundError, ValueError, TypeError, KeyError):
+            except (ValueError, TypeError, KeyError):
                 continue
             with self._lock:
                 owner = (account_id, user_id, record.task_id)
@@ -1745,24 +1737,43 @@ class PersistentTaskStore(TaskWorkStore):
         except (AGFSNotFoundError, FileNotFoundError):
             return []
 
-    async def _list_owner_payloads(self, account_id: str, user_id: str) -> List[Dict[str, Any]]:
+    async def _read_owner_files(self, account_id: str, user_id: str) -> AsyncIterator[Any]:
+        """Yield an owner's task files in directory order, reading a bounded group at a time.
+
+        Files removed after the directory listing are skipped.
+        """
+        directory = self._task_dir(account_id, user_id)
         try:
-            entries = await self._ls(self._task_dir(account_id, user_id))
+            entries = await self._ls(directory)
         except (AGFSNotFoundError, FileNotFoundError):
-            return []
-        payloads = []
-        for item in entries:
-            path = (
-                item.get("path") or f"{self._task_dir(account_id, user_id)}/{item.get('name', '')}"
-            )
-            if not path.endswith(".json"):
-                continue
+            return
+        paths = [
+            path
+            for item in entries
+            if (path := item.get("path") or f"{directory}/{item.get('name', '')}").endswith(".json")
+        ]
+
+        async def read(path: str) -> Any:
             try:
-                value = json.loads(_decode_bytes(await self._read(path)))
-                if isinstance(value, dict):
-                    payloads.append(value)
-            except (AGFSNotFoundError, FileNotFoundError, ValueError, TypeError):
+                return await self._read(path)
+            except (AGFSNotFoundError, FileNotFoundError):
+                return None
+
+        for start in range(0, len(paths), FILE_TASK_CONCURRENCY):
+            group = paths[start : start + FILE_TASK_CONCURRENCY]
+            for raw in await bounded_map(group, read, concurrency=FILE_TASK_CONCURRENCY):
+                if raw is not None:
+                    yield raw
+
+    async def _list_owner_payloads(self, account_id: str, user_id: str) -> List[Dict[str, Any]]:
+        payloads = []
+        async for raw in self._read_owner_files(account_id, user_id):
+            try:
+                value = json.loads(_decode_bytes(raw))
+            except (ValueError, TypeError):
                 continue
+            if isinstance(value, dict):
+                payloads.append(value)
         return payloads
 
     async def _iter_task_payloads(self) -> AsyncIterator[Optional[Dict[str, Any]]]:
