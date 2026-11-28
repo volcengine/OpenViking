@@ -382,6 +382,56 @@ def test_git_concurrent_commit_maps_to_conflict():
     assert mapped.details == {"conflict_type": "git_ref_cas", "retryable": True}
 
 
+def test_upstream_provider_echoed_credential_is_redacted():
+    """A provider that echoes the request credential must not put it in the error."""
+    provider_error = (
+        "Error code: 401 - {'error': {'message': "
+        '"Incorrect API key provided: sk-or-v1-0123456789abcdef. '
+        'You can find your API key at https://openrouter.ai/keys"}}'
+    )
+    try:
+        raise RuntimeError(f"OpenAI VLM completion failed: {provider_error}") from (
+            _UpstreamHTTPError(401, provider_error)
+        )
+    except RuntimeError as exc:
+        mapped = map_exception(exc)
+
+    assert mapped is not None
+    assert mapped.code == "UNAUTHENTICATED"
+    assert "sk-or-v1-0123456789abcdef" not in mapped.message
+    assert "sk-or-v1-0123456789abcdef" not in str(mapped.details)
+    assert "[REDACTED]" in mapped.message
+    # message and details must carry the same redacted text
+    assert mapped.details["upstream_message"] in mapped.message
+
+
+def test_upstream_assignment_credential_is_redacted():
+    provider_error = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig rejected"
+    try:
+        raise RuntimeError("VLM call failed") from _UpstreamHTTPError(401, provider_error)
+    except RuntimeError as exc:
+        mapped = map_exception(exc)
+
+    assert mapped is not None
+    assert "eyJhbGciOiJIUzI1NiJ9.payload.sig" not in mapped.message
+    assert "eyJhbGciOiJIUzI1NiJ9.payload.sig" not in str(mapped.details)
+
+
+def test_upstream_message_without_credentials_is_unchanged():
+    """Redaction must not alter diagnostics that carry no secret."""
+    provider_error = (
+        "Error code: 429 - {'error': {'message': 'Rate limit reached for model bge-m3'}}"
+    )
+    try:
+        raise RuntimeError("Embedding call failed") from _UpstreamHTTPError(429, provider_error)
+    except RuntimeError as exc:
+        mapped = map_exception(exc)
+
+    assert mapped is not None
+    assert mapped.code == "RESOURCE_EXHAUSTED"
+    assert mapped.details["upstream_message"] == "Rate limit reached for model bge-m3"
+
+
 def test_git_auth_failure_remains_a_client_error():
     from openviking.server.responses import error_response, response_from_result
     from openviking.utils.git_auth import GIT_AUTH_FAILED, raise_git_auth_error
