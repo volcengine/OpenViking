@@ -63,24 +63,23 @@ export type PreparedRecallQuery = {
 export function prepareRecallQuery(rawText: string): PreparedRecallQuery {
   const sanitized = sanitizeUserTextForCapture(rawText).trim();
   const originalChars = sanitized.length;
+  const truncated = originalChars > RECALL_QUERY_MAX_CHARS;
 
-  if (!sanitized) {
-    return {
-      query: "",
-      truncated: false,
-      originalChars: 0,
-      finalChars: 0,
-    };
+  let query = sanitized;
+  if (truncated) {
+    // Pasted context often comes first and the actual question comes last.
+    const separator = " … ";
+    const availableChars = RECALL_QUERY_MAX_CHARS - separator.length;
+    const headChars = Math.floor(availableChars / 2);
+    const tailChars = availableChars - headChars;
+    const head = sanitized.slice(0, headChars).replace(/[\uD800-\uDBFF]$/u, "").trimEnd();
+    const tail = sanitized.slice(-tailChars).replace(/^[\uDC00-\uDFFF]/u, "").trimStart();
+    query = head + separator + tail;
   }
-
-  const query =
-    sanitized.length > RECALL_QUERY_MAX_CHARS
-      ? sanitized.slice(0, RECALL_QUERY_MAX_CHARS).trim()
-      : sanitized;
 
   return {
     query,
-    truncated: sanitized.length > RECALL_QUERY_MAX_CHARS,
+    truncated,
     originalChars,
     finalChars: query.length,
   };
