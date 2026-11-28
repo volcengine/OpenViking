@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
+from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.prompts.manager import PromptManager
 from openviking.session.memory.dataclass import MemoryFile
@@ -166,6 +167,7 @@ class SessionSkillContextProvider(SessionExtractContextProvider):
             return await super().execute_tool(tool_call)
 
         try:
+            uri = validate_request_viking_uri(uri, self._ctx)
             raw_content = await self._viking_fs.read_file(uri, ctx=self._ctx)
         except NotFoundError as exc:
             logger.debug("session skill read missing uri=%s", safe_uri_for_log(uri))
