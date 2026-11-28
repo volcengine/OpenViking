@@ -32,7 +32,7 @@ OVERVIEW_HEADING_LIMIT = 24
 OVERVIEW_PARAGRAPH_CHARS = 400
 
 _SUMMARY_SECTION = re.compile(
-    r"^#{1,3}[ \t]*Summary[ \t]*$\n(.*?)(?=^#{1,3}[ \t]|\Z)",
+    r"^#{1,3}[ \t]*Summary[ \t]*\r?\n(.*?)(?=^#{1,3}[ \t]|\Z)",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 _SUMMARY_INLINE = re.compile(
