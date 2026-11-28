@@ -2742,6 +2742,7 @@ class FeishuAccessor(DataAccessor):
         client = self._get_client(use_user_token=bool(feishu_access_token))
         all_blocks = []
         page_token = None
+        pages = set()
 
         while True:
             builder = (
@@ -2772,7 +2773,19 @@ class FeishuAccessor(DataAccessor):
 
             if not response.data.has_more:
                 break
-            page_token = response.data.page_token
+            next_token = response.data.page_token
+            # A malformed pagination response must fail the document instead of
+            # replaying the same page forever (the block list grows without bound
+            # and the import never returns). Drive and Wiki pagination guard the
+            # same response shape.
+            if not next_token:
+                raise RuntimeError(
+                    f"Feishu returned more document blocks for {document_id} without a page token"
+                )
+            if next_token in pages:
+                raise RuntimeError("Feishu returned a repeated page token")
+            pages.add(next_token)
+            page_token = next_token
 
         return all_blocks
 
