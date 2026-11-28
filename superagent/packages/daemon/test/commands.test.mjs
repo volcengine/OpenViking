@@ -165,7 +165,9 @@ describe('commandCandidate on a card', () => {
 describe('matchPrefix', () => {
   it('lets an exact match win over longer candidates and reports ambiguity', () => {
     assert.deepEqual(matchPrefix('low', ['low', 'lower']), ['low']);
-    assert.deepEqual(matchPrefix('m', EFFORT_LEVELS), ['minimal', 'medium']);
+    // A local list on purpose: this is about matching, so it must not change
+    // whenever a runtime's effort levels do.
+    assert.deepEqual(matchPrefix('m', ['minimal', 'medium', 'max']), ['minimal', 'medium', 'max']);
     assert.deepEqual(matchPrefix('', EFFORT_LEVELS), []);
   });
 });
