@@ -1,8 +1,11 @@
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs"
 import { isBypassed } from "./shared/session-model.mjs"
-import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
+import { effectivePeerId, fetchJSON, getResponseErrorMessage, log } from "./utils.mjs"
 
-export function createMemoryRecall({ config, sessionManager }) {
+// `notify` reaches the user in the session (the TUI toast). The startup health
+// toast fires before the TUI attaches, so without this an unreachable server
+// left every prompt silently running without memory.
+export function createMemoryRecall({ config, sessionManager, notify = async () => {} }) {
   async function buildRelevantMemories(input, parts) {
     if (!isRecallEnabled(config)) return
     const query = extractCurrentUserText(parts ?? [])
@@ -15,7 +18,19 @@ export function createMemoryRecall({ config, sessionManager }) {
     })) return
 
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
-    if (!health.ok) return
+    if (!health.ok) {
+      const error = getResponseErrorMessage(health.error)
+      log("WARN", "recall", "OpenViking unreachable; prompt runs without recalled memories", {
+        endpoint: config.endpoint,
+        status: health.status,
+        error,
+      })
+      await notify(
+        `OpenViking memory is unavailable at ${config.endpoint} (${error}). This prompt runs without recalled memories.`,
+        "error",
+      )
+      return
+    }
 
     const block = await buildRecallBlock(
       // 5s is this hook's own budget for a bare retrieval; when the request
