@@ -147,11 +147,11 @@ impl MultiWritePaths {
 /// Routes account paths through the current persisted partitions manifest.
 pub struct AccountRouter {
     store: Arc<MetadataStore>,
-    route_cache: Mutex<HashMap<String, RouteSnapshot>>,
+    route_cache: Mutex<HashMap<String, Arc<RouteSnapshot>>>,
 }
 
 /// Cached immutable routing identity for one initialized account.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct RouteSnapshot {
     epoch: u64,
     partitions: HashSet<u32>,
@@ -180,7 +180,7 @@ impl AccountRouter {
     }
 
     /// Return a cached route snapshot for one account when present.
-    fn cached_snapshot(&self, account_id: &str) -> Result<Option<RouteSnapshot>> {
+    fn cached_snapshot(&self, account_id: &str) -> Result<Option<Arc<RouteSnapshot>>> {
         Ok(self
             .route_cache
             .lock()
@@ -190,13 +190,13 @@ impl AccountRouter {
     }
 
     /// Load and cache the immutable routing identity for one account.
-    async fn route_snapshot(&self, account_id: &str) -> Result<RouteSnapshot> {
+    async fn route_snapshot(&self, account_id: &str) -> Result<Arc<RouteSnapshot>> {
         if let Some(snapshot) = self.cached_snapshot(account_id)? {
             return Ok(snapshot);
         }
         let manifest_path = self.store.paths().account_manifest(account_id)?.0;
         let manifest: PartitionsManifest = self.store.read_json(&manifest_path).await?;
-        let snapshot = RouteSnapshot::from_manifest(manifest)?;
+        let snapshot = Arc::new(RouteSnapshot::from_manifest(manifest)?);
         self.route_cache
             .lock()
             .map_err(|_| Error::internal("account route cache lock poisoned"))?
