@@ -6,6 +6,7 @@ from openviking.core.namespace import relative_uri_path
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, bounded_jobs
 from vikingbot.compile.renderer import output_path_key
+from vikingbot.compile.results import Document
 
 
 async def run(runtime, node, groups):
@@ -71,6 +72,24 @@ async def resolve_files(runtime, documents):
         path, items = item
         refs = sorted({ref for doc in items for ref in doc.source_refs})
         try:
+            # Reuse only the exact same path and bytes from completed workers.
+            first = items[0]
+            if first.path.lower().endswith(".md") and all(doc.path == first.path for doc in items):
+                try:
+                    body = await runtime.files.sandbox.read_file_bytes(first.workspace_path)
+                    if body.decode("utf-8").strip():
+                        for doc in items[1:]:
+                            if (
+                                await runtime.files.sandbox.read_file_bytes(doc.workspace_path)
+                                != body
+                            ):
+                                break
+                        else:
+                            runtime.metrics["identical_collision_reuses"] += 1
+                            return [Document(first.path, first.workspace_path, refs)]
+                except (OSError, UnicodeDecodeError):
+                    # An inconclusive probe leaves normal collision handling in charge.
+                    pass
             for _ in range(MAX_JOB_ATTEMPTS):
                 outputs = await runtime.generate(
                     f"reduce_merge-{digest(path)[:24]}",
