@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
 import yaml
+from markdown_it import MarkdownIt
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
@@ -666,8 +667,72 @@ class MarkdownParser(BaseParser):
         return headings
 
     def _smart_split_content(self, content: str, max_size: int) -> List[str]:
-        """Split by character budget, preserving an indivisible Markdown table row."""
+        """Split by character budget while keeping fitting top-level fences together."""
         max_chars = min(max_size, self.config.max_section_chars)
+        if len(content) > max_chars and ("```" in content or "~~~" in content):
+            fenced_parts = self._split_around_fences(content, max_chars)
+            if fenced_parts is not None:
+                return fenced_parts
+        return self._split_paragraphs(content, max_chars)
+
+    def _split_around_fences(self, content: str, max_chars: int) -> Optional[List[str]]:
+        """Use source slices so fenced text and line endings survive the split."""
+        offsets = [0, *(match.end() for match in re.finditer(r"\r\n|\r|\n", content))]
+        if offsets[-1] != len(content):
+            offsets.append(len(content))
+
+        fences = []
+        for token in MarkdownIt("commonmark").parse(content):
+            if token.type != "fence" or token.level != 0 or token.map is None:
+                continue
+            first, last = token.map
+            if last - first < 2:
+                continue
+            closing = content[offsets[last - 1] : offsets[last]].rstrip("\r\n")
+            marker = re.escape(token.markup[0])
+            if not re.fullmatch(rf" {{0,3}}{marker}{{{len(token.markup)},}}[ \t]*", closing):
+                continue
+            start = offsets[first]
+            fence = content[start : offsets[last]].rstrip("\r\n")
+            if len(fence) <= max_chars:
+                fences.append((start, fence))
+
+        if not fences:
+            return None
+
+        parts: List[str] = []
+
+        def append(part: str, separator: Optional[str]) -> None:
+            if (
+                parts
+                and separator is not None
+                and len(parts[-1]) + len(separator) + len(part) <= max_chars
+            ):
+                parts[-1] += separator + part
+            else:
+                parts.append(part)
+
+        def append_prose(raw: str) -> Optional[str]:
+            prose = raw.strip("\r\n")
+            if not prose.strip():
+                return raw
+            if len(prose) > max_chars:
+                # Character or table splitting can leave a partial block.
+                # Keep its output separate from the following complete fence.
+                parts.extend(self._split_paragraphs(prose, max_chars))
+                return None
+            append(prose, raw[: len(raw) - len(raw.lstrip("\r\n"))])
+            return raw[len(raw.rstrip("\r\n")) :]
+
+        cursor = 0
+        for start, fence in fences:
+            append(fence, append_prose(content[cursor:start]))
+            cursor = start + len(fence)
+        append_prose(content[cursor:])
+        return parts
+
+    def _split_paragraphs(self, content: str, max_chars: int) -> List[str]:
+        """Split by paragraph, preserving indivisible Markdown table rows."""
         paragraphs = content.split("\n\n")
         parts = []
         current = ""
