@@ -1,18 +1,8 @@
-import importlib.util
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[2] / "benchmark" / "cuvs" / "summarize_service_runs.py"
-)
-SPEC = importlib.util.spec_from_file_location("summarize_cuvs_service_runs", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-summary_module = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = summary_module
-SPEC.loader.exec_module(summary_module)
+from benchmark.cuvs import summarize_service_runs as summary_module
 
 
 def result_document(*, qps, p50, timestamp="run-1", dimension=8):
@@ -89,7 +79,7 @@ def test_summarize_service_runs_reports_process_median_and_mad(tmp_path):
     assert result["metrics"]["p50_ms"]["median"] == pytest.approx(1.1)
 
 
-def test_summarize_service_runs_rejects_mismatched_dataset(tmp_path):
+def test_summarize_service_runs_rejects_incompatible_or_repeated_runs(tmp_path):
     paths = [
         write_result(tmp_path / "run-1.json", result_document(qps=100, p50=1.0, timestamp="run-1")),
         write_result(
@@ -100,14 +90,6 @@ def test_summarize_service_runs_rejects_mismatched_dataset(tmp_path):
 
     with pytest.raises(ValueError, match="Dataset metadata differs"):
         summary_module.summarize_files(paths)
-
-
-def test_summarize_service_runs_rejects_duplicate_process(tmp_path):
-    document = result_document(qps=100, p50=1.0, timestamp="same-run")
-    paths = [
-        write_result(tmp_path / "run-1.json", document),
-        write_result(tmp_path / "renamed-run-1.json", document),
-    ]
-
+    paths[1].write_bytes(paths[0].read_bytes())
     with pytest.raises(ValueError, match="Duplicate process timestamp"):
         summary_module.summarize_files(paths)

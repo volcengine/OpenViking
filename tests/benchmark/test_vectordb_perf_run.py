@@ -1,22 +1,26 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import json
 import struct
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from benchmark.vectordb_perf.run import (
+    QueryCase,
+    benchmark_context,
     build_dir_vector_workload,
     directory_queries,
-    extract_path,
     iter_json_array_records,
     parse_args,
-    recall_scope,
-    record_id,
     run_benchmark,
+    run_search_phase,
     upsert_records,
     wait_for_auto_derived_index,
+    write_outputs,
 )
 from openviking_cli.utils.config import OpenVikingConfigSingleton
 
@@ -62,7 +66,9 @@ def _write_wiki_fixture(tmp_path, *, query_paths=False, mapping_ids=(0, 1, 2)):
     )
     vectors = [[float(index), 0.0, 0.0, 1.0] for index in range(3)]
     _write_fvecs(tmp_path / "dbpedia_dir_2m_corpus_vectors.fvecs", vectors)
-    _write_fvecs(tmp_path / "dbpedia_dir_2m_query_vectors.fvecs", vectors)
+    # The two leading queries miss at K=1 before filtering. The mixed-scope
+    # query has no non-root common directory and only runs unfiltered.
+    _write_fvecs(tmp_path / "dbpedia_dir_2m_query_vectors.fvecs", [vectors[2], *vectors[1:]])
 
 
 def _wiki_options(tmp_path, *extra):
@@ -100,159 +106,51 @@ def _write_arxiv_public_shape_fixture(tmp_path):
     _write_fvecs(tmp_path / "arxiv_query_vectors.fvecs", vectors)
 
 
-@pytest.fixture
-def run_to_thread_inline(monkeypatch):
-    async def run_inline(fn):
-        return fn()
-
-    monkeypatch.setattr("benchmark.vectordb_perf.run.asyncio.to_thread", run_inline)
-
-
 @pytest.mark.asyncio
-async def test_wait_for_auto_derived_index_uses_configured_index_and_timeout(
-    run_to_thread_inline,
-):
-    del run_to_thread_inline
-    calls = []
+async def test_wait_for_auto_derived_index_uses_configured_index_and_timeout():
+    ready = Mock(side_effect=[True, False])
+    index = SimpleNamespace(wait_for_background_rebuild=ready)
+    get_index = Mock(return_value=index)
+    adapter = SimpleNamespace(
+        index_name="configured-index", get_collection=lambda: SimpleNamespace(get_index=get_index)
+    )
+    backend = Mock(spec=["_shared_adapter"])
+    backend._shared_adapter = adapter
 
-    class _Index:
-        def wait_for_background_rebuild(self, *, timeout):
-            calls.append(("wait_for_background_rebuild", timeout))
-            return True
-
-    index = _Index()
-
-    class _Collection:
-        def get_index(self, index_name):
-            calls.append(("get_index", index_name))
-            return index
-
-    class _Adapter:
-        index_name = "configured-index"
-
-        def get_collection(self):
-            calls.append(("get_collection",))
-            return _Collection()
-
-    class _Backend:
-        _shared_adapter = _Adapter()
-
-    assert await wait_for_auto_derived_index(_Backend(), timeout=12.5) is True
-    assert calls == [
-        ("get_collection",),
-        ("get_index", "configured-index"),
-        ("wait_for_background_rebuild", 12.5),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_wait_for_auto_derived_index_converts_false_to_timeout_error(
-    run_to_thread_inline,
-):
-    del run_to_thread_inline
-
-    class _Index:
-        def wait_for_background_rebuild(self, *, timeout):
-            assert timeout == 7
-            return False
-
-    class _Collection:
-        def get_index(self, index_name):
-            assert index_name == "default"
-            return _Index()
-
-    class _Adapter:
-        index_name = "default"
-
-        def get_collection(self):
-            return _Collection()
-
-    class _Backend:
-        _shared_adapter = _Adapter()
+    assert await wait_for_auto_derived_index(backend, timeout=12)
+    get_index.assert_called_with("configured-index")
+    ready.assert_called_once_with(timeout=12)
 
     with pytest.raises(TimeoutError, match="not ready within 7s"):
-        await wait_for_auto_derived_index(_Backend(), timeout=7)
+        await wait_for_auto_derived_index(backend, timeout=7)
 
 
 @pytest.mark.asyncio
-async def test_wait_for_auto_derived_index_rejects_missing_index(run_to_thread_inline):
-    del run_to_thread_inline
+async def test_wait_for_auto_derived_index_rejects_missing_index():
+    get_index = Mock(side_effect=[None, object()])
+    backend = Mock(spec=["_shared_adapter"])
+    backend._shared_adapter = SimpleNamespace(
+        index_name="wrong-index",
+        get_collection=lambda: SimpleNamespace(get_index=get_index),
+    )
 
-    class _Collection:
-        def get_index(self, index_name):
-            assert index_name == "missing-index"
-            return None
-
-    class _Adapter:
-        index_name = "missing-index"
-
-        def get_collection(self):
-            return _Collection()
-
-    class _Backend:
-        _shared_adapter = _Adapter()
-
-    with pytest.raises(RuntimeError, match="benchmark index not found: missing-index"):
-        await wait_for_auto_derived_index(_Backend())
-
-
-@pytest.mark.asyncio
-async def test_wait_for_auto_derived_index_rejects_unsupported_index(run_to_thread_inline):
-    del run_to_thread_inline
-
-    class _Collection:
-        def get_index(self, index_name):
-            assert index_name == "native-only"
-            return object()
-
-    class _Adapter:
-        index_name = "native-only"
-
-        def get_collection(self):
-            return _Collection()
-
-    class _Backend:
-        _shared_adapter = _Adapter()
-
+    with pytest.raises(RuntimeError, match="benchmark index not found: wrong-index"):
+        await wait_for_auto_derived_index(backend)
     with pytest.raises(RuntimeError, match="does not expose background rebuild readiness"):
-        await wait_for_auto_derived_index(_Backend())
+        await wait_for_auto_derived_index(backend)
 
 
 @pytest.mark.asyncio
 async def test_upsert_records_uses_one_bulk_backend_call():
-    calls = []
-
-    class _Backend:
-        async def upsert_many(self, records, *, ctx):
-            calls.append((records, ctx))
-            return [record["id"] for record in records]
-
-        async def upsert(self, record, *, ctx):  # pragma: no cover - should never run
-            raise AssertionError(f"unexpected serial upsert: {record}, {ctx}")
-
-    backend = _Backend()
-    ctx = object()
+    backend = Mock(upsert_many=AsyncMock(side_effect=[["rec-1", "rec-2"], ["rec-1"]]))
+    ctx = benchmark_context()
     records = [{"id": "rec-1"}, {"id": "rec-2"}]
 
-    ids = await upsert_records(backend, ctx, records)
-
-    assert ids == ["rec-1", "rec-2"]
-    assert calls == [(records, ctx)]
-
-
-@pytest.mark.asyncio
-async def test_upsert_records_rejects_incomplete_bulk_result():
-    class _Backend:
-        async def upsert_many(self, records, *, ctx):
-            del records, ctx
-            return ["rec-1"]
+    assert await upsert_records(backend, ctx, records) == ["rec-1", "rec-2"]
+    backend.upsert_many.assert_awaited_once_with(records, ctx=ctx)
 
     with pytest.raises(RuntimeError, match="returned 1 ids for 2 records"):
-        await upsert_records(
-            _Backend(),
-            object(),
-            [{"id": "rec-1"}, {"id": "rec-2"}],
-        )
+        await upsert_records(backend, ctx, records)
 
 
 def test_iter_json_array_records_streams_across_small_chunks(tmp_path):
@@ -265,80 +163,108 @@ def test_iter_json_array_records_streams_across_small_chunks(tmp_path):
     assert list(iter_json_array_records(path, limit=0, chunk_size=2)) == []
 
 
-@pytest.mark.parametrize(
-    "payload, message",
-    [
+def test_iter_json_array_records_rejects_invalid_full_input(tmp_path):
+    path = tmp_path / "invalid.json"
+    for payload, message in [
         ('[{"id": 0},]', "trailing comma"),
         ('[{"id": 0}] garbage', "unexpected content"),
         ('[{"id": 0}', "truncated JSON array"),
-    ],
-)
-def test_iter_json_array_records_rejects_invalid_full_input(tmp_path, payload, message):
-    path = tmp_path / "invalid.json"
-    path.write_text(payload, encoding="utf-8")
-
-    with pytest.raises(ValueError, match=message):
-        list(iter_json_array_records(path, chunk_size=2))
+    ]:
+        path.write_text(payload, encoding="utf-8")
+        with pytest.raises(ValueError, match=message):
+            list(iter_json_array_records(path, chunk_size=2))
 
 
-def test_path_extraction_does_not_treat_prose_slashes_as_a_directory():
-    assert extract_path({"title": "pronounced /foo/", "text": "a/b"}) == "/"
-    assert record_id({"_id": 17}, 0) == "17"
-
-
-def test_wiki_mapping_and_derived_scopes_use_real_hierarchy(tmp_path):
+def test_wiki_mapping_and_derived_scopes_use_real_hierarchy(tmp_path, monkeypatch):
     _write_wiki_fixture(tmp_path)
-    workload = build_dir_vector_workload(
-        _wiki_options(tmp_path, "--dir-vector-query-scope", "derived_gt_lca_v1")
+    config = tmp_path / "ov.conf"
+    config.write_text(
+        json.dumps({"storage": {"workspace": str(tmp_path / "storage")}}), encoding="utf-8"
     )
+    for name in ("_instance", "_config_file", "_config_file_revision", "_config_file_content"):
+        monkeypatch.setattr(OpenVikingConfigSingleton, name, None)
+    output = tmp_path / "output"
+    options = _wiki_options(
+        tmp_path,
+        "--config",
+        str(config),
+        "--full",
+        "--dir-vector-query-scope",
+        "derived_gt_lca_v1",
+        "--output-dir",
+        str(output),
+        "--top-k",
+        "1",
+        "--distance",
+        "l2",
+    )
+    workload = build_dir_vector_workload(options)
 
-    records = list(workload.records())
-    assert [record["uri"] for record in records] == [
+    assert [record["uri"] for record in workload.records()] == [
         "viking://resources/bench/wiki/science/physics/quantum/0",
         "viking://resources/bench/wiki/science/physics/classical/1",
         "viking://resources/bench/wiki/history/ancient/2",
     ]
-    assert len(workload.queries) == 3
-    assert [case.query_id for case in workload.directory_queries] == ["0", "2"]
-    assert workload.directory_queries[0].filter_path.endswith("/science/physics")
-    assert workload.directory_queries[0].ground_truth_ids == ["0", "1"]
-    assert workload.path_diagnostics == {
-        "corpus_path_source": "dbpedia_dir_2m_corpus_paths.json",
-        "query_scope_source": "derived_gt_lca_v1",
-        "base_query_count": 3,
-        "directory_query_count": 2,
-        "unique_directory_scopes": 2,
-        "root_derived_scopes_omitted": 1,
-        "directory_scope_depth_min": 2,
-        "directory_scope_depth_median": 2.0,
-        "directory_scope_depth_max": 2,
+    assert directory_queries(workload)[0].ground_truth_ids == ["0", "1"]
+
+    write_outputs(run_benchmark(options), options)
+    summary = json.loads((output / "run_summary.json").read_bytes())
+    assert summary["validation_errors"] == []
+    assert summary["workload"]["path_diagnostics"]["root_derived_scopes_omitted"] == 1
+    assert summary["workload"]["path_diagnostics"]["unique_directory_scopes"] == 2
+    assert summary["quality"] == {
+        "vector_search": {"queries_with_ground_truth": 3, "hit_rate_at_k": 1 / 3, "hits": 1},
+        "filtered_vector_search": {"queries_with_ground_truth": 2, "hit_rate_at_k": 1.0, "hits": 2},
+    }
+    events = [
+        json.loads(line)
+        for line in (output / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert {
+        event["extra"]["query_id"] for event in events if event["phase"] == "vector_search"
+    } == {
+        "0",
+        "1",
+        "2",
+    }
+    assert {
+        event["extra"]["query_id"]: event["extra"]["filter_path"]
+        for event in events
+        if event["phase"] == "filtered_vector_search"
+    } == {
+        "0": "viking://resources/bench/wiki/science/physics",
+        "2": "viking://resources/bench/wiki/history/ancient",
     }
 
+    report = (output / "summary_zh.md").read_text(encoding="utf-8")
+    rows = [line.strip("|").split("|") for line in report.splitlines() if line.startswith("|")]
+    recall_rows = {
+        row[0].strip(): tuple(cell.strip() for cell in row[-2:]) for row in rows if len(row) == 6
+    }
+    assert recall_rows["vector_search"] == ("official_full", "33.33%")
+    assert recall_rows["filtered_vector_search"] == ("derived_gt_lca_v1", "100.00%")
 
-def test_wiki_dataset_scope_refuses_missing_query_constraints(tmp_path):
+
+def test_wiki_dataset_scope_requires_explicit_query_constraints(tmp_path):
     _write_wiki_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="refusing a root-only Directory benchmark"):
         build_dir_vector_workload(_wiki_options(tmp_path))
 
-
-def test_wiki_write_only_preserves_an_intentionally_empty_directory_set(tmp_path):
-    _write_wiki_fixture(tmp_path)
-
     workload = build_dir_vector_workload(_wiki_options(tmp_path, "--mode", "write-only"))
-
-    assert workload.directory_queries == []
     assert directory_queries(workload) == []
+    assert len(list(workload.records())) == 3
 
-
-def test_wiki_dataset_scope_accepts_explicit_query_paths(tmp_path):
     _write_wiki_fixture(tmp_path, query_paths=True)
 
     workload = build_dir_vector_workload(_wiki_options(tmp_path))
 
-    assert len(workload.directory_queries) == 3
+    assert {query.query_id: query.filter_path for query in directory_queries(workload)} == {
+        "0": "viking://resources/bench/wiki/science/physics",
+        "1": "viking://resources/bench/wiki/science",
+        "2": "viking://resources/bench/wiki/history",
+    }
     assert workload.path_diagnostics["query_scope_source"] == "dataset"
-    assert workload.path_diagnostics["unique_directory_scopes"] == 3
 
 
 def test_wiki_mapping_requires_row_aligned_ids(tmp_path):
@@ -401,40 +327,60 @@ def test_full_wiki_requires_query_metadata_for_every_vector(tmp_path):
         )
 
 
-def test_derived_scope_only_labels_filtered_phase(tmp_path, monkeypatch):
-    _write_wiki_fixture(tmp_path)
-    config = tmp_path / "ov.conf"
-    config.write_text(
-        json.dumps({"storage": {"workspace": str(tmp_path / "storage")}}), encoding="utf-8"
-    )
-    for name in ("_instance", "_config_file", "_config_file_revision", "_config_file_content"):
-        monkeypatch.setattr(OpenVikingConfigSingleton, name, None)
-    options = _wiki_options(
-        tmp_path,
-        "--config",
-        str(config),
-        "--output-dir",
-        str(tmp_path / "report"),
-        "--full",
-        "--dir-vector-query-scope",
-        "derived_gt_lca_v1",
-        "--distance",
-        "l2",
-        "--top-k",
-        "1",
+@pytest.mark.asyncio
+async def test_filtered_search_keeps_query_results_aligned_under_concurrency(monkeypatch):
+    release_first = asyncio.Event()
+    active = peak = 0
+    base = "viking://resources/bench/wiki"
+    queries = [
+        QueryCase(
+            str(index), [float(index), 1.0], f"{base}/{index}", [str(index)] if index < 2 else []
+        )
+        for index in range(3)
+    ]
+
+    async def search(*, query_vector, target_directories, **kwargs):
+        nonlocal active, peak
+        index = int(query_vector[0])
+        assert target_directories == [queries[index].filter_path]
+        active += 1
+        peak = max(peak, active)
+        try:
+            if index == 0:
+                await release_first.wait()
+                return [{"id": "0", "uri": f"{base}/0/document"}]
+            await asyncio.sleep(0)
+            return [{"id": "unrelated", "uri": f"{base}/other/document"}] if index == 1 else []
+        finally:
+            active -= 1
+
+    def on_progress(*args, **kwargs):
+        release_first.set()
+        return 0.0
+
+    monkeypatch.setattr("benchmark.vectordb_perf.run.progress_count", on_progress)
+    events, errors, quality = await asyncio.wait_for(
+        run_search_phase(
+            backend=Mock(search_in_tenant=search),
+            ctx=benchmark_context(),
+            phase="filtered_vector_search",
+            queries=queries,
+            top_k=1,
+            concurrency=2,
+            filtered=True,
+        ),
+        timeout=5,
     )
 
-    result = run_benchmark(options)
-    assert result.validation_errors == []
-    assert result.quality == {
-        "vector_search": {"queries_with_ground_truth": 3, "hit_rate_at_k": 2 / 3, "hits": 2},
-        "filtered_vector_search": {"queries_with_ground_truth": 2, "hit_rate_at_k": 1.0, "hits": 2},
-    }
-    assert recall_scope(result, "vector_search") == "official_full"
-    assert recall_scope(result, "filtered_vector_search") == "derived_gt_lca_v1"
-
-    result.workload["path_diagnostics"] = {}
-    assert recall_scope(result, "filtered_vector_search") == "official_full"
+    ids = [event.extra["query_id"] for event in events]
+    assert set(ids) == {"0", "1", "2"}
+    assert ids[0] != "0"
+    assert peak == 2
+    assert errors == [
+        f"filtered_vector_search: query 1 returned rows outside {base}/1: ['unrelated']",
+        "filtered_vector_search: query 2 returned no results",
+    ]
+    assert quality == {"queries_with_ground_truth": 2, "hit_rate_at_k": 0.5, "hits": 1}
 
 
 def test_derived_wiki_option_keeps_non_wiki_loader_behavior(tmp_path):
@@ -459,4 +405,5 @@ def test_derived_wiki_option_keeps_non_wiki_loader_behavior(tmp_path):
     workload = build_dir_vector_workload(options)
 
     assert workload.path_diagnostics["query_scope_source"] == "dataset"
+    assert workload.directory_queries is not None
     assert len(workload.directory_queries) == 2

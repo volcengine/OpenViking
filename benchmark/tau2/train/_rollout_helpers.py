@@ -3,10 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared private helpers for the Tau2 vikingbot and native rollout executors.
 
-These are intentionally underscore-prefixed: they remain an internal surface
-between the two executor implementations and the tests that reach through
-``rollout_executor.py`` re-exports. Do not import them from outside the
-``benchmark.tau2.train`` package.
+These helpers are internal to ``benchmark.tau2.train``.
 """
 
 from __future__ import annotations

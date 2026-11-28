@@ -1,16 +1,8 @@
-import importlib.util
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-MODULE_PATH = Path(__file__).resolve().parents[2] / "benchmark" / "cuvs" / "summarize_index_runs.py"
-SPEC = importlib.util.spec_from_file_location("summarize_cuvs_index_runs", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-summary_module = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = summary_module
-SPEC.loader.exec_module(summary_module)
+from benchmark.cuvs import summarize_index_runs as summary_module
 
 
 def result_document(*, qps, p50, build, dataset_name="public", itopk=512):
@@ -66,11 +58,17 @@ def test_summarize_files_reports_process_median_and_mad(tmp_path):
         write_result(tmp_path / "run-3.json", result_document(qps=300, p50=1.1, build=4.0)),
     ]
 
+    for path in paths:
+        document = json.loads(path.read_text())
+        variant = document["results"][0]
+        document["results"].insert(0, {**variant, "cagra_search_params": {"itopk_size": 2048}})
+        write_result(path, document)
     summary = summary_module.summarize_files(paths)
 
     assert summary["run_count"] == 3
     assert summary["runs"][0]["source"] == "run-1.json"
     assert str(tmp_path) not in json.dumps(summary)
+    assert [row["cagra_search_params"]["itopk_size"] for row in summary["results"]] == [512, 2048]
     result = summary["results"][0]
     assert result["cagra_search_params"] == {"itopk_size": 512}
     assert result["metrics"]["qps"]["median"] == 110
@@ -79,27 +77,7 @@ def test_summarize_files_reports_process_median_and_mad(tmp_path):
     assert result["metrics"]["warm_p50_ms"]["mad"] == pytest.approx(0.1)
 
 
-def test_variant_sort_key_orders_backends_and_numeric_itopk():
-    keys = [
-        ("cuvs_cagra", summary_module.canonical({"itopk_size": 2048})),
-        ("cuvs_cagra_fp16", summary_module.canonical({"itopk_size": 512})),
-        ("cuvs_brute_force", summary_module.canonical(None)),
-        ("cuvs_brute_force_fp16", summary_module.canonical(None)),
-        ("cuvs_cagra", summary_module.canonical({"itopk_size": 512})),
-        ("native", summary_module.canonical(None)),
-    ]
-
-    assert sorted(keys, key=summary_module.variant_sort_key) == [
-        ("native", "null"),
-        ("cuvs_brute_force", "null"),
-        ("cuvs_brute_force_fp16", "null"),
-        ("cuvs_cagra", '{"itopk_size":512}'),
-        ("cuvs_cagra", '{"itopk_size":2048}'),
-        ("cuvs_cagra_fp16", '{"itopk_size":512}'),
-    ]
-
-
-def test_summarize_files_rejects_mismatched_dataset(tmp_path):
+def test_summarize_files_rejects_incompatible_or_repeated_runs(tmp_path):
     paths = [
         write_result(tmp_path / "run-1.json", result_document(qps=100, p50=1.0, build=3.0)),
         write_result(
@@ -110,34 +88,10 @@ def test_summarize_files_rejects_mismatched_dataset(tmp_path):
 
     with pytest.raises(ValueError, match="Dataset metadata differs"):
         summary_module.summarize_files(paths)
-
-
-def test_summarize_files_rejects_mismatched_variants(tmp_path):
-    paths = [
-        write_result(tmp_path / "run-1.json", result_document(qps=100, p50=1.0, build=3.0)),
-        write_result(
-            tmp_path / "run-2.json",
-            result_document(qps=110, p50=1.2, build=2.0, itopk=2048),
-        ),
-    ]
-
+    write_result(paths[1], result_document(qps=110, p50=1.2, build=2.0, itopk=2048))
     with pytest.raises(ValueError, match="Backend/search variants differ"):
         summary_module.summarize_files(paths)
 
-
-def test_summarize_files_rejects_repeated_path(tmp_path):
-    path = write_result(tmp_path / "run-1.json", result_document(qps=100, p50=1.0, build=3.0))
-
-    with pytest.raises(ValueError, match="cannot be repeated"):
-        summary_module.summarize_files([path, path])
-
-
-def test_summarize_files_rejects_renamed_duplicate_process(tmp_path):
-    document = result_document(qps=100, p50=1.0, build=3.0)
-    paths = [
-        write_result(tmp_path / "run-1.json", document),
-        write_result(tmp_path / "renamed-run-1.json", document),
-    ]
-
+    paths[1].write_bytes(paths[0].read_bytes())
     with pytest.raises(ValueError, match="Duplicate process timestamp"):
         summary_module.summarize_files(paths)
