@@ -101,7 +101,7 @@ def _service(
 
     return SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read_visible=fake_read, abstract=fake_abstract),
         sessions=SimpleNamespace(get=fake_get),
         viking_fs=None,
         vlm_resolver=vlm_resolver,
@@ -185,7 +185,7 @@ async def test_disabled_intent_does_not_load_session_or_expand_query():
     get_planner = AsyncMock()
     service = SimpleNamespace(
         search=SimpleNamespace(find=find, is_intent_enabled=lambda: False),
-        fs=SimpleNamespace(read=None),
+        fs=SimpleNamespace(read_visible=None),
         sessions=SimpleNamespace(get=get_session),
         vlm_resolver=SimpleNamespace(get_query_planner=get_planner),
     )
@@ -227,7 +227,7 @@ async def test_resource_bucket_uses_actor_scope_without_other_peer_scan():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=None),
+        fs=SimpleNamespace(read_visible=None),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -314,7 +314,7 @@ async def test_purpose_quotas_are_not_truncated_by_global_limit():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read_visible=fake_read, abstract=fake_abstract),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -480,7 +480,7 @@ async def test_only_candidates_that_can_deepen_are_read():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read),
+        fs=SimpleNamespace(read_visible=fake_read),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -703,7 +703,7 @@ def _skill_service(hits, abstracts=None, *, finds=None, reads=None, bodies=None)
 
     return SimpleNamespace(
         search=SimpleNamespace(find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read_visible=fake_read, abstract=fake_abstract),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -909,7 +909,7 @@ async def test_a_filter_only_query_stays_on_the_generic_path():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=None, abstract=fake_abstract),
+        fs=SimpleNamespace(read_visible=None, abstract=fake_abstract),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -932,7 +932,7 @@ async def test_a_failed_skills_search_leaves_the_request_standing():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=None, abstract=None),
+        fs=SimpleNamespace(read_visible=None, abstract=None),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -1013,7 +1013,7 @@ async def test_flat_retrieval_collapses_skills_and_leaves_other_hits_alone():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read, abstract=fake_abstract),
+        fs=SimpleNamespace(read_visible=fake_read, abstract=fake_abstract),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -1053,7 +1053,7 @@ def _bucket_service(hits_by_target, finds=None):
 
     return SimpleNamespace(
         search=SimpleNamespace(find=fake_find, find_skills=fake_find_skills),
-        fs=SimpleNamespace(read=fake_read),
+        fs=SimpleNamespace(read_visible=fake_read),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -1081,7 +1081,7 @@ async def test_preset_scope_directories_are_not_served():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=fake_read),
+        fs=SimpleNamespace(read_visible=fake_read),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -1219,7 +1219,7 @@ def _flat_service(hits, finds=None):
 
     return SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=None),
+        fs=SimpleNamespace(read_visible=None),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -1303,7 +1303,7 @@ async def test_context_rerank_scores_against_the_expanded_queries_once(monkeypat
     get_session = AsyncMock(return_value=session)
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=None),
+        fs=SimpleNamespace(read_visible=None),
         sessions=SimpleNamespace(get=get_session),
         viking_fs=None,
         vlm_resolver=SimpleNamespace(get_query_planner=AsyncMock(return_value=planner)),
@@ -1527,7 +1527,7 @@ async def test_context_rerank_keeps_the_other_peer_penalty():
 
     service = SimpleNamespace(
         search=SimpleNamespace(find=fake_find),
-        fs=SimpleNamespace(read=None),
+        fs=SimpleNamespace(read_visible=None),
         sessions=SimpleNamespace(),
         viking_fs=None,
     )
@@ -1541,3 +1541,109 @@ async def test_context_rerank_keeps_the_other_peer_penalty():
     )
 
     assert [(entry.uri, entry.score) for entry in result.entries] == [(own, 0.85)]
+
+
+async def test_deepened_skill_recall_does_not_restore_privacy_placeholders():
+    from openviking.server.user_config import ResolvedPrivacyConfig
+    from openviking.service.fs_service import FSService
+    from openviking.storage.viking_fs import VikingFS
+
+    ctx = _ctx()
+    secret = "sk-REAL-SECRET-999999"
+    placeholder = "{{ov_privacy:skill:deploy:api_key}}"
+    skill_md_uri = f"{DEPLOY}/SKILL.md"
+    skill_body = f"# Deploy\n\nAuthorization: Bearer {placeholder}\n"
+
+    viking_fs = VikingFS(agfs=SimpleNamespace())
+    viking_fs._async_agfs = SimpleNamespace(
+        stat=AsyncMock(return_value={"isDir": False, "size": len(skill_body.encode())}),
+        read=AsyncMock(return_value=skill_body.encode()),
+    )
+    viking_fs.abstract = AsyncMock(return_value="name: deploy")
+    privacy_configs = SimpleNamespace(
+        get_settings=AsyncMock(return_value=ResolvedPrivacyConfig(mode="off", restore=True)),
+        get_current=AsyncMock(return_value=SimpleNamespace(values={"api_key": secret})),
+    )
+    fs_service = FSService(
+        viking_fs=viking_fs,
+        privacy_config_service=privacy_configs,
+        privacy_sanitizer=SimpleNamespace(
+            max_content_bytes=1024 * 1024,
+            settings_for_uri=AsyncMock(return_value=None),
+            sanitize=AsyncMock(),
+        ),
+    )
+    assert secret in await fs_service.read(skill_md_uri, ctx=ctx)
+
+    async def fake_find_skills(**kwargs):
+        del kwargs
+        return _FakeFindResult(skills=[_skill_hit(skill_md_uri, 0.9, "name: deploy")])
+
+    service = SimpleNamespace(
+        search=SimpleNamespace(find_skills=fake_find_skills),
+        fs=fs_service,
+        sessions=SimpleNamespace(),
+        viking_fs=viking_fs,
+    )
+    result = await _assemble_skills(service, detail={"skills": "full"})
+
+    assert len(result.entries) == 1
+    assert result.entries[0].detail == "full"
+    assert placeholder in result.entries[0].text
+    assert secret not in result.entries[0].text
+    assert secret not in result.rendered
+
+
+async def test_context_assembly_applies_read_visible_sanitization_and_memory_projection():
+    from openviking.privacy.reference import build_privacy_field_reference
+    from openviking.server.user_config import ResolvedPrivacyConfig
+    from openviking.service.fs_service import FSService
+    from openviking.storage.viking_fs import VikingFS
+
+    ctx = _ctx()
+    uri = f"{USER_ROOT}/memories/events/incident.md"
+    secret = "sk-RAW-SECRET-123456"
+    ref = build_privacy_field_reference(ctx.user.user_id, "credential", "prod", "api_key")
+    raw_body = (
+        f'# Summary\nRotated token {secret}.\n\n<!-- MEMORY_FIELDS\n{{"internal":"hidden"}}\n-->'
+    )
+    sanitized_body = f"# Summary\nRotated token {ref}."
+
+    viking_fs = VikingFS(agfs=SimpleNamespace())
+    viking_fs._async_agfs = SimpleNamespace(
+        stat=AsyncMock(return_value={"isDir": False, "size": len(raw_body.encode())}),
+        read=AsyncMock(return_value=raw_body.encode()),
+    )
+    sanitize = AsyncMock(return_value=SimpleNamespace(content=sanitized_body))
+    fs_service = FSService(
+        viking_fs=viking_fs,
+        privacy_sanitizer=SimpleNamespace(
+            max_content_bytes=1024 * 1024,
+            settings_for_uri=AsyncMock(return_value=ResolvedPrivacyConfig(mode="auto_strict")),
+            sanitize=sanitize,
+        ),
+    )
+    service = SimpleNamespace(
+        search=SimpleNamespace(
+            find=AsyncMock(return_value=_FakeFindResult(memories=[_hit(uri, 0.9, "incident")]))
+        ),
+        fs=fs_service,
+        sessions=SimpleNamespace(),
+        viking_fs=viking_fs,
+    )
+
+    result = await assemble_context(
+        service=service,
+        ctx=ctx,
+        params=AssembleParams(query="incident", quotas={"events": 1}, peer_scope="actor"),
+    )
+
+    sanitize.assert_awaited_once()
+    assert "MEMORY_FIELDS" not in sanitize.await_args.args[0]
+    assert sanitize.await_args.kwargs["uri"] == uri
+    assert [(entry.uri, entry.detail, entry.text) for entry in result.entries] == [
+        (uri, "full", sanitized_body)
+    ]
+    assert ref in result.rendered
+    assert secret not in result.rendered
+    assert "MEMORY_FIELDS" not in result.rendered

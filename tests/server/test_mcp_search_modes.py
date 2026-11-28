@@ -125,7 +125,9 @@ async def test_context_mode_applies_valid_context_only_arguments(monkeypatch):
     storage_result = FindResult(memories=hits, resources=[], skills=[])
     service = SimpleNamespace(
         search=SimpleNamespace(find=AsyncMock(return_value=storage_result)),
-        fs=SimpleNamespace(read=AsyncMock(return_value="# Summary\nOverview of kept result")),
+        fs=SimpleNamespace(
+            read_visible=AsyncMock(return_value="# Summary\nOverview of kept result")
+        ),
     )
     monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
 
