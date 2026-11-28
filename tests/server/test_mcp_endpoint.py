@@ -879,26 +879,48 @@ async def test_search_context_mode_returns_assembled_context(service, monkeypatc
     assert params.rewrite_max_bullets == 4
 
 
+@pytest.mark.parametrize("configured", [0.35, 0.0, -0.2, 1.2])
+@pytest.mark.parametrize("explicit", [None, 0.0, 0.8])
 async def test_search_mode_defaults_preserve_list_threshold_but_not_context_threshold(
-    service, monkeypatch
+    service, monkeypatch, configured, explicit
 ):
+    from openviking_cli.utils.config.retrieval_config import RetrievalConfig
+
+    config = SimpleNamespace(retrieval=RetrievalConfig(mcp_min_score=configured))
+    monkeypatch.setattr(mcp_endpoint, "get_openviking_config", lambda: config, raising=False)
     captured = {}
 
-    async def fake_search(**kwargs):
-        captured["list_threshold"] = kwargs["score_threshold"]
-        return SimpleNamespace(memories=[], resources=[], skills=[])
+    def capture(name):
+        async def retrieve(**kwargs):
+            captured[name] = kwargs["score_threshold"]
+            return SimpleNamespace(memories=[], resources=[], skills=[])
+
+        return retrieve
 
     async def fake_assemble_context(*, service, ctx, params):
         captured["context_threshold"] = params.score_threshold
         return SimpleNamespace(digest="", rendered="")
 
-    monkeypatch.setattr(service.search, "search", fake_search)
+    monkeypatch.setattr(service.search, "find", capture("find_threshold"))
+    monkeypatch.setattr(service.search, "find_skills", capture("skill_threshold"))
+    monkeypatch.setattr(service.search, "search", capture("list_threshold"))
     monkeypatch.setattr(mcp_endpoint, "assemble_context", fake_assemble_context)
 
-    await search(query="list default")
-    await search(query="context default", mode="context")
+    arguments = {} if explicit is None else {"min_score": explicit}
+    await mcp_endpoint.mcp.call_tool("find", {"query": "find default", **arguments})
+    await mcp_endpoint.mcp.call_tool(
+        "find", {"query": "skill default", "context_type": "skill", **arguments}
+    )
+    await mcp_endpoint.mcp.call_tool("search", {"query": "list default", **arguments})
+    await mcp_endpoint.mcp.call_tool("search", {"query": "context default", "mode": "context"})
 
-    assert captured == {"list_threshold": 0.35, "context_threshold": None}
+    expected = configured if explicit is None else explicit
+    assert captured == {
+        "find_threshold": expected,
+        "skill_threshold": expected,
+        "list_threshold": expected,
+        "context_threshold": None,
+    }
 
 
 async def test_retrieval_tools_describe_advanced_parameters_without_changing_contracts():

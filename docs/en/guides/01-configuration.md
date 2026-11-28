@@ -1333,6 +1333,7 @@ Configuration for session intent analysis and context assembly timeouts.
   "retrieval": {
     "enable_intent": true,
     "apply_rerank_to_context": false,
+    "mcp_min_score": 0.35,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1343,6 +1344,7 @@ Configuration for session intent analysis and context assembly timeouts.
 |-----------|------|-------------|---------|
 | `enable_intent` | bool | Run intent analysis and query planning when `search()` receives a `session_id`. | `true` |
 | `apply_rerank_to_context` | bool | Rerank `mode="context"` candidates with the configured [`rerank`](#rerank) model, once per request against the original query and its expansions, before quotas and the token budget apply. Needs a usable `rerank` config; image queries keep vector scores. | `false` |
+| `mcp_min_score` | float | Default score threshold for MCP `find` and list-mode `search` when `min_score` is omitted. Explicit values, including `0`, take precedence. Does not change REST, context-mode, or legacy recall defaults. Must be finite; valid score ranges depend on the backend. | `0.35` |
 
 Session intent analysis in ordinary `search()` and query expansion in `mode="context"` share `recall_intent_timeout_s`. Context digest rewriting uses a separate timeout:
 

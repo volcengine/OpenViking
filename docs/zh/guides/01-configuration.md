@@ -1338,6 +1338,7 @@ Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 
   "retrieval": {
     "enable_intent": true,
     "apply_rerank_to_context": false,
+    "mcp_min_score": 0.35,
     "recall_intent_timeout_s": 5.0,
     "recall_rewrite_timeout_s": 30.0
   }
@@ -1348,6 +1349,7 @@ Choice 不受这个 Noul 专用开关影响，始终将全部候选放入共享 
 |------|------|------|--------|
 | `enable_intent` | bool | `search()` 收到 `session_id` 时是否执行意图分析和查询规划。 | `true` |
 | `apply_rerank_to_context` | bool | 是否用已配置的 [`rerank`](#rerank) 模型重排 `mode="context"` 的候选：每个请求用原始查询及其扩展查询统一重排一次，在配额和 token 预算之前执行。需要可用的 `rerank` 配置；图像查询保持向量分数。 | `false` |
+| `mcp_min_score` | float | MCP `find` 与列表模式 `search` 省略 `min_score` 时的默认分数阈值。显式参数（包括 `0`）优先；不改变 REST、上下文模式或旧 recall 的默认值。必须为有限数值，合法分数范围取决于后端。 | `0.35` |
 
 普通 `search()` 的会话意图分析和 `mode="context"` 的查询扩展共用 `recall_intent_timeout_s`；上下文 digest 重写使用独立的超时配置：
 

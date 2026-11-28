@@ -109,6 +109,7 @@ from openviking_cli.exceptions import (
 )
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -720,7 +721,7 @@ async def find(
     query: str,
     target_uri: str = "",
     limit: int = 10,
-    min_score: float = 0.35,
+    min_score: Optional[float] = None,
     level: Annotated[
         Optional[List[int]],
         Field(description=_FIND_LEVEL_DESCRIPTION),
@@ -746,6 +747,8 @@ async def find(
         raise InvalidArgumentError(str(exc)) from exc
     service = get_service()
     ctx = _get_ctx()
+    if min_score is None:
+        min_score = get_openviking_config().retrieval.mcp_min_score
     context_filter = resolve_search_filter(
         request_filter=None,
         context_type=context_type,
@@ -1012,7 +1015,9 @@ async def search(
         target_uri=target_uri,
         session=session,
         limit=limit,
-        score_threshold=0.35 if min_score is None else min_score,
+        score_threshold=(
+            get_openviking_config().retrieval.mcp_min_score if min_score is None else min_score
+        ),
         filter=context_filter,
         context_types=[ContextType(value) for value in resolve_context_types(context_type)],
         level=level,
