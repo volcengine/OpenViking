@@ -59,6 +59,8 @@ The first run is full. Subsequent runs use the last successful baseline. The nam
 
 The direct `ov compile --from … --to … --skill …` form is deprecated and still performs a one-off full compile.
 
+To change the Compile storage backend, see the [server configuration guide](../guides/01-configuration.md#compile-store).
+
 ## Open the body page
 
 ```bash

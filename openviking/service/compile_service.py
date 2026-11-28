@@ -14,7 +14,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from openviking.concurrency import bounded_map
-from openviking.core.identifiers import validate_user_id
+from openviking.core.identifiers import MAX_IDENTIFIER_LENGTH, validate_user_id
 from openviking.core.namespace import classify_uri, uri_parts
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
@@ -225,7 +225,9 @@ class CompileConfigUpdate(CompileCreateRequest):
     auto_update: bool
     update_schedule: UpdateSchedule | None = None
     updated_by: str | None = Field(
-        default=None, description="User credited with this update. Defaults to the requesting user."
+        default=None,
+        max_length=MAX_IDENTIFIER_LENGTH,
+        description="User credited with this update. Defaults to the requesting user.",
     )
 
 
@@ -583,8 +585,26 @@ class CompileService:
         record["auto_update"] = auto_update
         record["update_schedule"] = schedule
 
+    @staticmethod
+    def _reject_nul(value: Any) -> None:
+        if isinstance(value, str):
+            if "\x00" in value:
+                raise InvalidArgumentError("PostgreSQL Compile settings cannot contain U+0000")
+        elif isinstance(value, Mapping):
+            for key, item in value.items():
+                CompileService._reject_nul(key)
+                CompileService._reject_nul(item)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                CompileService._reject_nul(item)
+
     async def _settings(
-        self, request: CompileInputs, ctx: RequestContext, owner_user_id: str, compile_name: str
+        self,
+        request: CompileInputs,
+        ctx: RequestContext,
+        owner_user_id: str,
+        compile_name: str,
+        updated_by: str | None = None,
     ) -> dict[str, Any]:
         """Save the caller's executor identity independently of scheduling."""
         if request.is_memory_mode:
@@ -610,6 +630,8 @@ class CompileService:
                 }
             },
         )
+        if getattr(self._require_lifecycle().store, "dialect", None) == "postgresql":
+            self._reject_nul((record, updated_by))
         if private:
             record["execution_context"]["private_args"] = await self._encrypt_private_args(
                 ctx.account_id, private
@@ -620,7 +642,7 @@ class CompileService:
         return record
 
     async def create_compile_task(
-        self, request: CompileCreateRequest, *, ctx: RequestContext
+        self, request: CompileCreateRequest, ctx: RequestContext
     ) -> dict[str, str]:
         """Save configuration and enqueue target tagging without executing Compile or snapshots."""
         lifecycle = self._require_lifecycle()
@@ -635,11 +657,11 @@ class CompileService:
                     ctx.account_id, owner_user_id, compile_name, record, raise_on_error=True
                 )
 
-        await lifecycle.store.create(
+        await lifecycle.create_config(
             ctx.account_id,
             owner_user_id,
+            compile_name,
             record,
-            compile_name=compile_name,
             before_publish=prepare_target_and_schedule,
         )
         return {"compile_name": compile_name}
@@ -647,7 +669,6 @@ class CompileService:
     async def create(
         self,
         request: CompileRequest,
-        *,
         connection: Mapping[str, Any],
         ctx: RequestContext,
         idempotency_key: str | None = None,
@@ -675,10 +696,14 @@ class CompileService:
         owner_user_id = (request.args or {}).get("owner_user_id", ctx.user.user_id)
         if compile_name and locked_record is None:
             lifecycle = self._require_lifecycle()
-            await lifecycle.store.require_config_exists(ctx.account_id, owner_user_id, compile_name)
+            if (
+                await lifecycle.get_config(ctx.account_id, owner_user_id, compile_name, fresh=True)
+                is None
+            ):
+                raise NotFoundError(compile_name, "compile name")
             task = None
             try:
-                async with lifecycle.store.edit(
+                async with lifecycle.edit_config(
                     ctx.account_id, owner_user_id, compile_name
                 ) as record:
                     await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
@@ -761,7 +786,9 @@ class CompileService:
             ctx=ctx,
             idempotency_key=idempotency_key,
             submission_payload=submitted if idempotency_key else None,
-            submission_private_payload={} if compile_name else None,
+            submission_private_payload=submitted_private
+            if idempotency_key or compile_name
+            else None,
             on_task_created=record_created if compile_name else None,
             retry_enqueue=trigger == "scheduled",
         )
@@ -937,14 +964,13 @@ class CompileService:
         self,
         compile_name: str,
         ctx: RequestContext,
-        *,
         action: AclAction | None = AclAction.READ,
         owner_user_id: str | None = None,
     ) -> dict[str, Any]:
         """Load the selected owner's config. An action of None checks ownership scope only."""
         validate_compile_name(compile_name)
         lifecycle = self._require_lifecycle()
-        record = await lifecycle.store.get(
+        record = await lifecycle.get_config(
             ctx.account_id,
             ctx.user.user_id if owner_user_id is None else owner_user_id,
             compile_name,
@@ -1012,10 +1038,14 @@ class CompileService:
                 "args": args,
             }
         )
-        replacement = await self._settings(inputs, ctx, owner_user_id, body.compile_name)
+        replacement = await self._settings(
+            inputs, ctx, owner_user_id, body.compile_name, updated_by=body.updated_by
+        )
         await self._fs.ensure_compile_target(replacement["to"], ctx)
         lifecycle = self._require_lifecycle()
-        async with lifecycle.store.edit(ctx.account_id, owner_user_id, body.compile_name) as record:
+        async with lifecycle.edit_config(
+            ctx.account_id, owner_user_id, body.compile_name
+        ) as record:
             await lifecycle._fs._ensure_access(record["to"], ctx, action=AclAction.WRITE)
             replacement = deepcopy(replacement)
             replacement["updated_by"] = (
@@ -1074,7 +1104,6 @@ class CompileService:
     async def list_configs(
         self,
         ctx: RequestContext,
-        *,
         limit: int,
         cursor: str | None,
         scope: str = "user",
@@ -1094,11 +1123,12 @@ class CompileService:
                 raise InvalidArgumentError("Account Compile cursor must include an owner")
         lifecycle = self._require_lifecycle()
         items = []
-        async for name, record in lifecycle.store.iter_records(
+        async for _, name, record in lifecycle.store.list_configs(
             ctx.account_id,
             user_id=ctx.user.user_id if scope == "user" else None,
             cursor=cursor,
             compile_name=compile_name,
+            limit=limit + 1,
         ):
             context = record["execution_context"]
             items.append(
@@ -1128,7 +1158,7 @@ class CompileService:
         }
 
     async def list_runs(
-        self, compile_name: str, ctx: RequestContext, *, limit: int, cursor: str | None
+        self, compile_name: str, ctx: RequestContext, limit: int, cursor: str | None
     ) -> dict[str, Any]:
         """Page the caller's run history."""
         runs = await self._require_lifecycle().store.list_runs(
@@ -1139,7 +1169,7 @@ class CompileService:
 
     async def get_run(self, compile_name: str, task_id: str, ctx: RequestContext) -> dict[str, Any]:
         """Return the caller's frozen run, raising NotFoundError when the run is absent."""
-        run = await self._require_lifecycle().store.get_run(
+        run = await self._require_lifecycle().get_run(
             ctx.account_id, ctx.user.user_id, compile_name, task_id
         )
         if run is None:

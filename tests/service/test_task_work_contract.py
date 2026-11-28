@@ -70,6 +70,25 @@ def _relational_backend(provider, tmp_path=None):
     return sqlalchemy, store_class, params, schema_names
 
 
+@pytest.mark.parametrize("provider", ["mysql", "postgres"])
+def test_relational_provisioning_references_existing_scripts(monkeypatch, provider):
+    """Provisioning paths remain valid without requiring a live database."""
+    importorskip = pytest.importorskip
+
+    def require_module(name):
+        if name not in {"aiomysql", "psycopg"}:
+            return importorskip(name)
+        return None
+
+    monkeypatch.setattr(pytest, "importorskip", require_module)
+    monkeypatch.setenv(f"OV_TEST_{provider.upper()}", '{"user":"test","database":"test"}')
+    _, _, _, schema_names = _relational_backend(provider)
+    assert schema_names
+    sql_dir = Path(__file__).resolve().parents[2] / "openviking/service/sql"
+    for name in schema_names:
+        assert (sql_dir / name).is_file(), name
+
+
 async def _provision_task_schema(admin, params, schema_names):
     sql_dir = Path(__file__).resolve().parents[2] / "openviking/service/sql"
     async with admin.begin() as connection:

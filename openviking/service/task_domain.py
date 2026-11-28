@@ -403,9 +403,7 @@ def append_task_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None
             kind=kind,
             status=task.status.value,
             stage=sanitize_error(stage) if stage else None,
-            error=sanitize_error(task.error)
-            if kind == "error_recorded" and task.error
-            else None,
+            error=sanitize_error(task.error) if kind == "error_recorded" and task.error else None,
             recorded_at=recorded_at,
         )
 

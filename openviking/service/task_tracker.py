@@ -895,6 +895,12 @@ class TaskTracker:
         )
         return self._public(task) if task is not None else None
 
+    async def get_durable_task(
+        self, task_id: str, account_id: str, user_id: str
+    ) -> Optional[TaskRecord]:
+        """Read the persisted record, including private data needed for recovery."""
+        return await self._store.get_durable_task(task_id, account_id=account_id, user_id=user_id)
+
     async def get_task_status(
         self, task_id: str, *, account_id: str, user_id: str
     ) -> Optional[TaskStatus]:

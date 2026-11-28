@@ -13,7 +13,7 @@ import inspect
 import os
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 from openviking.core.directories import DirectoryInitializer
 from openviking.core.namespace import canonical_user_root
@@ -27,7 +27,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service.agent_evolution_service import AgentEvolutionService
 from openviking.service.compile_scheduler import CompileScheduler, build_credential_encryptor
 from openviking.service.compile_service import CompileService
-from openviking.service.compile_targets import CompileLifecycle, CompileStateStore
+from openviking.service.compile_targets import CompileLifecycle, CompileStateStore, CompileStore
 from openviking.service.debug_service import DebugService
 from openviking.service.external_task_service import ExternalTaskService, set_external_task_service
 from openviking.service.fs_service import FSService
@@ -42,6 +42,7 @@ from openviking.service.search_service import SearchService
 from openviking.service.session_auto_commit import SessionAutoCommitScheduler
 from openviking.service.session_service import SessionService
 from openviking.service.task_tracker import get_task_tracker, set_task_tracker
+from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session import create_session_compressor
 from openviking.storage.acl import AclManager
 from openviking.storage.collection_schemas import init_context_collection
@@ -140,6 +141,10 @@ class OpenVikingService:
         self._usage_reporter: Optional[Any] = None
         self._server_config: Optional[ServerConfig] = None
         self._compile_scheduler: Optional[CompileScheduler] = None
+        self._close_compile_store: Optional[Callable[[], Awaitable[None]]] = None
+        self.compile_config_cleanup: Optional[Callable[[str, Optional[str]], Awaitable[None]]] = (
+            None
+        )
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._privacy_sanitizer: Optional[PrivacySanitizer] = None
@@ -632,6 +637,7 @@ class OpenVikingService:
         """Remove host callbacks after draining, before their owners close."""
         if self._compile_service.lifecycle is not None:
             self._compile_service.lifecycle.resolve_groups = None
+            self._compile_service.lifecycle.creation_guard = None
         if self._compile_scheduler is not None:
             self._compile_scheduler.set_identity_resolver(None, None)
         if self._viking_fs is not None:
@@ -657,6 +663,17 @@ class OpenVikingService:
         if self._shared_initialized:
             return
 
+        try:
+            await self._initialize()
+        except BaseException:
+            if getattr(self, "_close_compile_store", None) is not None:
+                try:
+                    await run_to_completion(self.close)
+                except (Exception, asyncio.CancelledError):
+                    logger.exception("Failed to clean up after SQL Compile startup failed")
+            raise
+
+    async def _initialize(self) -> None:
         self._ensure_data_dir_lock_acquired()
         await get_task_tracker().load()
 
@@ -859,9 +876,18 @@ class OpenVikingService:
         else:
             self._rule_cleanup_scheduler = None
         compile_config = self._config.compile_api
-        compile_store = CompileStateStore(self._agfs_client)
-        self._compile_service.configure_lifecycle(CompileLifecycle(compile_store, self._viking_fs))
-        get_task_tracker().compile_history_cleanup = compile_store.delete_expired
+        compile_store: CompileStore
+        sql_compile_store = config.storage.build_compile_store(config.service_name)
+        if sql_compile_store is not None:
+            await sql_compile_store.load()
+            self._close_compile_store = sql_compile_store.close
+            self.compile_config_cleanup = sql_compile_store.delete_config
+            compile_store = sql_compile_store
+        else:
+            compile_store = CompileStateStore(self._agfs_client)
+        compile_lifecycle = CompileLifecycle(compile_store, self._viking_fs)
+        self._compile_service.configure_lifecycle(compile_lifecycle)
+        get_task_tracker().compile_history_cleanup = compile_lifecycle.delete_expired
         if compile_config.scheduler_enabled:
             self._compile_scheduler = CompileScheduler(
                 self._compile_service,
@@ -1175,8 +1201,16 @@ class OpenVikingService:
         if self._watch_manager is not None:
             await self._watch_manager.close()
             self._watch_manager = None
-        tracker = get_task_tracker()
-        await tracker.close()
+        task_tracker = get_task_tracker()
+        close_compile_store = getattr(self, "_close_compile_store", None)
+        if close_compile_store is not None:
+            task_tracker.stop_cleanup_loop()
+            task_tracker.compile_history_cleanup = None
+        await task_tracker.close()
+        if close_compile_store is not None:
+            await close_compile_store()
+            self._close_compile_store = None
+            self.compile_config_cleanup = None
 
         close_vlm_resolver = getattr(vlm_resolver, "close", None)
         if callable(close_vlm_resolver):

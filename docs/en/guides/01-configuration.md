@@ -1410,6 +1410,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
 | `watch_store` | object | Watch store: `file` (single process), `sqlite` (one host), or `mysql` / `postgres` (shared) | `{"provider":"file"}` |
+| `compile_store` | object | Compile configuration and run history storage | `{"provider":"file"}` |
 
 
 ```json
@@ -1431,7 +1432,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 Task records use the local FileStore by default. To share Task/Work state across
 OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
-MySQL, apply the SQL changes under `openviking/service/sql/changes/`, configure
+MySQL, apply the MySQL SQL changes under `openviking/service/sql/changes/`, configure
 a stable top-level `service_name`, and select the relational backend:
 
 ```json
@@ -1512,6 +1513,41 @@ state. PostgreSQL preserves the same durable recovery, event history, active-tas
 deduplication, and service/owner isolation as MySQL. Keep `service_name` stable
 across processes sharing tasks. Changing providers does not migrate existing
 tasks; plan the data migration before switching a deployed store.
+
+Task schema changes are maintained as separate files under
+`openviking/service/sql/changes/`; published init files remain unchanged.
+Operators select the scripts for their backend and current schema and execute
+them before upgrading. Replace `ov_tasks` when using a custom table prefix.
+SQLite creates its tables automatically at startup.
+
+#### Compile store
+
+Configure `storage.compile_store` in `ov.conf`. This setting controls saved
+Compile configurations and their run history; Task/Work storage is configured separately.
+
+The file provider retains the original configuration and Run paths. Named
+executions persist their snapshots and outcomes in the selected Compile store;
+one-off executions retain private recovery checkpoints in Task. Switching
+providers does not migrate existing configurations or runs.
+
+| `provider` | Setup |
+|------------|-------|
+| `file` (default) | No extra configuration. |
+| `mysql` | Install `openviking[mysql]` and run `openviking/service/sql/compile_store_init.sql` before startup. MySQL 5.7.44 requires InnoDB with 16 KiB pages, `DYNAMIC` row format, and large index prefixes enabled. |
+| `postgres` | Install `openviking[postgres]` and run `openviking/service/sql/compile_store_postgres_init.sql` before startup. |
+| `sqlite` | Install `openviking[sqlite]`. The server creates tables at startup. Set `params.path` for a custom location; the default is `<workspace>/compile_store/compile.db`. Use SQLite for local storage. |
+
+For MySQL and PostgreSQL, set `params.host`, `params.port`, `params.user`,
+`params.password`, and `params.database` as appropriate. The default ports are
+`3306` and `5432`, respectively. `params.table` sets the table prefix (default
+`ov_compile`); use that same prefix when provisioning the tables. The prefix
+must start with an ASCII letter, contain only ASCII letters, digits, or
+underscores, and fit within 51 characters on MySQL or 47 on PostgreSQL. Instances
+sharing Compile data must use the same database, table prefix, and `service_name`.
+
+Changing providers does not migrate existing configurations or history. Stop
+Compile writes and migrate existing data before switching a deployment. The
+initialization scripts and SQLite startup do not upgrade pre-existing SQL tables.
 
 #### watch_store
 

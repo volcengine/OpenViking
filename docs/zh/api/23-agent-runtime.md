@@ -12,7 +12,7 @@ OpenViking 管理 Compile 配置、执行任务、快照和恢复。配置的 Ag
 - `to` 的任何严格祖先或后代目录带有 `compile_target=true` 时拒绝请求；`to` 自身已有该 tag 时允许复用。
 - `to` 不能是 `viking://user/{user_id}/memories/experiences` 或其任意层级子目录。`~/` 别名和末尾斜杠不能绕过限制；`experiences2` 等相似名称不被这条规则拒绝。
 
-创建时先取得按账号隔离的 Compile 专用虚拟树锁，再检查可见索引标签。补标期间，严格父子目标拒绝创建；相同目标共享独立持有凭证，执行仍按现有流程串行处理。锁竞争最多等待 1 秒，不等待 Compile 或索引完成。锁不覆盖真实产物路径，由现有补标队列接管，直到 tag 可查询或目标路径消失。服务中断期间租约可能过期，恢复前仍可能出现受理空窗；租约不提供永久占位。索引检查遵循当前请求的租户和权限范围。不传 `from` 的独立 `skill="memory"` 就地整理模式不应用这些目录约束或目标打标流程。
+目标标签尚未可查询时，Compile 也可能拒绝互为祖先或后代的目标。相同目标可以复用，任务依次执行。不传 `from` 的独立 `skill="memory"` 就地整理模式不使用这些目录约束和目标标签。
 
 ### 创建配置
 
@@ -55,7 +55,7 @@ curl -X POST http://localhost:1933/api/v1/compile/create \
 
 `args.owner_user_id` 可选，用于选择当前 account 内的配置归属用户，省略时使用当前认证用户。创建、更新和按名称执行统一使用该参数；它只决定配置归属或定位，不改变执行身份、不授予数据访问权限，也不进入保存的 Runtime 参数。`args.owner_id` 不再用于选择配置归属用户。
 
-创建接口同步校验输入、权限及可见的目录标签，必要时创建 `to`，并持久入队独立的内部补标 Task；不等待目录索引、embedding 或 tag 可见性。`to` 是文件或内部任务未能持久入队时返回错误。QueueFS 消费者负责根目录索引和 `compile_target=true` 补齐，失败后重试，不递归标记子目录，并保留已有内容、摘要和其他 tag。目标路径不存在时停止该路径的补标，不重建目录。创建配置本身不执行 Compile、不创建 run、不拍来源快照。
+创建接口校验输入和权限，必要时创建 `to`，无需等待目标标签可查询。创建配置不会执行 Compile，也不会产生运行记录。
 
 调度控制与 Runtime 参数分开保存。非空计划默认开启自动更新，除非显式指定 `auto_update=false`。计划必填 `frequency`（`daily` 或 `weekly`），使用北京时间（`Asia/Shanghai`）。
 
@@ -92,9 +92,9 @@ POST /api/v1/compile
 
 直接提交 `from`、`to` 和 Skill URI 的写法已弃用。受理时，`Deprecation` 和 `Link` 响应头提供弃用日期和迁移指南。请先将这些输入连同 `compile_name` 提交到 `POST /api/v1/compile/create`，再向 `POST /api/v1/compile` 仅提交 `compile_name`。
 
-传完整输入时始终执行一次性全量编译，即使同一输出目录已有持久配置，也不查找、复用或更新配置。不读写 compile 配置和 run 文件、不拍来源快照；目标开始/结束快照、取消和失败恢复仍然执行。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
+传完整输入时始终执行一次性全量编译，即使同一输出目录已有配置，也不会修改配置或写入该配置的运行历史。`skill="memory"` 保留不传 `from` 的独立就地整理行为，不支持通过创建接口保存配置或开启定时执行。
 
-两种普通执行形式都先完成目标校验、必要的目录创建及独立补标任务持久入队，再提交 Compile 执行任务。后台索引或 tag 延迟不阻塞 Compile 提交、产物写入或收尾，也不使 Compile 因补标失败而失败。受理成功不代表 tag 已可查询，补标期间由上述虚拟树锁保护目标。Compile 的显式开始/结束快照、产物 `snapshot_id`、Outputs 和回滚流程保持原有语义。该 tag 是目录检索标记，任务完成、失败或取消不会自动移除它。
+两种普通执行形式都会校验目标，必要时创建目录。受理成功不代表目标标签已经可查询。补标独立进行，失败不会使 Compile 失败。
 
 执行接口拒绝调度控制。`args.mode`、`last_compile_time`、`changes` 和 `operation_id` 不是公开执行参数；执行计划由 OpenViking 生成。
 
@@ -175,13 +175,19 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 | `GET /api/v1/compile/runs/{task_id}?compile_name={compile_name}` | 本次执行冻结的 run |
 | `GET /api/v1/compile/runs/{task_id}/outputs?compile_name={compile_name}` | 由本次快照推导的变更产出，包含 `outputs` 和 `next_cursor` |
 
-运行历史查询按当前账号和用户限定范围。runs 目录不存在时返回空列表；指定 run 不存在时，详情和产出接口返回 404。
+配置列表默认使用 `scope=user`。账号管理员可以指定 `scope=account`，查看当前账号内各用户的配置。可传 `compile_name` 按名称筛选。
 
-列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`latest_snapshot_id`、`change_type`。`snapshot_id` 固定为本次 run 的产出快照；`latest_snapshot_id` 为查询时该文件最近变更的 commit，无历史时为 null。最近变更可能是后续删除，此时读取该版本正文返回 404。仅查询本页产出的文件历史，查询失败直接报错。
+运行历史按当前账号、用户和 `compile_name` 查询。没有匹配的运行记录时返回空列表；指定运行记录不存在时，详情和产出接口返回 `404`。
 
-配置更新必填 `compile_name`、`from`、`skill` 和顶层 `auto_update`，可选 `instruction`、`args` 替换已保存值。`to` 可选，省略或为 null 时沿用该配置已保存的目标目录；显式传入的 `to` 规范化后必须与已保存的目标目录一致，修改目标目录返回 `400 INVALID_ARGUMENT`，配置保持不变；`from`、`skill` 等其他参数仍可修改。顶层 `update_schedule` 省略或为 null 时保留已保存的计划。启用自动更新需要本次提供或已保存的计划；关闭时保留计划，清除执行凭据和下次触发时间，并取消调度注册，是否启用计划由 `auto_update` 决定。更新请求的 `args` 不接受调度控制。更新配置保留上次成功执行的 `progress`。执行时比较指令、Skill 及其快照、`model_name`，不一致时全量编译；已有源目录计算增量，新增源目录完整处理。更新同样校验目录约束并持久入队独立补标任务，不等待 tag 就绪。配置更新不执行编译、不重置调用时间。
+列表接受 `limit`（1–100，默认 20）及可选 `cursor`。原样传递 `next_cursor`；null 表示结束。产出项包含 `uri`、`snapshot_id`、`latest_snapshot_id`、`change_type`。`snapshot_id` 是本次运行的产出快照；`latest_snapshot_id` 为查询时该文件的最新变更版本，无历史时为 null。最近变更可能是后续删除，此时读取该版本正文返回 `404`。
 
-创建配置时，`state.json` 的顶层字段 `updated_by` 记录配置归属用户的 ID。更新时可在请求体顶层传入字符串 `updated_by` 指定记录的值，省略时记录当前认证用户的 ID。
+配置更新必填 `compile_name`、`from`、`skill` 和顶层 `auto_update`。可选的 `instruction` 和 `args` 替换已保存的值。省略 `to` 或传 null 时沿用已保存的目标目录。传入不同的目录会返回 `400 INVALID_ARGUMENT`，配置保持不变。
+
+省略顶层 `update_schedule` 或传 null 时保留已有计划。开启自动更新需要本次提供或已保存的计划；关闭自动更新会保留计划并清除下次触发时间。更新时不要在 `args` 中传调度参数。
+
+更新配置不会启动 Compile、重置调用时间或丢弃上次成功的增量基线。指令、Skill、Skill 版本或 `model_name` 变化时，下一次运行需要全量编译。增量运行中新加入的来源目录会完整处理。
+
+配置列表返回 `updated_by`，初始值为配置归属用户的 ID。更新时可在请求体顶层传入字符串 `updated_by`，最多 255 个 Unicode 字符；省略时记录当前认证用户的 ID。
 
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
@@ -203,26 +209,13 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 | `finish_snapshot` | 发布或回滚完成后保留的目标快照；尚未提交时为 null |
 | `skill_snapshot_id` | Skill 快照；系统 Skill 为 null |
 
-无变化时可复用开始快照。失败、取消不推进成功源基线。执行计划及必要恢复检查点保存在私有 Task 状态；公共配置、run 和 Task 不暴露执行凭据。
+无变化时可复用开始快照。失败、取消不推进成功源基线。公开的配置、运行记录和任务响应不返回执行凭据。
 
 VikingBot 在已知来源、worker 或写入失败仍未解决时返回 `result.completion_status: "partial"`。
 已确认输出会保留，命名 Compile 保留原成功源基线，使遗漏且未再次变化的输入仍能进入下一轮。
 其他结果省略该标记；没有标记不代表语义覆盖完整或索引成功。
 
-Compile 业务文件仅有：
-
-```text
-/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/state.json
-/local/{account_id}/_system/compile/tasks/{user_id}/{configuration_directory}/runs/{task_id}.json
-```
-
-纯 ASCII 名称的小写十六进制编码用作 `configuration_directory`。含汉字的名称使用 `u-` 加上名称 UTF-8 字节的小写 Base32 编码作为目录名，省略末尾的填充符 `=`。两种目录格式在不区分大小写的存储上都能区分名称大小写。
-
-配置按账号和用户分目录存储，公开 API 使用原始 `compile_name` 定位配置。
-
-state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
-
-Compile 成功收尾时发布产物快照。完整交付且目标有文件新增、修改或删除时推进增量基线。部分交付后的增量恢复也可在目标零变更时推进基线，但仅限本轮所有新增或修改的来源均已处理，且能核对实际读取内容与冻结源快照一致。涉及未验证来源、删除或全量扫描时，零变更结果保留原基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+成功运行会发布产物快照。零变更的运行可能保留原增量基线。回滚后，恢复的文件可能需要一段时间才可检索。
 
 ### 检查 Compile 可用性
 

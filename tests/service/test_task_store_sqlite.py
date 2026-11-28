@@ -167,14 +167,15 @@ async def test_sqlite_factory_persistence_and_query_plan(tmp_path):
 @pytest.mark.asyncio
 async def test_sqlite_rejects_newer_schema_and_can_retry(tmp_path):
     path = tmp_path / "tasks.db"
+    newer_version = SQLiteTaskWorkStore.SCHEMA_VERSION + 1
     with sqlite3.connect(path) as connection:
-        connection.execute("PRAGMA user_version=2")
+        connection.execute(f"PRAGMA user_version={newer_version}")
     store = SQLiteTaskWorkStore(params={"path": str(path)})
     try:
         with pytest.raises(RuntimeError, match="Unsupported SQLite task schema"):
             await store.load()
         with sqlite3.connect(path) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == newer_version
             connection.execute("PRAGMA user_version=0")
         await store.load()
         assert (

@@ -38,11 +38,10 @@ OWNER = "creator"
 async def test_callback_retries_submission_failures(
     compile_name, exists, lookup_error, submission_error, expected, reason
 ):
-    store = SimpleNamespace(
-        get=AsyncMock(return_value={} if exists else None, side_effect=lookup_error)
-    )
+    get_config = AsyncMock(return_value={} if exists else None, side_effect=lookup_error)
+    lifecycle = SimpleNamespace(get_config=get_config)
     scheduler = SimpleNamespace(
-        _store=store,
+        _compile=SimpleNamespace(_require_lifecycle=lambda: lifecycle),
         trigger_if_due=AsyncMock(return_value="submitted", side_effect=submission_error),
     )
     result = await _ExpiryHandler(scheduler).handle(
@@ -50,9 +49,9 @@ async def test_callback_retries_submission_failures(
     )
     assert (result.status, result.reason) == (expected, reason)
     if compile_name == COMPILE_NAME:
-        store.get.assert_awaited_once_with(ACCOUNT, OWNER, COMPILE_NAME)
+        get_config.assert_awaited_once_with(ACCOUNT, OWNER, COMPILE_NAME)
     else:
-        store.get.assert_not_awaited()
+        get_config.assert_not_awaited()
     if reason == "not_found" or lookup_error:
         scheduler.trigger_if_due.assert_not_awaited()
     else:
