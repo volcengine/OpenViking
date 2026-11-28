@@ -48,7 +48,12 @@ def _strip_tags(text: str) -> str:
     parser = _HTMLTextExtractor()
     parser.feed(text)
     parser.close()
-    return html.unescape(parser.get_text()).strip()
+    return parser.get_text().strip()
+
+
+def _inline_text(fragment: str) -> str:
+    """Return the text of an inline fragment, re-escaped for the final tag-stripping pass."""
+    return html.escape(_strip_tags(fragment), quote=False)
 
 
 def _normalize(text: str) -> str:
@@ -155,18 +160,18 @@ class WebFetchTool(Tool):
         # Convert links, headings, lists before stripping tags
         text = re.sub(
             r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>',
-            lambda m: f"[{_strip_tags(m[2])}]({m[1]})",
+            lambda m: f"[{_inline_text(m[2])}]({m[1]})",
             html,
             flags=re.I,
         )
         text = re.sub(
             r"<h([1-6])[^>]*>([\s\S]*?)</h\1>",
-            lambda m: f"\n{'#' * int(m[1])} {_strip_tags(m[2])}\n",
+            lambda m: f"\n{'#' * int(m[1])} {_inline_text(m[2])}\n",
             text,
             flags=re.I,
         )
         text = re.sub(
-            r"<li[^>]*>([\s\S]*?)</li>", lambda m: f"\n- {_strip_tags(m[1])}", text, flags=re.I
+            r"<li[^>]*>([\s\S]*?)</li>", lambda m: f"\n- {_inline_text(m[1])}", text, flags=re.I
         )
         text = re.sub(r"</(p|div|section|article)>", "\n\n", text, flags=re.I)
         text = re.sub(r"<(br|hr)\s*/?>", "\n", text, flags=re.I)
