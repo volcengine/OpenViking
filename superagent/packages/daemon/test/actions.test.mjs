@@ -888,6 +888,18 @@ describe('agent tool front-ends', () => {
     return { ...state, socketPath };
   }
 
+  it('shows the model the input a stale refusal quotes, and keeps it out of the log', async (t) => {
+    const { socketPath, inbound, logs } = await serve(t);
+    inbound({ messageId: 'om_quoteAsked1234', chatId: 'oc_quote12345678' });
+    inbound({ messageId: 'om_quoteNewer1234', chatId: 'oc_quote12345678', content: '改成 PNG' });
+    const handle = createMcpHandler({ socketPath, authority: TOKEN, client: 'mcp' });
+    const called = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'send_message',
+      arguments: { chat_id: 'oc_quote12345678', markdown: 'x', decision_id: 'message:om_quoteAsked1234' } } });
+    assert.equal(called.result.isError, true);
+    assert.match(called.result.content[0].text, /if the action still fits\.\nevent=message:om_quoteNewer1234 time=\S+ from=\S+: 改成 PNG$/);
+    assert.doesNotMatch(JSON.stringify(logs), /om_quoteNewer|改成 PNG/);
+  });
+
   it('relays tools/list and tools/call from the MCP adapter, with images inline', async (t) => {
     const { directory, socketPath, inbound } = await serve(t, { run: (_connector, action) => {
       if (action !== 'message.media') return { message_id: 'om_delivered123456' };
@@ -1077,8 +1089,10 @@ describe('decision references', () => {
     const stale = await reply('evt-question').catch((error) => error);
     assert.equal(stale.code, 'stale_decision');
     assert.doesNotMatch(stale.message, /msg=/);
+    // It is no longer in the inbox, so the refusal quotes it.
+    assert.match(stale.detail, /^event=evt-follow-up time=\S+Z from=\S+: hello$/);
     // Copy the tag the hint names from the newer input's line, as the model would.
-    const [, tag] = /use its (\w+)= as decision_id/.exec(stale.message);
+    const [, tag] = /use the newest (\w+)= as decision_id/.exec(stale.message);
     const line = formatInboundLine(followUp);
     const wrong = await reply(/ msg=(\S+)/.exec(line)[1]).catch((error) => error);
     assert.equal(wrong.code, 'unknown_decision');
@@ -1087,6 +1101,20 @@ describe('decision references', () => {
     // The reply still answers the question it targets.
     assert.deepEqual(outbox(store), [question.seq]);
     assert.equal(connectors.calls.length, 1);
+  });
+
+  it('quotes what was said there since a stale decision, the last five of more', async (t) => {
+    const { store, call } = setup(t);
+    store.ingest(chatEvent({ messageId: 'om_manyAsked12345', eventId: 'evt-asked', chatId: 'oc_many123456789' }));
+    for (let index = 1; index <= 7; index += 1) {
+      store.ingest(chatEvent({ messageId: `om_manyLater${index}2345`, eventId: `evt-later-${index}`, chatId: 'oc_many123456789',
+        content: `第 ${index} 条` }));
+    }
+    const stale = await call('send_message', { chat_id: 'oc_many123456789', markdown: 'x', decision_id: 'evt-asked' }).catch((error) => error);
+    assert.equal(stale.code, 'stale_decision');
+    assert.match(stale.message, /quoted below oldest first \(the last 5 of 7\), then use the newest event= as decision_id/);
+    assert.deepEqual(stale.detail.split('\n').map((line) => /^event=(\S+) time=\S+ from=\S+: (.*)$/.exec(line).slice(1)),
+      [3, 4, 5, 6, 7].map((index) => [`evt-later-${index}`, `第 ${index} 条`]));
   });
 
   it('keys a delivery by its decision event', async (t) => {
@@ -2125,6 +2153,53 @@ describe('workers scheduler', () => {
     store.ingest(chatEvent({ messageId: 'om_progDirect1234', chatType: 'p2p', chatId: 'oc_aliceDm1234567' }));
     assert.match((await call('task_list', { for_event: 'message:om_progDirect1234' })).text, /^t1 \[done\]/, 'a direct chat sees all of theirs');
     await assert.rejects(call('task_list', { for_event: 'message:om_neverSeen12345' }), (error) => error.code === 'unknown_decision');
+  });
+
+  it('relays a report on what was said where its task was asked, never on an input from another conversation', async (t) => {
+    const { service, store, workspace, call, connectors } = setup(t, { scheduler: 'workers', explicitSilence: true });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    const say = (messageId, chatId, threadId, content, fields = {}) => store.ingest(chatEvent({
+      messageId, chatId, threadId, content, chatType: 'group', ...fields })).inbound;
+    const finish = async (turn, draft) => {
+      tasks.report(turn.task.id, { state: 'done', draft });
+      turn.finish({ text: '' });
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    const origin = say('om_askOrigin12345', 'oc_groupA1234567', 'omt_topicA123456', '用 HTML 重画流程图');
+    await call('task_create', { trigger_ids: ['message:om_askOrigin12345'], title: '流程图' });
+    say('om_askProgress123', 'oc_groupA1234567', 'omt_topicA123456', '这个还没做完吗');
+    say('om_askReview12345', 'oc_review1234567', 'omt_review123456', '看看是哪个 PR 引入的');
+    const chatter = say('om_askChatter1234', 'oc_groupA1234567', null, '哈哈');
+    await finish(turns[0], '流程图在附件');
+    const relay = (decision, messageId = 'om_askOrigin12345') => call('reply_message', {
+      message_id: messageId, markdown: '流程图在附件', reply_in_thread: true, decision_id: decision, task_ids: ['t1'] });
+    const progress = 'event=message:om_askProgress123 time=\\S+ from=\\S+: 这个还没做完吗';
+    const quotes = (code, pattern) => (error) => error.code === code && pattern.test(error.detail);
+
+    // The progress question was read and answered before the report came.
+    await assert.rejects(relay('message:om_askOrigin12345'), quotes('stale_decision', new RegExp(`^${progress}$`)));
+    // Another group's input, or the main chat's, passes no freshness check for
+    // the topic: what was said there from the request on is quoted.
+    const fromRequest = new RegExp(`^event=message:om_askOrigin12345 time=\\S+ from=\\S+: 用 HTML 重画流程图\\n${progress}$`);
+    await assert.rejects(relay('message:om_askReview12345'), quotes('decision_elsewhere', fromRequest));
+    await assert.rejects(relay('message:om_askChatter1234'), quotes('decision_elsewhere', fromRequest));
+    assert.equal(connectors.calls.length, 0);
+    await relay('message:om_askProgress123');
+    assert.deepEqual(store.db.prepare('SELECT inbound_seq FROM outbox').all().map((row) => row.inbound_seq), [origin.seq],
+      'it answers the request');
+    assert.equal(store.decisionFor('lark', chatter.eventId), null, 'the chatter is not recorded as answered');
+    // A reply the task makes in another group is not held to where it was asked.
+    await relay('message:om_askProgress123', 'om_askReview12345');
+    assert.equal(connectors.calls.length, 2);
+
+    // Asked in the main chat, answered on what followed in the thread opened on the request.
+    say('om_rootOrigin1234', 'oc_groupB1234567', null, '导出 ovpack');
+    await call('task_create', { trigger_ids: ['message:om_rootOrigin1234'], title: 'ovpack' });
+    say('om_rootFollow1234', 'oc_groupB1234567', 'omt_rootThread12', '先导入再导出', { threadRootId: 'om_rootOrigin1234' });
+    await finish(turns[1], '已导出');
+    await call('reply_message', { message_id: 'om_rootOrigin1234', markdown: '已导出', reply_in_thread: true,
+      decision_id: 'message:om_rootFollow1234', task_ids: ['t2'] });
+    assert.equal(connectors.calls.length, 3);
   });
 
   it('settles a report on the delivery that names its task, and refuses one whose worker is working again', async (t) => {

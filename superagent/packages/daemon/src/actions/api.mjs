@@ -68,8 +68,10 @@ export async function startActionApi({ socketPath, service, logger }) {
       });
       send(response, 200, { ok: true, result });
     } catch (error) {
-      // ActionService.call already logged the refusal with its code.
-      const message = redactSensitive(error instanceof Error ? error.message : String(error)).slice(0, 2_000);
+      // ActionService.call already logged the refusal with its code. Its detail
+      // (an input it quotes) is for the model only.
+      const text = error instanceof Error ? [error.message, error.detail].filter(Boolean).join('\n') : String(error);
+      const message = redactSensitive(text).slice(0, 2_000);
       send(response, 200, { ok: false, error: message });
     }
   });
