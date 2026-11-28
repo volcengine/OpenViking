@@ -40,6 +40,16 @@ openviking-server --config /path/to/ov.conf
 ov health
 ```
 
+### Windows
+
+`scripts/windows/install-openviking.ps1` runs these steps on Windows x64 in Windows PowerShell 5.1 or PowerShell 7, without administrator rights. It installs uv and Python 3.13 when they are missing, runs `uv tool install openviking`, adds the tool directory to the user PATH, points `OPENVIKING_CONFIG_FILE` and `OPENVIKING_CLI_CONFIG_FILE` at `%USERPROFILE%\.openviking`, then hands over to `openviking-server init` and `openviking-server doctor`.
+
+```powershell
+irm https://raw.githubusercontent.com/volcengine/OpenViking/main/scripts/windows/install-openviking.ps1 | iex
+```
+
+From a checkout, `scripts\windows\install-openviking.ps1` also takes `-PythonVersion`, `-Package` (for example `"openviking[bot]"`) and `-NoInit`, which stops before the setup wizard.
+
 ## Command Line Options
 
 | Option | Description | Default |

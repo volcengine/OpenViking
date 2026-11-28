@@ -40,6 +40,16 @@ openviking-server --config /path/to/ov.conf
 ov health
 ```
 
+### Windows
+
+`scripts/windows/install-openviking.ps1` 在 Windows x64 上按顺序跑完上面的步骤，支持 Windows PowerShell 5.1 和 PowerShell 7，不需要管理员权限：缺 uv 和 Python 3.13 时先装上，执行 `uv tool install openviking`，把工具目录加进用户 PATH，把 `OPENVIKING_CONFIG_FILE` 和 `OPENVIKING_CLI_CONFIG_FILE` 指向 `%USERPROFILE%\.openviking`，然后进入 `openviking-server init` 和 `openviking-server doctor`。
+
+```powershell
+irm https://raw.githubusercontent.com/volcengine/OpenViking/main/scripts/windows/install-openviking.ps1 | iex
+```
+
+在仓库里可以直接运行 `scripts\windows\install-openviking.ps1`，它另外接受 `-PythonVersion`、`-Package`（例如 `"openviking[bot]"`）和 `-NoInit`（装完环境就停，不进初始化向导）。
+
 ## 命令行选项
 
 | 选项 | 描述 | 默认值 |
