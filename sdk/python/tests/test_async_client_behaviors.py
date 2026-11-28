@@ -149,9 +149,14 @@ def test_sync_http_client_batch_add_messages_posts_payload_to_escaped_session(sd
             "peer_id": "explicit-user",
             "created_at": "2026-05-28T00:00:00+00:00",
         },
-        {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
+        {
+            "role": "assistant",
+            "parts": [{"type": "text", "text": "hi"}],
+            "interrupted": True,
+        },
+        {"role": "assistant", "content": "complete reply", "interrupted": False},
     ]
-    result = {"session_id": "thread#message", "message_count": 2, "added": 2}
+    result = {"session_id": "thread#message", "message_count": 3, "added": 3}
     requests = []
 
     def handle(request):
@@ -245,6 +250,45 @@ async def test_async_http_client_normalizes_message_part_objects(tool_input):
             ],
         },
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "options,expected_fields",
+    [
+        pytest.param({"interrupted": True}, {"interrupted": True}, id="true"),
+        pytest.param({"interrupted": False}, {"interrupted": False}, id="false"),
+        pytest.param({"extra": {"interrupted": True}}, {"interrupted": True}, id="extra"),
+        pytest.param(None, {}, id="omitted"),
+    ],
+)
+async def test_async_http_client_add_message_serializes_interrupted(
+    sdk_transport, options, expected_fields
+):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": {"message_count": 1}})
+
+    sdk_transport(handle)
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    await client.initialize()
+    try:
+        assert await client.add_message(
+            "sample-session", "assistant", content="reply", options=options
+        ) == {"message_count": 1}
+    finally:
+        await client.close()
+
+    (request,) = requests
+    assert request.method == "POST"
+    assert request.url.path == "/api/v1/sessions/sample-session/messages"
+    assert json.loads(request.content) == {
+        "role": "assistant",
+        "content": "reply",
+        **expected_fields,
+    }
 
 
 @pytest.mark.asyncio
