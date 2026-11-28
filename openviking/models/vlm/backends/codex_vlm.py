@@ -46,7 +46,8 @@ class CodexVLM(OpenAIVLM):
         if not normalized.get("api_base"):
             normalized["api_base"] = DEFAULT_CODEX_BASE_URL
         super().__init__(normalized)
-        self._async_client = None
+        self._sync_responses_client: SimpleNamespace | None = None
+        self._async_responses_client: SimpleNamespace | None = None
 
     def tool_result_media_mode(self) -> ToolResultMediaMode:
         """The Responses adapter preserves images inside function-call outputs."""
@@ -79,20 +80,20 @@ class CodexVLM(OpenAIVLM):
         return self._build_responses_client(*self._resolve_runtime_credentials(force_refresh=True))
 
     def _get_or_create_sync_responses_client(self):
-        if self._sync_client is None:
+        if self._sync_responses_client is None:
             adapter = self._build_completions_adapter()
-            self._sync_client = SimpleNamespace(chat=CodexChatShim(adapter))
-        return self._sync_client
+            self._sync_responses_client = SimpleNamespace(chat=CodexChatShim(adapter))
+        return self._sync_responses_client
 
     def _get_or_create_async_responses_client(self):
         # The async path uses a sync Responses client behind asyncio.to_thread so
         # credential refresh and auth-store I/O do not block the event loop.
-        if self._async_client is None:
+        if self._async_responses_client is None:
             sync_adapter = self._build_completions_adapter()
-            self._async_client = SimpleNamespace(
+            self._async_responses_client = SimpleNamespace(
                 chat=CodexAsyncChatShim(CodexAsyncCompletionsAdapter(sync_adapter))
             )
-        return self._async_client
+        return self._async_responses_client
 
     def _resolve_runtime_credentials(self, *, force_refresh: bool = False) -> tuple[str, str]:
         explicit_api_key = str(self.config.get("api_key", "") or "").strip()
@@ -119,6 +120,12 @@ class CodexVLM(OpenAIVLM):
         if openai is None:
             raise ImportError("Please install openai: pip install openai")
         return self._get_or_create_async_responses_client()
+
+    def close(self) -> None:
+        """Discard Responses facades; individual requests own their SDK clients."""
+        self._sync_responses_client = None
+        self._async_responses_client = None
+        super().close()
 
     def is_available(self) -> bool:
         if str(self.config.get("api_key", "") or "").strip():

@@ -217,8 +217,12 @@ async def test_codex_async_stream_uses_text_deltas_when_completed_output_is_none
     mock_real_client.responses.stream.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "client_methods",
+    [(), ("get_client",), ("get_async_client",), ("get_client", "get_async_client")],
+)
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
-def test_vlm_config_accepts_codex_without_api_key(_mock_auth_available):
+def test_vlm_config_accepts_codex_without_api_key(_mock_auth_available, client_methods):
     from openviking.models.vlm.retry_vlm import RetryVLM
 
     config = VLMConfig(provider="openai-codex", model="gpt-5.3-codex")
@@ -227,6 +231,11 @@ def test_vlm_config_accepts_codex_without_api_key(_mock_auth_available):
     instance = config.get_vlm_instance()
     assert isinstance(instance, RetryVLM)
     assert instance.inner.__class__.__name__ == "CodexVLM"
+
+    for method in client_methods:
+        getattr(instance, method)()
+    config.close()
+    config.close()
 
 
 @patch("openviking.models.vlm.backends.codex_auth.has_codex_auth_available", return_value=True)
