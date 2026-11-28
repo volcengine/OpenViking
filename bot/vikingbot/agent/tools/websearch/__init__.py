@@ -1,5 +1,5 @@
 """
-Web search tool with multiple backends (brave, ddgs, exa, tavily).
+Web search tool with multiple backends (brave, ddgs, exa, tavily, webz).
 
 To add a new backend:
     1. Create new file: websearch/mybackend.py
@@ -7,32 +7,21 @@ To add a new backend:
     3. Add @register_backend decorator
     4. Import here: from . import mybackend
 
-NO NEED TO MODIFY THIS CLASS!
 """
 
 from typing import Any, Optional, Union
 
-from vikingbot.agent.tools.base import Tool
-
-from .base import WebSearchBackend
-from .registry import registry
+from vikingbot.agent.tools.base import Tool, ToolContext
 
 # Import backends to register them
 from . import brave, ddgs, exa, tavily
+from .base import WebSearchBackend
+from .registry import registry
+from .webz import WebzBackend
 
 
 class WebSearchTool(Tool):
-    """
-    Search the web with configurable backend.
-
-    To add a new backend:
-        1. Create new file: websearch/mybackend.py
-        2. Inherit WebSearchBackend
-        3. Add @register_backend decorator
-        4. Import in websearch/__init__.py
-
-    NO NEED TO MODIFY THIS CLASS!
-    """
+    """Search the web with a configurable backend."""
 
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
@@ -73,7 +62,7 @@ class WebSearchTool(Tool):
         Initialize WebSearchTool.
 
         Args:
-            backend: Backend name ("auto", "brave", "ddgs", "exa", "tavily") or WebSearchBackend instance
+            backend: Backend name or WebSearchBackend instance
             brave_api_key: Brave Search API key
             exa_api_key: Exa AI API key
             tavily_api_key: Tavily Search API key
@@ -94,13 +83,27 @@ class WebSearchTool(Tool):
             if not self._backend:
                 raise ValueError(f"Unknown backend: {backend}")
 
+        if isinstance(self._backend, WebzBackend):
+            self.description = (
+                "Search recent news. Returns titles, URLs, publish dates, and snippets."
+            )
+            properties = self.parameters["properties"]
+            self.parameters = {
+                **self.parameters,
+                "properties": {
+                    "query": properties["query"],
+                    "count": properties["count"],
+                    "filters": self._backend.filters_schema,
+                },
+            }
+
     @property
     def backend(self) -> WebSearchBackend:
         """Get the active backend."""
         return self._backend
 
     async def execute(
-        self, tool_context: "ToolContext", query: str, count: Optional[int] = None, **kwargs: Any
+        self, tool_context: ToolContext, query: str, count: Optional[int] = None, **kwargs: Any
     ) -> str:
         n = min(max(count or self.max_results, 1), 20)
         return await self._backend.search(query, n, **kwargs)

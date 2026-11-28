@@ -423,6 +423,12 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 `readonly` 模式不会注册 `openviking_add_resource`。渠道设置 `ov_tools_enable: false` 时，该渠道不显示 OpenViking 工具，也不注入 Profile、Memory 和 Experience。
 
+### Webz.io 新闻搜索
+
+在 `ov.conf` 中将 `bot.tools.web.search.backend` 设置为 `"webz"`，并在 VikingBot
+进程环境中设置 `WEBZ_API_TOKEN`。`web_search` 工具将搜索近期新闻，并支持按语言、
+国家、发布日期、情感倾向、来源域名和股票代码筛选。默认的 `"auto"` 模式继续使用现有的通用网页搜索服务。
+
 ### 定时任务配置
 
 定时任务默认关闭。在 `ov.conf` 中设置 `bot.tools.cron.enabled` 为 `true`，即可开启：

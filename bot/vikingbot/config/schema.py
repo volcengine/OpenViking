@@ -688,6 +688,7 @@ class WebSearchConfig(BaseModel):
     api_key: str = ""  # Brave Search API key
     tavily_api_key: str = ""  # Tavily Search API key
     max_results: int = 5
+    backend: Literal["auto", "brave", "ddgs", "exa", "tavily", "webz"] = "auto"
 
 
 class OpenVikingConfig(BaseModel):
