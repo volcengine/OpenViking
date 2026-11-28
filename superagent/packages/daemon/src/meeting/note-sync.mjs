@@ -24,9 +24,14 @@ const NOTE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const MEETING_ID = /^\d{1,32}$/;
 const SCAN_EVERY_MS = 15 * 60_000;
 const FIRST_SCAN_MS = 30 * 86_400_000;
-// A scan starts this long before the last one ended: the search lists ended
-// meetings by when they began, and one still running then has ended since.
-const SCAN_OVERLAP_MS = 6 * 3_600_000;
+// A scan starts this long before the last one ended: the search lists a
+// meeting by when it began, so one that began before the window is never
+// listed, however long it ran. A day reaches past a meeting that was still
+// running when the last scan saw it, so that scan's miss is made good once it
+// ends; one running longer than a day is still missed, as only the 30-day
+// first scan reaches further back. The stop since the last scan adds to the
+// window, so a meeting begun meanwhile is found too.
+const SCAN_OVERLAP_MS = 24 * 3_600_000;
 // A meeting still without a note this long after it ended has none.
 const NOTE_WAIT_MS = 2 * 3_600_000;
 // The same for one whose end its record does not give, or that cannot be read.
