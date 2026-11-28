@@ -312,6 +312,7 @@ async def rewrite_image_uris(
 
     files_processed = 0
     references_rewritten = 0
+    failed_mapping_dirs: Set[str] = set()
     failed_files = 0
     log_stats = {"skipped": 0}
 
@@ -319,11 +320,13 @@ async def rewrite_image_uris(
         # Resolve this markdown file's mapping from the sidecar of the document
         # root containing it (the key is relative to that root).
         path_to_image_name: Dict[str, str] = {}
+        mapping_dir = ""
         for map_dir, file_mappings in mappings_by_dir.items():
             if md_uri.startswith(map_dir + "/"):
                 entry = file_mappings.get(md_uri[len(map_dir) + 1 :])
                 if entry:
                     path_to_image_name = entry
+                    mapping_dir = map_dir
                     break
         if not path_to_image_name:
             continue
@@ -339,12 +342,16 @@ async def rewrite_image_uris(
             }
         except Exception:
             logger.debug("Image directory listing failed path=%s", safe_uri_for_log(md_dir))
+            failed_files += 1
+            failed_mapping_dirs.add(mapping_dir)
+            continue
 
         try:
             content = await viking_fs.read_file(md_uri, ctx=ctx)
         except Exception:
             failed_files += 1
             logger.debug("Markdown read failed; skipping target=%s", safe_uri_for_log(md_uri))
+            failed_mapping_dirs.add(mapping_dir)
             continue
 
         new_content, rewrite_count = _rewrite_content(
@@ -369,9 +376,13 @@ async def rewrite_image_uris(
             except Exception:
                 failed_files += 1
                 logger.debug("Markdown image rewrite failed target=%s", safe_uri_for_log(md_uri))
+                failed_mapping_dirs.add(mapping_dir)
 
-    # Clean up mapping sidecars — no longer needed after rewrite
+    # Keep a document's mapping if any of its sections could not be processed.
+    # Already-rewritten sections are harmless when the mapping is retried.
     for map_dir in mappings_by_dir:
+        if map_dir in failed_mapping_dirs:
+            continue
         try:
             await viking_fs.rm(
                 f"{map_dir}/{IMAGE_MAPPINGS_FILENAME}",
