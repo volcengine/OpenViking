@@ -18,6 +18,16 @@ local meta, pending, processing = KEYS[1], KEYS[2], KEYS[3]
 local message_group, active, owner, inflight = KEYS[4], KEYS[5], KEYS[6], KEYS[7]
 local delivery_owner, ready_free, names = KEYS[8], KEYS[9], KEYS[10]
 local prefix = string.sub(meta, 1, -6)
+local delivery_receipts = prefix .. ':delivery_receipts'
+
+local function take_delivery(id, queue, receipt)
+    if redis.call('SISMEMBER', names, queue) == 0 then return false end
+    local current = redis.call('HGET', delivery_receipts, id) or nil
+    if current ~= receipt or redis.call('ZREM', processing, id) == 0 then return false end
+    redis.call('HDEL', delivery_receipts, id)
+    redis.call('HDEL', delivery_owner, id)
+    return true
+end
 local function pending_count() return redis.call('ZCARD', pending) end
 local function pending_ids() return redis.call('ZRANGE', pending, 0, -1) end
 local function group_list(group, p)
@@ -66,7 +76,7 @@ local function clear_queue(p)
     end
     redis.call('DEL', p .. ':pending', p .. ':processing', p .. ':message_group',
         p .. ':group_active', p .. ':group_owner', p .. ':group_inflight',
-        p .. ':delivery_owner', p .. ':ready_free', p .. ':plain_pending')
+        p .. ':delivery_owner', p .. ':delivery_receipts', p .. ':ready_free', p .. ':plain_pending')
     redis.call('HDEL', p .. ':meta', 'pending_sequence', 'schedule_turn')
     return #ids + #deliveries
 end
@@ -160,6 +170,7 @@ else
 end
 redis.call('ZADD', processing, ARGV[3], id)
 redis.call('HSET', delivery_owner, id, ARGV[2])
+redis.call('HSET', delivery_receipts, id, ARGV[4])
 return {id, payload}
 "#
 );
@@ -216,8 +227,7 @@ return result
 
 pub(super) const ACK_SCRIPT: &str = queue_script!(
     r#"
-if redis.call('ZREM', processing, ARGV[1]) == 0 then return 0 end
-redis.call('HDEL', delivery_owner, ARGV[1])
+if not take_delivery(ARGV[1], ARGV[2], ARGV[3]) then return 0 end
 local group = redis.call('HGET', message_group, ARGV[1])
 if group then
     redis.call('HDEL', message_group, ARGV[1])
@@ -247,8 +257,7 @@ return clear_queue(prefix)
 
 pub(super) const RETRY_SCRIPT: &str = queue_script!(
     r#"
-if redis.call('ZREM', processing, ARGV[1]) == 0 then return 0 end
-redis.call('HDEL', delivery_owner, ARGV[1])
+if not take_delivery(ARGV[1], ARGV[2], ARGV[3]) then return 0 end
 local group = redis.call('HGET', message_group, ARGV[1])
 -- A serial delivery keeps its active ID and goes ahead of its followers.
 -- Node affinity is released only when the final inflight delivery returns.
@@ -279,6 +288,7 @@ for _, id in ipairs(redis.call('ZRANGE', processing, 0, -1)) do
         local group = redis.call('HGET', message_group, id)
         redis.call('ZREM', processing, id)
         redis.call('HDEL', delivery_owner, id)
+        redis.call('HDEL', delivery_receipts, id)
         push_pending(id, group, true)
         recovered = recovered + 1
     end

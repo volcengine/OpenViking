@@ -214,6 +214,14 @@ async def test_native_memory_queue_waits_for_shared_batch_before_ack(monkeypatch
         lambda: SimpleNamespace(create=AsyncMock()),
     )
     processor = SessionCommitProcessor(SimpleNamespace(session=Mock(return_value=BatchSession({}))))
+    deliveries = {}
+    on_dequeue = processor.on_dequeue
+
+    async def capture_delivery(delivery):
+        deliveries[delivery["id"]] = delivery
+        return await on_dequeue(delivery)
+
+    monkeypatch.setattr(processor, "on_dequeue", capture_delivery)
     client = ragfs_python.RAGFSBindingClient()
     client.mount("queuefs", "/queue", {"backend": "memory"})
     queue = NamedQueue(client, "/queue", "SessionCommit", dequeue_handler=processor)
@@ -244,7 +252,7 @@ async def test_native_memory_queue_waits_for_shared_batch_before_ack(monkeypatch
         if cancel:
             assert isinstance(results[0], asyncio.CancelledError)
             [unacked] = await queue.snapshot()
-            await queue.ack(unacked["id"], unacked)
+            await queue.ack(unacked["id"], deliveries[unacked["id"]])
         assert (await queue.get_status()).is_complete
         assert queue._error_count == (2 - int(cancel) if fail else 0)
     finally:

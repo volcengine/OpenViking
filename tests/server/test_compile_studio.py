@@ -327,12 +327,19 @@ async def test_external_interrupted_cancellation_cleanup_preserves_delivery(monk
         submission_meta=lambda _: {},
     )
     service.register(provider)
-    queue = manager.get_queue(
-        manager.EXTERNAL_TASK, dequeue_handler=ExternalTaskProcessor(service), allow_create=True
-    )
+    processor = ExternalTaskProcessor(service)
+    queue = manager.get_queue(manager.EXTERNAL_TASK, dequeue_handler=processor, allow_create=True)
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: manager)
     owner = {"account_id": "acme", "user_id": "alice"}
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role(Role.USER))
+    deliveries = []
+    on_dequeue = processor.on_dequeue
+
+    async def capture_delivery(delivery):
+        deliveries.append(delivery)
+        return await on_dequeue(delivery)
+
+    monkeypatch.setattr(processor, "on_dequeue", capture_delivery)
     try:
         task = await service.create("compile", resource_id=None, payload={"to": "target"}, ctx=ctx)
         await tracker.patch_task(
@@ -349,7 +356,8 @@ async def test_external_interrupted_cancellation_cleanup_preserves_delivery(monk
         assert (await queue.get_status()).in_progress == 1
         assert await tracker.has_work(task.task_id, **owner)
         await tracker.mark_work_done(task.task_id, extract_task_metadata(original).work_id, **owner)
-        await queue.retry(original["id"])
+        [delivery] = deliveries
+        await queue.retry(delivery["id"], delivery_receipt=delivery["delivery_receipt"])
         provider.on_cancel.side_effect = AssertionError("Cancelled replay must not call Runtime")
         await queue.dequeue()
         assert not await queue.snapshot()

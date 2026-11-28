@@ -31,6 +31,9 @@ pub struct Message {
     /// At most one unacknowledged delivery for this key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial_key: Option<String>,
+    /// Identifies the current processing attempt. Never stored with the payload.
+    #[serde(skip)]
+    pub delivery_receipt: Option<String>,
 }
 
 impl Message {
@@ -43,6 +46,7 @@ impl Message {
             timestamp_valid: true,
             group_key: None,
             serial_key: None,
+            delivery_receipt: None,
         }
     }
 
@@ -108,6 +112,7 @@ impl StoredMessage {
             timestamp_valid,
             group_key: self.group_key,
             serial_key: self.serial_key,
+            delivery_receipt: None,
         }
     }
 }
@@ -224,11 +229,11 @@ pub trait QueueBackend: Send + Sync {
     /// Get the last enqueue time for the queue
     fn get_last_enqueue_time(&self, queue_name: &str) -> Result<SystemTime>;
 
-    /// Acknowledge (delete) a message by ID
-    fn ack(&mut self, queue_name: &str, msg_id: &str) -> Result<bool>;
+    /// Delete a processing message if its ID and receipt match the current delivery.
+    fn ack(&mut self, queue_name: &str, msg_id: &str, receipt: Option<&str>) -> Result<bool>;
 
     /// Return a processing message to pending, retaining its identity and serial priority.
-    fn retry(&mut self, queue_name: &str, msg_id: &str) -> Result<bool>;
+    fn retry(&mut self, queue_name: &str, msg_id: &str, receipt: Option<&str>) -> Result<bool>;
 }
 
 /// Options for SQLite queue backend.
@@ -356,11 +361,13 @@ impl QueueBackend for MemoryBackend {
                         .any(|active| active.serial_key == message.serial_key)
             })
         });
-        let message = position.and_then(|position| queue.messages.remove(position));
-        if let Some(message) = &message {
-            queue.processing.push_back(message.clone());
-        }
-        Ok(message)
+        let Some(mut message) = position.and_then(|position| queue.messages.remove(position))
+        else {
+            return Ok(None);
+        };
+        message.delivery_receipt = Some(Uuid::new_v4().to_string());
+        queue.processing.push_back(message.clone());
+        Ok(Some(message))
     }
 
     fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
@@ -427,13 +434,17 @@ impl QueueBackend for MemoryBackend {
         Ok(queue.last_enqueue_time)
     }
 
-    fn ack(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
+    fn ack(&mut self, queue_name: &str, msg_id: &str, receipt: Option<&str>) -> Result<bool> {
         let queue = self
             .queues
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
 
-        let Some(position) = queue.processing.iter().position(|msg| msg.id == msg_id) else {
+        let Some(position) = queue
+            .processing
+            .iter()
+            .position(|msg| msg.id == msg_id && msg.delivery_receipt.as_deref() == receipt)
+        else {
             return Ok(false);
         };
         let message = queue.processing.remove(position).unwrap();
@@ -446,15 +457,20 @@ impl QueueBackend for MemoryBackend {
         Ok(true)
     }
 
-    fn retry(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
+    fn retry(&mut self, queue_name: &str, msg_id: &str, receipt: Option<&str>) -> Result<bool> {
         let queue = self
             .queues
             .get_mut(queue_name)
             .ok_or_else(|| Error::NotFound(format!("queue '{}' not found", queue_name)))?;
-        let Some(position) = queue.processing.iter().position(|msg| msg.id == msg_id) else {
+        let Some(position) = queue
+            .processing
+            .iter()
+            .position(|msg| msg.id == msg_id && msg.delivery_receipt.as_deref() == receipt)
+        else {
             return Ok(false);
         };
-        let message = queue.processing.remove(position).unwrap();
+        let mut message = queue.processing.remove(position).unwrap();
+        message.delivery_receipt = None;
         if let Some(key) = &message.serial_key {
             queue.retry_serial.insert(key.clone(), message.id.clone());
         }
@@ -562,6 +578,7 @@ impl SQLiteQueueBackend {
             "ALTER TABLE queue_messages ADD COLUMN processing_started_at INTEGER",
             "ALTER TABLE queue_messages ADD COLUMN serial_key TEXT",
             "ALTER TABLE queue_messages ADD COLUMN schedule_seq INTEGER",
+            "ALTER TABLE queue_messages ADD COLUMN delivery_receipt TEXT",
             "CREATE INDEX IF NOT EXISTS idx_queue_message_id ON queue_messages(queue_name, message_id)",
             "CREATE INDEX IF NOT EXISTS idx_queue_serial ON queue_messages(queue_name, serial_key, id)",
         ] {
@@ -622,18 +639,17 @@ impl SQLiteQueueBackend {
             .lock()
             .map_err(|e| Error::internal(format!("sqlite mutex poisoned: {}", e)))?;
 
-        let changed = if stale_sec <= 0 {
-            conn.execute(
-                "UPDATE queue_messages SET status = 'pending', processing_started_at = NULL WHERE status = 'processing'",
-                [],
+        // Recover legacy claims at cutover even when a positive age threshold
+        // keeps recent receipt-bearing deliveries in processing.
+        let changed = conn
+            .execute(
+                "UPDATE queue_messages
+                 SET status = 'pending', processing_started_at = NULL, delivery_receipt = NULL
+                 WHERE status = 'processing'
+                   AND (?1 <= 0 OR delivery_receipt IS NULL OR processing_started_at <= ?2)",
+                params![stale_sec, cutoff],
             )
-        } else {
-            conn.execute(
-                "UPDATE queue_messages SET status = 'pending', processing_started_at = NULL WHERE status = 'processing' AND processing_started_at <= ?1",
-                params![cutoff],
-            )
-        }
-        .map_err(|e| Error::internal(format!("sqlite recover stale error: {}", e)))?;
+            .map_err(|e| Error::internal(format!("sqlite recover stale error: {e}")))?;
 
         Ok(changed)
     }
@@ -828,11 +844,12 @@ impl QueueBackend for SQLiteQueueBackend {
             }
         };
 
+        let receipt = Uuid::new_v4().to_string();
         tx.execute(
             "UPDATE queue_messages
-             SET status = 'processing', processing_started_at = ?1
-             WHERE id = ?2",
-            params![Utc::now().timestamp(), id],
+             SET status = 'processing', processing_started_at = ?1, delivery_receipt = ?2
+             WHERE id = ?3",
+            params![Utc::now().timestamp(), receipt, id],
         )
         .map_err(|e| Error::internal(format!("sqlite mark processing error: {}", e)))?;
 
@@ -841,7 +858,9 @@ impl QueueBackend for SQLiteQueueBackend {
 
         let stored: StoredMessage =
             serde_json::from_str(&raw_data).map_err(|e| Error::Serialization(e.to_string()))?;
-        Ok(Some(stored.into_message()))
+        let mut message = stored.into_message();
+        message.delivery_receipt = Some(receipt);
+        Ok(Some(message))
     }
 
     fn peek(&self, queue_name: &str) -> Result<Option<Message>> {
@@ -980,7 +999,7 @@ impl QueueBackend for SQLiteQueueBackend {
             .unwrap_or(SystemTime::UNIX_EPOCH))
     }
 
-    fn ack(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
+    fn ack(&mut self, queue_name: &str, msg_id: &str, receipt: Option<&str>) -> Result<bool> {
         let conn = self
             .conn
             .lock()
@@ -991,14 +1010,15 @@ impl QueueBackend for SQLiteQueueBackend {
         let changed = conn
             .execute(
                 "DELETE FROM queue_messages
-                 WHERE queue_name = ?1 AND message_id = ?2 AND status = 'processing'",
-                params![queue_name, msg_id],
+                 WHERE queue_name = ?1 AND message_id = ?2 AND status = 'processing'
+                   AND delivery_receipt IS ?3",
+                params![queue_name, msg_id, receipt],
             )
             .map_err(|e| Error::internal(format!("sqlite ack error: {}", e)))?;
         Ok(changed > 0)
     }
 
-    fn retry(&mut self, queue_name: &str, msg_id: &str) -> Result<bool> {
+    fn retry(&mut self, queue_name: &str, msg_id: &str, receipt: Option<&str>) -> Result<bool> {
         let conn = self
             .conn
             .lock()
@@ -1006,16 +1026,22 @@ impl QueueBackend for SQLiteQueueBackend {
         Self::require_queue_exists(&conn, queue_name)?;
         let changed = conn
             .execute(
-                "UPDATE queue_messages SET status = 'pending', processing_started_at = NULL,
-                 schedule_seq = ?3
-             WHERE queue_name = ?1 AND message_id = ?2 AND status = 'processing'",
+                "UPDATE queue_messages
+                 SET status = 'pending', processing_started_at = NULL,
+                     delivery_receipt = NULL, schedule_seq = ?4
+                 WHERE queue_name = ?1 AND message_id = ?2 AND status = 'processing'
+                   AND delivery_receipt IS ?3",
                 params![
                     queue_name,
                     msg_id,
-                    self.next_schedule_seq.fetch_add(1, Ordering::Relaxed)
+                    receipt,
+                    self.next_schedule_seq.load(Ordering::Relaxed)
                 ],
             )
             .map_err(|e| Error::internal(format!("sqlite retry error: {e}")))?;
+        if changed > 0 {
+            self.next_schedule_seq.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(changed > 0)
     }
 }
@@ -1053,24 +1079,30 @@ mod tests {
                 backend.enqueue("test", message.clone()),
                 Err(Error::AlreadyExists(_))
             ));
-            assert!(!backend.ack("test", &message.id).unwrap());
+            assert!(!backend.ack("test", &message.id, None).unwrap());
             assert!(backend.enqueue("test", message.clone()).is_err());
 
             let delivery = backend.dequeue("test").unwrap().unwrap();
             assert_eq!(delivery.id, message.id);
             assert!(backend.enqueue("test", message.clone()).is_err());
-            assert!(backend.retry("test", &message.id).unwrap());
-            assert!(!backend.retry("test", &message.id).unwrap());
-            assert!(!backend.ack("test", &message.id).unwrap());
+            assert!(backend
+                .retry("test", &delivery.id, delivery.delivery_receipt.as_deref())
+                .unwrap());
+            assert!(!backend
+                .retry("test", &delivery.id, delivery.delivery_receipt.as_deref())
+                .unwrap());
+            assert!(!backend.ack("test", &message.id, None).unwrap());
             assert!(backend.enqueue("test", message.clone()).is_err());
 
             let retried = backend.dequeue("test").unwrap().unwrap();
             assert_eq!(retried.id, message.id);
             assert_eq!(retried.data, message.data);
             assert_eq!(retried.timestamp, message.timestamp);
-            assert!(backend.ack("test", &message.id).unwrap());
+            assert!(backend
+                .ack("test", &retried.id, retried.delivery_receipt.as_deref())
+                .unwrap());
             backend.enqueue("test", message.clone()).unwrap();
-            assert!(!backend.ack("test", &message.id).unwrap());
+            assert!(!backend.ack("test", &message.id, None).unwrap());
             assert!(backend.enqueue("test", message.clone()).is_err());
 
             backend.dequeue("test").unwrap().unwrap();
@@ -1129,6 +1161,7 @@ mod tests {
                 .enqueue("other", keyed_message("s1", true, "用户:A"))
                 .unwrap();
             assert_eq!(backend.dequeue("other").unwrap().unwrap().id, "s1");
+            let mut deliveries = HashMap::new();
             for (expected, group, serial) in [
                 ("s1", None, Some("用户:A")),
                 ("g1", Some("用户:A"), None),
@@ -1140,6 +1173,7 @@ mod tests {
                 assert_eq!(message.data, expected.as_bytes());
                 assert_eq!(message.group_key.as_deref(), group);
                 assert_eq!(message.serial_key.as_deref(), serial);
+                deliveries.insert(expected, message);
             }
             assert_eq!(
                 backend.status("mixed").unwrap(),
@@ -1151,16 +1185,22 @@ mod tests {
             assert_eq!(backend.peek("mixed").unwrap().unwrap().id, "s2");
             assert_eq!(backend.list_unacked("mixed").unwrap().len(), 6);
             assert!(backend.dequeue("mixed").unwrap().is_none());
-            assert!(!backend.ack("mixed", "s2").unwrap());
-            assert!(backend.ack("mixed", "g1").unwrap());
+            assert!(!backend.ack("mixed", "s2", None).unwrap());
+            assert!(backend
+                .ack("mixed", "g1", deliveries["g1"].delivery_receipt.as_deref())
+                .unwrap());
             assert!(backend.dequeue("mixed").unwrap().is_none());
-            assert!(backend.ack("mixed", "s1").unwrap());
+            assert!(backend
+                .ack("mixed", "s1", deliveries["s1"].delivery_receipt.as_deref())
+                .unwrap());
             let second = backend.dequeue("mixed").unwrap().unwrap();
             assert_eq!(second.id, "s2");
             backend
                 .enqueue("mixed", keyed_message("s3", true, "用户:A"))
                 .unwrap();
-            assert!(!backend.ack("mixed", "s1").unwrap());
+            assert!(!backend
+                .ack("mixed", "s1", deliveries["s1"].delivery_receipt.as_deref())
+                .unwrap());
             assert!(backend.dequeue("mixed").unwrap().is_none());
             for message in [
                 keyed_message("s2", true, "用户:A"),
@@ -1201,7 +1241,8 @@ mod tests {
         ] {
             backend.enqueue("mixed", message).unwrap();
         }
-        assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "original");
+        let stale = backend.dequeue("mixed").unwrap().unwrap();
+        assert_eq!(stale.id, "original");
         assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "group");
         assert!(backend.dequeue("mixed").unwrap().is_none());
         drop(backend);
@@ -1211,9 +1252,21 @@ mod tests {
         assert_eq!(original.serial_key.as_deref(), Some("A"));
         assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "group");
         assert!(backend.dequeue("mixed").unwrap().is_none());
-        backend.ack("mixed", "original").unwrap();
+        assert_ne!(stale.delivery_receipt, original.delivery_receipt);
+        assert!(!backend
+            .ack("mixed", &stale.id, stale.delivery_receipt.as_deref())
+            .unwrap());
+        assert!(!backend
+            .retry("mixed", &stale.id, stale.delivery_receipt.as_deref())
+            .unwrap());
+        assert!(backend.dequeue("mixed").unwrap().is_none());
+        assert!(backend
+            .ack("mixed", &original.id, original.delivery_receipt.as_deref())
+            .unwrap());
         assert_eq!(backend.dequeue("mixed").unwrap().unwrap().id, "later");
-        assert!(!backend.ack("mixed", "original").unwrap());
+        assert!(!backend
+            .ack("mixed", &original.id, original.delivery_receipt.as_deref())
+            .unwrap());
     }
 
     /// Create an in-memory backend with a test queue.
@@ -1293,11 +1346,15 @@ mod tests {
                 processing: 1,
             }
         );
-        assert!(backend.ack("test", &dequeued1.id).unwrap());
+        assert!(backend
+            .ack("test", &dequeued1.id, dequeued1.delivery_receipt.as_deref())
+            .unwrap());
 
         let dequeued2 = backend.dequeue("test").unwrap().unwrap();
         assert_eq!(dequeued2.data, b"message 2");
-        assert!(backend.ack("test", &dequeued2.id).unwrap());
+        assert!(backend
+            .ack("test", &dequeued2.id, dequeued2.delivery_receipt.as_deref())
+            .unwrap());
 
         assert_eq!(backend.size("test").unwrap(), 0);
         assert_eq!(
@@ -1413,7 +1470,9 @@ mod tests {
         let unacked = backend.list_unacked("test").unwrap();
         assert_eq!(unacked.len(), 2);
         assert_eq!(unacked[0].id, msg1_id);
-        assert!(backend.ack("test", &msg1_id).unwrap());
+        assert!(backend
+            .ack("test", &first.id, first.delivery_receipt.as_deref())
+            .unwrap());
         assert_eq!(
             backend.status("test").unwrap(),
             QueueState {
@@ -1484,6 +1543,7 @@ mod tests {
             timestamp_valid: true,
             group_key: None,
             serial_key: None,
+            delivery_receipt: None,
         })
         .into_message();
         assert!(precise.timestamp_valid);
@@ -1506,6 +1566,7 @@ mod tests {
                     timestamp_valid: true,
                     group_key: None,
                     serial_key: None,
+                    delivery_receipt: None,
                 },
             )
             .unwrap();
@@ -1535,6 +1596,44 @@ mod tests {
         let recovered = reopened.dequeue("test").unwrap().unwrap();
         assert_eq!(recovered.id, msg_id);
         assert_eq!(recovered.data, b"recover me");
+    }
+
+    #[test]
+    fn test_sqlite_recovers_legacy_claims_with_positive_stale_threshold() {
+        let (_dir, path, mut backend) = sqlite_backend();
+        backend.create_queue("legacy").unwrap();
+        backend
+            .enqueue("legacy", keyed_message("old", true, "A"))
+            .unwrap();
+        backend
+            .enqueue("legacy", keyed_message("next", true, "A"))
+            .unwrap();
+        assert_eq!(backend.dequeue("legacy").unwrap().unwrap().id, "old");
+        drop(backend);
+
+        // Simulate the last mount using the pre-receipt schema.
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("ALTER TABLE queue_messages DROP COLUMN delivery_receipt")
+            .unwrap();
+        let options = SQLiteQueueOptions {
+            recover_stale_sec: 3600,
+            ..SQLiteQueueOptions::default()
+        };
+        let mut backend = SQLiteQueueBackend::open(&path, options).unwrap();
+        assert!(!backend.ack("legacy", "old", None).unwrap());
+        let claimed = backend.dequeue("legacy").unwrap().unwrap();
+        assert_eq!(claimed.id, "old");
+        assert!(claimed.delivery_receipt.is_some());
+        drop(backend);
+
+        let mut backend = SQLiteQueueBackend::open(&path, options).unwrap();
+        assert!(backend.dequeue("legacy").unwrap().is_none());
+        assert!(!backend.retry("legacy", "old", None).unwrap());
+        assert!(backend
+            .ack("legacy", "old", claimed.delivery_receipt.as_deref())
+            .unwrap());
+        assert_eq!(backend.dequeue("legacy").unwrap().unwrap().id, "next");
     }
 
     #[test]
@@ -1681,6 +1780,6 @@ mod tests {
         assert!(backend.size("nonexistent").is_err());
         assert!(backend.clear("nonexistent").is_err());
         assert!(backend.get_last_enqueue_time("nonexistent").is_err());
-        assert!(backend.ack("nonexistent", "msg-id").is_err());
+        assert!(backend.ack("nonexistent", "msg-id", None).is_err());
     }
 }

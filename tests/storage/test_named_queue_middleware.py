@@ -71,13 +71,22 @@ async def test_keyed_enqueue_native_receipt_and_payload(key):
         receipt = await queue.enqueue({"serial_key": "business payload"}, **{key: "用户:A"})
         assert str(UUID(receipt)) == receipt
         message = await queue.dequeue_raw()
+        assert message is not None
         assert message["id"] == receipt
         assert json.loads(message["data"]) == {"serial_key": "business payload"}
         second = await queue.enqueue("opaque", **{key: "用户:A"})
         concurrent = await queue.dequeue_raw()
         if key == "serial_key":
             assert concurrent is None
+            await queue.settle_dequeued(message, ProcessResult.retry())
+            replay = await queue.dequeue_raw()
+            assert replay is not None
+            assert replay["id"] == message["id"]
+            assert replay["delivery_receipt"] != message["delivery_receipt"]
             await queue.ack(receipt, message)
+            assert await queue.dequeue_raw() is None
+            assert (await queue.get_status()).in_progress == 1
+            await queue.ack(receipt, replay)
             concurrent = await queue.dequeue_raw()
         assert concurrent["id"] == second
     finally:
