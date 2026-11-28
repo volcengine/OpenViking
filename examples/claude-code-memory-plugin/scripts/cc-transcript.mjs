@@ -8,6 +8,9 @@
  * the block walking, the part building and the capture filter are shared.
  */
 
+import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
 import {
   collectToolNamesByIdFromEntries,
   extractPartsFromPayload,
@@ -39,6 +42,37 @@ export function parseTranscript(content) {
     try { messages.push(JSON.parse(line)); } catch { /* skip */ }
   }
   return messages;
+}
+
+/** Stream JSONL without retaining the raw transcript or its bookkeeping rows. */
+export async function readCaptureTurns(path, cfg = {}) {
+  const payloads = [];
+  const input = createReadStream(path, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let firstRecord = true;
+  let legacyArray = false;
+  try {
+    for await (const line of lines) {
+      const record = line.trimStart();
+      if (!record) continue;
+      if (firstRecord && record.startsWith("[")) {
+        legacyArray = true;
+        break;
+      }
+      firstRecord = false;
+      let message;
+      try { message = JSON.parse(line); } catch { continue; }
+      const payload = normalizeMessage(message, cfg);
+      if (payload) payloads.push(payload);
+    }
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+  if (legacyArray) {
+    return extractCaptureTurns(parseTranscript(await readFile(path, "utf8")), cfg);
+  }
+  return captureTurnsFromPayloads(payloads);
 }
 
 function extractToolResultText(content) {
@@ -142,8 +176,13 @@ function textFromParts(parts) {
  * up; callers leave them out of what they send.
  */
 export function extractCaptureTurns(messages, cfg = {}) {
-  const payloads = (messages || []).map((message) => normalizeMessage(message, cfg));
-  const toolNameById = collectToolNamesByIdFromEntries(payloads.filter(Boolean));
+  return captureTurnsFromPayloads(
+    (messages || []).map((message) => normalizeMessage(message, cfg)),
+  );
+}
+
+function captureTurnsFromPayloads(payloads) {
+  const toolNameById = collectToolNamesByIdFromEntries(payloads);
   const turns = [];
   for (const payload of payloads) {
     const role = payload && normalizeCaptureRole(payload.role);
