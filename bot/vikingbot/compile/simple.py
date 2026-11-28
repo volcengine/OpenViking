@@ -23,6 +23,8 @@ from vikingbot.agent.tools.ov_file import (
     VikingMultiReadTool,
 )
 from vikingbot.agent.tools.registry import ToolRegistry
+from vikingbot.compile.file_ops import validate_wiki_conflict_update
+from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import CompileFailure, CompileResult
 from vikingbot.compile.renderer import (
     validate_declared_okf_markdown,
@@ -82,36 +84,69 @@ class CompileWriteTool(Tool):
         """Return the file outcome after OV acknowledges the write. In-flight paths survive cancellation."""
         relative = validate_relative_file_path(path)
         uri = normalize_storage_target_uri(safe_join_viking_uri(self.target, relative))
+        context_type = classify_uri(uri).context_type
+        wiki_markdown = context_type == "resource" and relative.lower().endswith(".md")
+        if wiki_markdown and mode not in {"replace", "append", "create"}:
+            raise ValueError(f"Unsupported Compile write mode: {mode}")
         if uri in self._active or uri in self.unconfirmed:
             raise ValueError(f"Write already in flight or awaiting confirmation: {uri}")
         self._active.add(uri)
         try:
             try:
-                old = await self.client.read_raw(uri)
+                old = (
+                    (await self.client.download_bytes(uri)).decode("utf-8")
+                    if wiki_markdown
+                    else await self.client.read_raw(uri)
+                )
             except OpenVikingError as exc:
                 if exc.code != "NOT_FOUND":
                     raise
                 old = None
-            if old is not None and classify_uri(uri).context_type == "memory":
+            if old is not None and context_type == "memory":
                 old = strip_memory_fields_trailer(old)
             candidate = (old or "") + content if mode == "append" else content
-            if classify_uri(uri).context_type == "resource":
+            if context_type == "resource":
                 validate_declared_okf_markdown(uri, candidate.encode("utf-8"))
             if old is not None and (content == old if mode == "replace" else not content):
                 outcome = "unchanged"
             else:
+                if wiki_markdown:
+                    try:
+                        validate_wiki_conflict_update(old, candidate)
+                    except ValueError as exc:
+                        raise ValueError(f"{relative}: {exc}") from exc
+                outcome = "created" if old is None else "updated"
                 self.unconfirmed.add(uri)
                 await self.save_progress(self)
                 try:
-                    receipt = await self.client.write(uri, content, mode=mode)
+                    if wiki_markdown:
+                        operation: dict[str, str | bool] = {
+                            "uri": uri,
+                            "content": candidate,
+                            "mode": "replace",
+                        }
+                        if old is None:
+                            operation["if_absent"] = True
+                        else:
+                            operation["expected_sha256"] = content_hash(old)
+                        receipt = await self.client.batch_write(
+                            root_uri=self.target, operations=[operation], wait=False
+                        )
+                        confirmed = uri in receipt.get(outcome, [])
+                    else:
+                        receipt = await self.client.write(uri, content, mode=mode)
+                        confirmed = (
+                            receipt.get("uri") == uri and receipt.get("content_updated") is True
+                        )
                 except OpenVikingError as exc:
-                    if exc.code in {"INVALID_ARGUMENT", "UNAUTHENTICATED", "PERMISSION_DENIED"}:
+                    if exc.code in {"INVALID_ARGUMENT", "UNAUTHENTICATED", "PERMISSION_DENIED"} or (
+                        wiki_markdown and exc.code == "CONFLICT"
+                    ):
                         self.unconfirmed.discard(uri)
                         await self.save_progress(self)
                     raise
-                if receipt.get("uri") != uri or receipt.get("content_updated") is not True:
+                if not confirmed:
                     raise ValueError(f"Unconfirmed write receipt for {uri}")
-                outcome = "created" if old is None else "updated"
             if outcome != "unchanged" and self.outcomes.get(uri) != "created":
                 self.outcomes[uri] = outcome
             else:

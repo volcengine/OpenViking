@@ -551,10 +551,15 @@ async def test_simple_compile_multi_read_delivers_normalized_image(runtime):
         original.save(output, format="PNG")
         source = output.getvalue()
     client.stat.return_value = {"size": len(source)}
-    client.download_bytes.return_value = source
     target = pipeline.target + "/findings.md"
-    client.read_raw.side_effect = NotFoundError("missing")
-    client.write = AsyncMock(return_value={"uri": target, "content_updated": True})
+
+    async def download(uri):
+        if uri == target:
+            raise NotFoundError(uri)
+        return source
+
+    client.download_bytes.side_effect = download
+    client.batch_write = AsyncMock(return_value={"created": [target]})
 
     async def run_agent(*, tool_registry, **kwargs):
         reader = tool_registry.get("openviking_multi_read")
