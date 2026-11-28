@@ -206,9 +206,24 @@ class HTMLParser(BaseParser):
 
     def _preprocess_html(self, html: str) -> str:
         """Preprocess HTML to fix hidden content and lazy loading issues (e.g., WeChat public accounts)."""
-        from bs4 import BeautifulSoup
+        from bs4 import BeautifulSoup, Comment
 
         soup = BeautifulSoup(html, "html.parser")
+        changed = False
+        # Trafilatura emits cell text as Markdown without escaping literal pipes.
+        # Visit each text node once, including nested tables and inline code/links.
+        for node in soup.find_all(string=True):
+            if (
+                not isinstance(node, Comment)
+                and "|" in node
+                and node.find_parent(["td", "th"]) is not None
+            ):
+                # Preserve any literal backslashes before the escaped delimiter.
+                escaped = re.sub(
+                    r"(\\*)\|", lambda match: "\\" * (2 * len(match[1]) + 1) + "|", str(node)
+                )
+                node.replace_with(escaped)
+                changed = True
 
         # WeChat public account: js_content is hidden by default, need to remove hidden style
         js_content = soup.find(id="js_content")
@@ -221,7 +236,7 @@ class HTMLParser(BaseParser):
                     img["src"] = img["data-src"]
             return str(js_content)
 
-        return html
+        return str(soup) if changed else html
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
