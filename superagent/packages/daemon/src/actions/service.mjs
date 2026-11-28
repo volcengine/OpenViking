@@ -69,7 +69,9 @@ const HANDLERS = {
   openviking_search: 'openvikingSearch',
   openviking_read: 'openvikingRead',
   openviking_list: 'openvikingList',
+  openviking_download: 'openvikingDownload',
   openviking_add_resource: 'openvikingAddResource',
+  openviking_add_skill: 'openvikingAddSkill',
   openviking_remember: 'openvikingRemember',
   openviking_write: 'openvikingWrite',
 };
@@ -101,7 +103,8 @@ function blocked(code, message) {
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
   if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
-  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri || result?.data?.stored || result?.data?.removed);
+  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri
+    || result?.data?.stored || result?.data?.removed || result?.data?.downloaded);
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -1898,12 +1901,29 @@ export class ActionService {
     return result;
   }
 
+  async openvikingDownload(input, caller) {
+    if (Boolean(input.uri) === Boolean(input.skill)) {
+      throw blocked('invalid_input', 'Pass exactly one of uri or skill');
+    }
+    caller.trace.invoked = true;
+    return await this.ovToolClient().download({ ...input, workspace: this.config.workspace });
+  }
+
   // Writes check authority only before the request leaves, which call() did:
   // a write the server took must not be reported failed because the runtime
   // was retired while it landed. Neither is ever retried automatically.
   async openvikingAddResource(input, caller) {
     caller.trace.invoked = true;
     return await this.ovToolClient().addResource({ ...input, workspace: this.config.workspace });
+  }
+
+  async openvikingAddSkill(input, caller) {
+    const sources = [input.data, input.git_url, input.file_path].filter((value) => String(value ?? '').trim());
+    if (sources.length !== 1) {
+      throw blocked('invalid_input', 'Pass exactly one of data, git_url or file_path');
+    }
+    caller.trace.invoked = true;
+    return await this.ovToolClient().addSkill({ ...input, workspace: this.config.workspace });
   }
 
   // A preference of the person who sent the input decision_id names, kept in

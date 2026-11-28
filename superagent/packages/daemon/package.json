@@ -16,8 +16,10 @@
     "@larksuite/cli": "1.0.99",
     "@tencent-connect/qqbot-nodejs": "1.0.5",
     "dingtalk-stream": "2.1.5",
+    "fflate": "0.8.2",
     "image-size": "2.0.4",
-    "qrcode-terminal": "0.12.0"
+    "qrcode-terminal": "0.12.0",
+    "yaml": "2.9.0"
   },
   "scripts": {
     "start": "node src/main.mjs",

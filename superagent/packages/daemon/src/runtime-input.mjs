@@ -65,6 +65,21 @@ export function withTurnNotice(agent, text) {
   return notice ? `${notice}\n${text}` : text;
 }
 
+export function withTurnSkills(items, { active = false } = {}) {
+  let view = null;
+  const lines = items.map((item) => String(item.text).replace(
+    /\n?<available_skills>[\s\S]*?<\/available_skills>/g,
+    (block) => {
+      if (!active && !view) view = block.trimStart();
+      return '';
+    },
+  ));
+  if (view) {
+    lines.push(view);
+  }
+  return lines.join('\n');
+}
+
 export function deliveryItem({ text, seq = null, receiptId }) {
   return receiptId === null || receiptId === undefined
     ? { text, seq }

@@ -34,6 +34,9 @@ const PERSON_CHARS = 1_500;
 const READ_BATCH = 8;
 const CACHE_TTL_MS = 10 * 60_000;
 const MIN_QUERY_CHARS = 2;
+const SKILL_LIMIT = 8;
+const SKILL_DESCRIPTION_CHARS = 200;
+const SKILL_BLOCK_BYTES = 1_600;
 
 const escapeAttribute = (value) => String(value).replace(/[&"<>]/g, (char) => (
   { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]));
@@ -43,12 +46,13 @@ const leaf = (uri) => String(uri).replace(/\/+$/, '').split('/').pop() ?? '';
 const withoutFields = (text) => String(text).replace(/\n*<!-- MEMORY_FIELDS[\s\S]*?-->\s*$/, '').trim();
 
 export class OVRecall {
-  constructor({ configPath, autoRecall = false, store = null, logger, fetchImpl = globalThis.fetch,
+  constructor({ configPath, autoRecall = false, skillRecall = true, store = null, logger, fetchImpl = globalThis.fetch,
     timeoutMs = DEFAULT_TIMEOUT_MS, clock = Date.now } = {}) {
     this.configPath = configPath;
     this.fetchImpl = fetchImpl;
     this.connectionValue = null;
     this.autoRecall = Boolean(autoRecall);
+    this.skillRecall = Boolean(skillRecall);
     this.store = store;
     this.logger = logger;
     this.timeoutMs = timeoutMs;
@@ -69,12 +73,13 @@ export class OVRecall {
     const query = String(event.content ?? '').trim();
     const sender = owner ? null : personId(event);
     const senderDirectory = sender ? personDirectory(event) : null;
-    const [ownerPreferences, senderPreferences, entries] = await this.bounded([
+    const [ownerPreferences, senderPreferences, entries, skills] = await this.bounded([
       this.preferences({ owner: true }),
       sender ? this.preferences({ id: sender, directory: senderDirectory }) : null,
       this.autoRecall && query.length >= MIN_QUERY_CHARS ? this.search(query) : null,
+      this.skillRecall && query.length > 0 ? this.findSkills(query) : null,
     ]);
-    return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [] });
+    return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [], skills: skills ?? [] });
   }
 
   // A worker's Standing preferences (worker-executor.mjs): the owner's, and the
@@ -115,6 +120,13 @@ export class OVRecall {
     const { result } = await this.connection.send('/api/v1/search/search',
       { method: 'POST', headers: this.connection.headers, body: JSON.stringify(body) }, this.timeoutMs);
     return Array.isArray(result?.entries) ? result.entries : [];
+  }
+
+  async findSkills(query) {
+    const { result } = await this.connection.json('/api/v1/skills/find', {
+      query, limit: SKILL_LIMIT, target_uri: 'viking://~/skills',
+    }, { timeoutMs: this.timeoutMs });
+    return Array.isArray(result?.skills) ? result.skills : [];
   }
 
   // The OV session this daemon mirrors the conversation into, once OV has it:
@@ -215,7 +227,46 @@ export class OVRecall {
     return match[1];
   }
 
-  render(event, { sender, ownerPreferences, senderPreferences, entries }) {
+  skillSummary(skills) {
+    const candidates = skills
+      .filter((skill) => skill?.name && (skill.root_uri || skill.uri))
+      .sort((left, right) => String(left.name).localeCompare(String(right.name)))
+      .slice(0, SKILL_LIMIT);
+    if (!candidates.length) return null;
+    const open = '<available_skills>';
+    const close = '</available_skills>';
+    const lines = [];
+    let omitted = 0;
+    const bytes = (value) => Buffer.byteLength(value, 'utf8');
+    const render = (items, note = null) => `${open}\n${[...items, ...(note ? [note] : [])].join('\n')}\n${close}`;
+    for (const skill of candidates) {
+      const root = String(skill.root_uri || skill.uri).replace(/\/SKILL\.md$/, '');
+      const description = String(skill.description ?? '').trim();
+      const short = description.length > SKILL_DESCRIPTION_CHARS
+        ? `${description.slice(0, SKILL_DESCRIPTION_CHARS - 1)}…` : description;
+      const line = `- ${escapeAttribute(skill.name)}: ${escapeAttribute(short)} ${escapeAttribute(`${root}/SKILL.md`)}`;
+      const note = `- ${omitted + 1} more Skill(s) not shown`;
+      if (bytes(render([...lines, line])) > SKILL_BLOCK_BYTES
+        || (candidates.length > lines.length + 1 && bytes(render([...lines, line], note)) > SKILL_BLOCK_BYTES)) {
+        omitted += 1;
+      } else {
+        lines.push(line);
+      }
+    }
+    omitted += candidates.length - lines.length - omitted;
+    if (omitted) {
+      let note = `- ${omitted} more Skill(s) not shown`;
+      while (lines.length && bytes(render(lines, note)) > SKILL_BLOCK_BYTES) {
+        lines.pop();
+        omitted += 1;
+        note = `- ${omitted} more Skill(s) not shown`;
+      }
+      return render(lines, note);
+    }
+    return render(lines);
+  }
+
+  render(event, { sender, ownerPreferences, senderPreferences, entries, skills }) {
     const memories = [];
     if (ownerPreferences) {
       memories.push(`<memory who="owner" type="preferences">\n${ownerPreferences}\n</memory>`);
@@ -231,6 +282,8 @@ export class OVRecall {
       const text = String(entry.text ?? '').trim();
       memories.push(text ? `<memory ${attributes}>\n${text}\n</memory>` : `<memory ${attributes} />`);
     }
+    const skillSummary = this.skillSummary(skills);
+    if (skillSummary) memories.push(skillSummary);
     if (!memories.length) return '';
     const line = event.messageId ? `msg=${event.messageId}` : `event=${event.eventId}`;
     return [`[daemon recall ${line}: OpenViking memory that may bear on this line]`, ...memories].join('\n');

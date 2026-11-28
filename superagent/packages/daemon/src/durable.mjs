@@ -18,7 +18,7 @@ import {
   durableHostPath,
   sanitizeDurableEnv,
 } from './durable-runtime.mjs';
-import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice, withTurnSkills } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
@@ -368,7 +368,7 @@ export class DurableAgent {
       this.cognitionEpoch,
     ) ?? 0;
     const needsCatchup = this.needsHistoryPrefix;
-    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
+    let body = withTurnNotice(this, withTurnSkills(items, { active: this.turnActive }));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (needsCatchup) {
       const catchup = cognitionHistoryPrefix(

@@ -544,6 +544,17 @@ export const TOOLS = [
     annotations: READ,
   },
   {
+    name: 'openviking_download',
+    openviking: true,
+    title: 'Download OpenViking Skill files',
+    description: 'Copy one file under your OpenViking Skill directory, or synchronize one whole Skill package, into the fixed workspace Skill cache. Use this before a script, template or binary must be consumed locally; execution still uses the normal shell and its permissions.',
+    inputSchema: schema({
+      uri: { type: 'string', ...VIKING_URI, description: 'One file URI under your private OpenViking Skills directory.' },
+      skill: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$', description: 'One private Skill name to synchronize with all of its package files.' },
+    }),
+    annotations: LOCAL_WRITE,
+  },
+  {
     name: 'openviking_add_resource',
     openviking: true,
     title: 'Add an OpenViking resource',
@@ -554,6 +565,23 @@ export const TOOLS = [
       to: { type: 'string', ...VIKING_URI, description: 'Exact target uri including the leaf name; syncs what an existing target holds. Exclusive with parent.' },
       parent: { type: 'string', ...VIKING_URI, description: 'Directory to store under; the leaf name comes from the source, collisions get a suffix. Exclusive with to.' },
       description: { type: 'string', maxLength: 500, description: 'Optional short reason, kept with the resource.' },
+    }),
+    annotations: WRITE,
+  },
+  {
+    name: 'openviking_add_skill',
+    openviking: true,
+    title: 'Add an OpenViking Skill',
+    description: 'Install one Skill into your private OpenViking Skill root. Pass exactly one source: full SKILL.md text, a supported Git repository URL, or a workspace .zip/.skill package. OpenViking validates and indexes the package; use the returned root URI to read it after processing.',
+    inputSchema: schema({
+      data: { type: 'string', minLength: 1, maxLength: 100_000, description: 'Full SKILL.md text, including YAML frontmatter.' },
+      git_url: { type: 'string', maxLength: 4096, pattern: '^https?://\\S+$', description: 'Supported Git repository or subdirectory URL.' },
+      file_path: { type: 'string', minLength: 1, maxLength: 1024, description: 'Workspace-relative .zip or .skill package path.' },
+      skills: {
+        type: 'array', minItems: 1, maxItems: 50,
+        items: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' },
+        description: 'Optional Skill names to select from a multi-Skill Git repository or package.',
+      },
     }),
     annotations: WRITE,
   },

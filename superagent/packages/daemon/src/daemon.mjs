@@ -350,6 +350,7 @@ export class PersonalAgentDaemon {
       // policies, so a changed preference reaches both.
       this.recall = this.config.openVikingConfigPath
         ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
+          skillRecall: this.config.ovSkillRecall,
           store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
         : null;
       // The workers scheduler: tasks the router hands to worker sessions on

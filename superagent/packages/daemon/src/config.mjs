@@ -305,6 +305,9 @@ export function getConfig() {
     // the preferences it always shows, the daemon runs one OV search per line
     // someone sends (ov-recall.mjs).
     ovAutoRecall: boolEnv('OV_SUPERAGENT_OV_AUTO_RECALL', false),
+    // On by default; agents[].ovSkillRecall: false disables only the bounded
+    // Skill index attached to each non-empty line.
+    ovSkillRecall: boolEnv('OV_SUPERAGENT_OV_SKILL_RECALL', true),
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).
     openVikingToolTimeoutMs: intEnv('OV_SUPERAGENT_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),

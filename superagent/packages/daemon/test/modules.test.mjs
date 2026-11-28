@@ -57,6 +57,7 @@ describe('module boundaries', () => {
           workspace: '/Users/test/Documents/work/beta-workspace',
           ovConfig: '/Users/test/.openviking/ovcli.conf.beta',
           ovAutoRecall: true,
+          ovSkillRecall: false,
           model: 'ark',
           volcSessionId: 'sesn-beta-self-hosted',
           volcEnvironmentId: 'env-beta-self-hosted',
@@ -126,6 +127,8 @@ describe('module boundaries', () => {
     assert.equal(alpha.env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID, '');
     assert.equal(beta.env.OV_SUPERAGENT_LARK_PROFILE, 'cli_beta');
     assert.equal(beta.env.OV_SUPERAGENT_MODEL, 'ark');
+    assert.equal(alpha.env.OV_SUPERAGENT_OV_SKILL_RECALL, 'true');
+    assert.equal(beta.env.OV_SUPERAGENT_OV_SKILL_RECALL, 'false');
     assert.equal(beta.env.OV_SUPERAGENT_CODEX_MODEL, undefined);
     assert.equal(beta.env.OV_SUPERAGENT_VOLC_SESSION_ID, 'sesn-beta-self-hosted');
     assert.equal(beta.env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID, 'env-beta-self-hosted');
