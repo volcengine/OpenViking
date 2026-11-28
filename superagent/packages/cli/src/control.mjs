@@ -7,10 +7,11 @@ import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 import { homeDir } from '../../daemon/src/platform/index.mjs';
 
-import { execFile as execFileCallback, spawn } from '../../daemon/src/platform/index.mjs';
+import { execFile as execFileCallback, spawn, supportsShellScripts } from '../../daemon/src/platform/index.mjs';
 import fs from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -48,6 +49,11 @@ export function pm2StopTimeout(processInfo) {
 const UPDATER_APP = 'superagent-updater';
 // This command's own release (or source checkout); bin/pm2 runs its pinned pm2.
 const RELEASE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+// The detached backstop `restart` leaves before it deletes an app (see below).
+const WATCHDOG_SCRIPT = fileURLToPath(new URL('./restart-watchdog.mjs', import.meta.url));
+// It stops waiting for the restart command after this and registers the app
+// regardless, so a stuck pm2 delete cannot leave the app unregistered.
+const WATCHDOG_DEADLINE_MS = 120_000;
 
 export function pm2Defaults(env = process.env) {
   const releasePm2 = platformPm2Bin(RELEASE_ROOT);
@@ -70,6 +76,7 @@ function defaults(options = {}) {
     releaseLink: options.releaseLink ?? env.OV_SUPERAGENT_UPDATER_RELEASE_LINK ?? defaultReleaseLink(homeDir(env)),
     socketPath: options.socketPath ?? env.OV_SUPERAGENT_UPDATER_SOCKET ?? defaultUpdaterEndpoint(homeDir(env)),
     pm2Env: options.pm2Env ?? pm2.pm2Env,
+    spawnImpl: options.spawnImpl ?? spawn,
     stdout: options.stdout ?? process.stdout,
     stderr: options.stderr ?? process.stderr,
   };
@@ -218,6 +225,36 @@ export async function startCommand(target, options) {
   return 1;
 }
 
+// PM2 removes an app together with its process tree, and `restart` runs inside
+// the daemon's own tree whenever the agent runs it from a chat: the delete kills
+// this command, so the `start` after it never runs and the app entry is gone for
+// good. Leave a detached backstop behind first; it waits for this command to die
+// and then registers the app. When the command survives — a terminal outside the
+// instance — it starts the app itself and the backstop only verifies it.
+export function scheduleRestartWatchdog(spec, context) {
+  const args = ['--instance', spec.id, '--wait-pid', String(process.pid), '--deadline-ms', String(WATCHDOG_DEADLINE_MS)];
+  const options = { detached: true, stdio: 'ignore', windowsHide: true, env: context.pm2Env };
+  if (supportsShellScripts) {
+    context.spawnImpl(process.execPath, [WATCHDOG_SCRIPT, ...args], options)?.unref?.();
+    return;
+  }
+  // Windows deletes an app as a process tree, and anything this command starts
+  // is still inside it. A batch file handed to `start` leaves that tree: cmd
+  // exits at once, so the helper is orphaned before the delete reaches it.
+  const helper = path.join(os.tmpdir(), `superagent-restart-watchdog-${process.pid}-${Date.now()}.cmd`);
+  const command = [process.execPath, WATCHDOG_SCRIPT, ...args].map((value) => `"${value}"`).join(' ');
+  fs.writeFileSync(helper, [
+    '@echo off',
+    'rem Register the restarted app after the command that deleted it was killed with it.',
+    `start "" /b ${command}`,
+    'del "%~f0" >nul 2>&1',
+  ].join('\r\n'));
+  context.spawnImpl(context.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "" /b "${helper}"`], {
+    ...options,
+    windowsVerbatimArguments: true,
+  })?.unref?.();
+}
+
 export async function restartCommand(target, options) {
   const context = defaults(options);
   const apps = appsFor(target, loadTargets(context.env));
@@ -226,6 +263,7 @@ export async function restartCommand(target, options) {
   for (const spec of apps) {
     await step(context, t(`重启 ${spec.app}`, `Restarting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
       if (running.has(spec.app)) {
+        scheduleRestartWatchdog(spec, context);
         await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(running.get(spec.app)), env: appControlEnv(spec.app, context.pm2Env) });
       }
       await startOne(spec, context);
