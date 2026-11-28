@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import yaml
 
@@ -1104,7 +1104,16 @@ class MarkdownParser(BaseParser):
         if not path_part:
             return link  # pure fragment/query
 
-        target_disk = os.path.normpath(os.path.join(src_dir, path_part))
+        try:
+            path_for_lookup = unquote(path_part, errors="strict")
+        except UnicodeDecodeError:
+            path_for_lookup = path_part
+        if (
+            path_for_lookup.startswith("/")
+            or os.path.splitext(path_for_lookup)[1].lower() not in _MD_DIR_EXTS
+        ):
+            path_for_lookup = path_part
+        target_disk = os.path.normpath(os.path.join(src_dir, path_for_lookup))
         if not os.path.exists(target_disk):
             return link
         try:
@@ -1115,6 +1124,8 @@ class MarkdownParser(BaseParser):
 
         def _to_rel(new_disk: str, keep_suffix: bool) -> str:
             r = os.path.relpath(new_disk, source_new_dir).replace(os.sep, "/")
+            if path_for_lookup != path_part:
+                r = quote(r, safe="/")
             return (r + suffix) if keep_suffix else (r if r.endswith("/") else r + "/")
 
         ext = os.path.splitext(target_disk)[1].lower()

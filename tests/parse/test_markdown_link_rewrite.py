@@ -74,14 +74,75 @@ class TestRewriteRelativeLinks:
             rewrite_ctx=rewrite_ctx,
         )
 
-    async def test_md_target_becomes_directory(self, tmp_path: Path):
+    @pytest.mark.parametrize(
+        "native,destination,expected,big",
+        [
+            (
+                "目录甲/目录乙/目录丙/文档.md",
+                "./目录甲/目录乙/目录丙/文档.md",
+                "../目录甲/目录乙/目录丙/文档/",
+                False,
+            ),
+            ("guide.md", "guide.md", "../guide/", False),
+            ("说明.md", "说明.md", "../说明/", False),
+            ("说明.md", "%E8%AF%B4%E6%98%8E.md", "../%E8%AF%B4%E6%98%8E/", False),
+            ("café.md", "café.md", "../café/", False),
+            ("café.md", "caf%C3%A9.md", "../caf%C3%A9/", False),
+            ("user guide.md", "user%20guide.md", "../user_guide/", False),
+            ("100%.md", "100%25.md", "../100/", False),
+            ("100%20.md", "100%2520.md", "../10020/", False),
+            ("docs v1/guide.md", "docs%20v1/guide.md", "../docs%20v1/guide/", False),
+            (
+                "literal%20dir/guide.md",
+                "literal%2520dir/guide.md",
+                "../literal%2520dir/guide/",
+                False,
+            ),
+            ("plus+dir/guide.md", "plus+dir/guide.md", "../plus+dir/guide/", False),
+            ("plus+dir/guide.md", "plus%2Bdir/guide.md", "../plus%2Bdir/guide/", False),
+            ("guide.md", "guide%2Emd", "../guide/", False),
+            ("guide.md", "guide.m%64", "../guide/", False),
+            ("space file.txt", "space%20file.txt", "space%20file.txt", False),
+            ("literal%FF.txt", "literal%FF.txt", "../literal%FF.txt", False),
+            ("%FF.md", "%FF.md", "../FF/", False),
+            ("guide.md", "g%75ide.md#target", "../guide/guide.md#target", False),
+            ("guide.md", "g%75ide.md?q=%23v", "../guide/guide.md?q=%23v", False),
+            ("guide.md", "g%75ide.md#target", "../guide/Target.md#target", True),
+            ("guide.md", "g%75ide.md?q=%23v", "../guide/", True),
+        ],
+    )
+    async def test_md_target_becomes_directory(
+        self, tmp_path: Path, native, destination, expected, big
+    ):
         kb = self._make_tree(tmp_path)
+        target = kb / native
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "# Target\n\n"
+            + "A" * (1200 if big else 20)
+            + ("\n\n# Other\n\n" + "B" * 1200 if big else ""),
+            encoding="utf-8",
+        )
+        out = await self._rewrite(self._parser(), kb, f"见 [x]({destination})")
+        assert out == f"见 [x]({expected})"
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    async def test_raw_and_encoded_document_aliases_keep_their_serialization(
+        self, tmp_path, reverse
+    ):
+        kb = self._make_tree(tmp_path)
+        (kb / "说明.md").write_text("# Target\n\ncontent", encoding="utf-8")
+        destinations = ["说明.md", "%E8%AF%B4%E6%98%8E.md"]
+        expected = ["../说明/", "../%E8%AF%B4%E6%98%8E/"]
+        if reverse:
+            destinations.reverse()
+            expected.reverse()
         out = await self._rewrite(
             self._parser(),
             kb,
-            "见 [x](./目录甲/目录乙/目录丙/文档.md)",
+            f"[first]({destinations[0]}) [second]({destinations[1]})",
         )
-        assert out == "见 [x](../目录甲/目录乙/目录丙/文档/)"
+        assert out == f"[first]({expected[0]}) [second]({expected[1]})"
 
     async def test_nonempty_subpath_adds_one_more_parent(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
