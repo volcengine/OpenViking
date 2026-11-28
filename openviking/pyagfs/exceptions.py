@@ -157,6 +157,10 @@ class GitConcurrentCommitError(AGFSClientError):
     pass
 
 
+class GitRestoreWritebackConflictError(AGFSClientError):
+    """A pending snapshot writeback would overwrite a newer workspace change."""
+
+
 class GitRestoreWritebackPartialError(AGFSClientError):
     """Raised when ``git_restore`` advanced the branch ref to the new commit
     but at least one per-path VFS write or delete failed afterwards.

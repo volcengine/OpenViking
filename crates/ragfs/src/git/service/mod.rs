@@ -39,8 +39,9 @@ mod commit;
 mod diff;
 mod log;
 mod restore;
-mod snapshot_log;
+mod restore_writeback;
 mod show;
+mod snapshot_log;
 mod validate;
 
 use diff::compute_subtree_diff;

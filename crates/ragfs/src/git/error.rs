@@ -135,6 +135,10 @@ pub enum GitError {
     )]
     RestoreWritebackPartial(Box<crate::git::types::RestoreWritebackPartial>),
 
+    /// The working tree no longer matches the state expected by a pending restore.
+    #[error("pending snapshot restore writeback conflicts with the current workspace")]
+    RestoreWritebackConflict,
+
     /// Blob too large
     #[error("blob too large: {size} bytes exceeds limit {limit} bytes")]
     BlobTooLarge { size: u64, limit: u64 },

@@ -30,6 +30,7 @@ from openviking.pyagfs.exceptions import (
     AGFSSerializationError,
     AGFSTimeoutError,
     GitConcurrentCommitError,
+    GitRestoreWritebackConflictError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.exceptions import (
@@ -492,6 +493,10 @@ def map_exception(
             "retryable": True,
         }
         return OpenVikingError(str(exc), code="CONFLICT", details=details)
+    if isinstance(exc, GitRestoreWritebackConflictError):
+        return OpenVikingError(
+            str(exc), code="CONFLICT", details={"conflict_type": "restore_writeback"}
+        )
     if isinstance(exc, GitConcurrentCommitError):
         details = {
             "conflict_type": "git_ref_cas",

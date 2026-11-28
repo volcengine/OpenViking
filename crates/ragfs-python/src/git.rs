@@ -343,6 +343,9 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
         GitError::RefStore(RefStoreError::InvalidName(_)) => {
             GitErrorMapping::PythonException("AGFSInvalidOperationError")
         }
+        GitError::RestoreWritebackConflict => {
+            GitErrorMapping::PythonException("GitRestoreWritebackConflictError")
+        }
         GitError::RestoreWritebackPartial(_) => GitErrorMapping::RestoreWritebackPartial,
         GitError::ObjectStore(_)
         | GitError::RefStore(_)
