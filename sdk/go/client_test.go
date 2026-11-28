@@ -100,7 +100,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 			"query": "auth", "target_uri": "viking://resources/docs", "limit": float64(5),
 			"since": "2026-06-01", "until": "2026-06-18", "time_field": "created_at",
 			"events_time_decay_protection": "2d", "level": []any{float64(0), float64(2)},
-			"tags": []any{"topic=docs", "kind=api"}, "context_type": []any{"resource"}, "read_content": true,
+			"tags": []any{"topic=docs", "kind=api"}, "context_type": []any{"resource"}, "read_content": true, "include_provenance": true,
 		}
 		body := readJSONBody(t, r)
 		for key, expected := range want {
@@ -110,6 +110,7 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		}
 		requireBodyKeysAbsent(t, body, "agent_id", "agent_uri")
 		writeOK(t, w, map[string]any{
+			"provenance": []map[string]any{{"query": "auth"}},
 			"resources": []map[string]any{
 				{"uri": "viking://resources/docs/api.md", "context_type": "resource", "score": 0.9, "tags": []string{"topic=docs", "kind=api"}, "content": "full visible content"},
 			},
@@ -128,12 +129,16 @@ func TestFindSendsHeadersQueryAndBody(t *testing.T) {
 		Tags:                      []string{"topic=docs", "kind=api"},
 		EventsTimeDecayProtection: "2d",
 		ReadContent:               Bool(true),
+		IncludeProvenance:         Bool(true),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Resources) != 1 || result.Resources[0].URI != "viking://resources/docs/api.md" || result.Resources[0].Content != "full visible content" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	if len(result.QueryResults) != 1 || result.QueryResults[0]["query"] != "auth" {
+		t.Fatalf("provenance = %#v", result.QueryResults)
 	}
 	if got := result.Resources[0].Tags; len(got) != 2 || got[0] != "topic=docs" || got[1] != "kind=api" {
 		t.Fatalf("result tags = %#v", got)
@@ -147,7 +152,11 @@ func TestSearchPreservesSessionAndDistinguishesOmittedAndEmptyFilters(t *testing
 			t.Fatalf("request = %s %s", r.Method, r.URL)
 		}
 		body = readJSONBody(t, r)
-		writeOK(t, w, map[string]any{"resources": []any{}})
+		response := map[string]any{"resources": []any{}}
+		if body["include_provenance"] == true {
+			response["provenance"] = []map[string]any{{"query": "auth"}}
+		}
+		writeOK(t, w, response)
 	}))
 	defer closeServer()
 
@@ -160,10 +169,15 @@ func TestSearchPreservesSessionAndDistinguishesOmittedAndEmptyFilters(t *testing
 		t.Fatalf("default limit = %#v", body["limit"])
 	}
 
-	if _, err := client.Search(ctx, "auth", &SearchOptions{
-		SessionID: "session-1", SearchType: "keywords", NodeLimit: Int(3), Level: []int{0}, Tags: []string{},
-	}); err != nil {
+	result, err := client.Search(ctx, "auth", &SearchOptions{
+		IncludeProvenance: Bool(true),
+		SessionID:         "session-1", SearchType: "keywords", NodeLimit: Int(3), Level: []int{0}, Tags: []string{},
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(result.QueryResults) != 1 || result.QueryResults[0]["query"] != "auth" {
+		t.Fatalf("provenance = %#v", result.QueryResults)
 	}
 	if body["session_id"] != "session-1" || body["search_type"] != "keywords" ||
 		body["limit"] != float64(3) || !reflect.DeepEqual(body["tags"], []any{}) ||
