@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -162,6 +163,41 @@ describe('OpenViking tool client', () => {
     assert.ok(firstTrailing.text.includes('a\nb'));
     const tailTrailing = await client(ov).read({ uri: 'viking://user/u/trailing.md', offset: 2, limit: 2 });
     assert.deepEqual([tailTrailing.data.lines, tailTrailing.data.next_offset], [1, null]);
+  });
+
+  it('activates a skill whose SKILL.md was read: its package is on disk and the read names it', async (t) => {
+    const ov = await fakeOV(t);
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-cache-'));
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    const root = 'viking://user/owner/skills/charts';
+    const definition = '---\nname: charts\ndescription: Charts\n---\n\nRun scripts/render.sh.\n';
+    const script = '#!/bin/sh\necho chart\n';
+    const sha = (text) => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
+    ov.state.files.set(`${root}/SKILL.md`, definition);
+    ov.state.files.set(`${root}/scripts/render.sh`, script);
+    ov.state.skills.set('charts', {
+      name: 'charts', uri: root, root_uri: root, skill_md_uri: `${root}/SKILL.md`,
+      description: 'Charts', content: definition, content_sha256: sha(definition), revision: 'd'.repeat(64),
+      files: [
+        { path: 'SKILL.md', uri: `${root}/SKILL.md`, is_dir: false, size: Buffer.byteLength(definition), sha256: sha(definition) },
+        { path: 'scripts/render.sh', uri: `${root}/scripts/render.sh`, is_dir: false, size: Buffer.byteLength(script), sha256: sha(script) },
+      ],
+    });
+    const instance = client(ov, { dataDir });
+    const page = await instance.read({ uri: `${root}/SKILL.md` });
+    assert.match(page.text, /^viking:\/\/user\/owner\/skills\/charts\/SKILL\.md \(whole remaining text/);
+    assert.match(page.text, /Skill charts is on this machine at .+\/skills\/charts-dddddddddddd: run its scripts and read its references there/);
+    assert.equal(page.data.skill_package.name, 'charts');
+    assert.equal(fs.readFileSync(path.join(page.data.skill_package.path, 'scripts', 'render.sh'), 'utf8'), script);
+    // A package OV cannot return never turns the read into an error.
+    ov.state.skills.clear();
+    const plain = await instance.read({ uri: `${root}/SKILL.md` });
+    assert.equal(plain.data.skill_package, undefined);
+    assert.doesNotMatch(plain.text, /on this machine/);
+    assert.match(plain.text, /Run scripts\/render\.sh\./);
+    // Anything outside a skill package is a plain read.
+    ov.state.files.set('viking://user/owner/resources/x.md', 'hi');
+    assert.equal((await instance.read({ uri: 'viking://user/owner/resources/x.md' })).data.skill_package, undefined);
   });
 
   it('lists directory entries and reports has_more', async (t) => {

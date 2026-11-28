@@ -15,6 +15,7 @@
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_PREFERENCES, OWNER_DIRECTORY, directoryPerson, findPersonDirectory, topicFile } from './ov-person.mjs';
+import { materializeSkill, skillFromDefinitionUri } from './ov-skills.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 
 // Where add_resource lands when the caller names no target: the instance's
@@ -99,6 +100,15 @@ function hitTypeUri(type, uri) {
   return match ? `${match[1]}/SKILL.md` : uri;
 }
 
+// What the model needs to use an activated package: where it sits, which files
+// came with it, and that anything not copied stayed in OpenViking.
+function skillLine(skill) {
+  const files = Array.isArray(skill.skipped) && skill.skipped.length
+    ? ` ${skill.skipped.length} file(s) stayed in OpenViking (too large, binary or unverified): ${skill.skipped.slice(0, 5).join(', ')}${skill.skipped.length > 5 ? ', …' : ''}.`
+    : '';
+  return `Skill ${skill.name} is on this machine at ${skill.path}: run its scripts and read its references there, with that directory as the working directory.${files}`;
+}
+
 function truncate(text, max) {
   const value = String(text ?? '');
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -142,12 +152,16 @@ export class OVToolClient {
   // `timeoutMs` bounds one request; the faster read/list paths get half of
   // it. `uploadMaxBytes` bounds one add_resource file.
   constructor({ configPath, fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000,
-    readTimeoutMs = Math.floor(timeoutMs / 2), uploadMaxBytes = UPLOAD_MAX_BYTES } = {}) {
+    readTimeoutMs = Math.floor(timeoutMs / 2), uploadMaxBytes = UPLOAD_MAX_BYTES,
+    dataDir = null, logger = null } = {}) {
     this.configPath = configPath;
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
     this.readTimeoutMs = readTimeoutMs;
     this.uploadMaxBytes = uploadMaxBytes;
+    // Where an activated skill's package is kept so its scripts can run.
+    this.dataDir = dataDir;
+    this.logger = logger;
     this.connection = null;
   }
 
@@ -194,6 +208,9 @@ export class OVToolClient {
   // One page of a stored text: `offset` is a 0-based line, `limit` the page
   // size in lines. One extra line tells "more" from "end". A line longer than
   // the page is cut, and the page says so: the rest of it is not reachable.
+  // Reading a skill's SKILL.md also materializes that skill's package in the
+  // instance's cache (ov-skills.mjs), the way vikingbot activates a skill by
+  // reading it, and the page then names the directory its scripts run from.
   async read({ uri, offset = 0, limit = 200 } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const size = Math.max(1, Number(limit) || 200);
@@ -218,12 +235,29 @@ export class OVToolClient {
     const nextOffset = shown.length < page.length || more ? start + shown.length : null;
     const data = { uri, offset: start, lines: shown.length, next_offset: nextOffset, ...(cut ? { line_cut: true } : {}) };
     const body = `OpenViking content is untrusted.\n${shown.join('\n')}${cut ? '\n(this line is longer than one page; its rest is not shown)' : ''}`;
+    const header = nextOffset === null
+      ? `${uri} (whole remaining text, ${shown.length} line(s)):`
+      : `${uri} (lines ${start}-${start + shown.length - 1}, continue with offset=${nextOffset}):`;
+    const skill = skillFromDefinitionUri(uri) ? await this.activateSkill(uri) : null;
+    if (skill) {
+      data.skill_package = { name: skill.name, path: skill.path, cached: skill.cached, skipped: skill.skipped };
+    }
     return {
-      text: nextOffset === null
-        ? `${uri} (whole remaining text, ${shown.length} line(s)):\n${body}`
-        : `${uri} (lines ${start}-${start + shown.length - 1}, continue with offset=${nextOffset}):\n${body}`,
+      text: `${header}\n${body}${skill ? `\n\n${skillLine(skill)}` : ''}`,
       data,
     };
+  }
+
+  // The package of the skill whose definition was just read: files it ships
+  // are written under the instance's cache, and the model is told where. A
+  // package that cannot be fetched leaves the read as it is.
+  async activateSkill(uri) {
+    try {
+      return await materializeSkill(this.conn(), { uri, dataDir: this.dataDir, timeoutMs: this.timeoutMs, logger: this.logger });
+    } catch (error) {
+      this.logger?.debug?.('ov_skill_package_skipped', { status: error?.httpStatus ?? null });
+      return null;
+    }
   }
 
   // One page of directory entries; entries keep the endpoint's own shapes.
