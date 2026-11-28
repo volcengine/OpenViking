@@ -222,6 +222,12 @@ async def test_markdown_routing_reaches_reduce_without_publishing_map_drafts(pip
     assert len(bundle.operations) == 1
     assert "Combined details" in bundle.operations[0]["content"]
     assert len(pipeline.artifacts) == 1
+    reviewed = [
+        json.loads(call.kwargs["messages"][1]["content"])["completed_ops"]
+        for call in pipeline.model.provider.chat.await_args_list
+        if call.kwargs["messages"][0]["content"].startswith("Keep the remaining plan")
+    ]
+    assert reviewed == [["map"], ["map", "shuffle"]]
 
 
 @pytest.mark.parametrize("ending", ["success", "budget", "truncated"])
