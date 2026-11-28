@@ -1139,11 +1139,10 @@ class BotCompileService:
             }
 
         await self._set_state(task_id, status="running", stage="pipeline")
-        ordered = (
-            source_files
-            if source_files is not None
-            else await self._list_pipeline_source_files(client, request)
-        )
+        if source_files is None:
+            ordered, notices = await self._list_pipeline_source_files(client, request)
+        else:
+            ordered, notices = source_files, []
         await pipeline.files.put("inputs", dict.fromkeys(ordered, "pending"))
 
         source_limits = self.limits.model_copy(
@@ -1177,7 +1176,10 @@ class BotCompileService:
                     yield batch
 
         try:
-            rendered = await pipeline.run(source_batches())
+            batches = source_batches()
+            rendered = await (
+                pipeline.run(batches, notices=notices) if notices else pipeline.run(batches)
+            )
             # Cancellation must stop recovery before any write, including a queued cancel.
             current = await self.store.get(task_id)
             if current.status in TERMINAL_STATUSES or current.status == "cancelling":
@@ -1524,12 +1526,13 @@ class BotCompileService:
 
     async def _list_pipeline_source_files(
         self, client: VikingClient, request: SanitizedCompileRequest
-    ) -> list[str]:
-        """Select unique full-scan and added/modified inputs; listing errors propagate."""
+    ) -> tuple[list[str], list[dict[str, str]]]:
+        """List live sources and explicit deletion notices from the accepted diff."""
         changes = request.changes
         if not (has_directory_plan(changes) and changes.get("head")):
-            return await self._list_source_files(client, request.from_)
+            return await self._list_source_files(client, request.from_), []
         files = set(await self._list_source_files(client, changes["full_dirs"], allow_empty=True))
+        deleted: set[str] = set()
         roots = changes["diff_dirs"]
         if roots:
             offset = 0
@@ -1545,13 +1548,16 @@ class BotCompileService:
                         raise ValueError(f"Source inventory returned an out-of-scope URI: {uri}")
                     if change["change_type"] in {"added", "modified"}:
                         files.add(uri)
+                    elif change["change_type"] == "deleted":
+                        deleted.add(uri)
                 if not page["has_more"]:
                     break
                 next_offset = page["next_offset"]
                 if not isinstance(next_offset, int) or next_offset <= offset:
                     raise ValueError("Source inventory pagination did not advance")
                 offset = next_offset
-        return sorted(files)
+        notices = [{"uri": uri, "change_type": "deleted"} for uri in sorted(deleted)]
+        return sorted(files - deleted), notices
 
     async def _list_source_files(
         self,

@@ -128,12 +128,12 @@ class Pipeline:
             raise ValueError(f"{stage}: worker completed without Markdown files")
         return documents
 
-    async def run(self, batches) -> RenderedBundle:
+    async def run(self, batches, *, notices=None) -> RenderedBundle:
         """Prepare inputs, validate a plan, execute selected stages, and retain honest diagnostics."""
         complete = False
         failed = False
         try:
-            sources = await self.seed(batches)
+            sources = await self.seed(batches, notices=notices)
             self.timestamp = utc_now()
             await self.files.put("runtime", {"time": self.timestamp, "skill": self.request.skill})
             self.metrics["input_ranges"] = len(sources)
