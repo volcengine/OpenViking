@@ -477,6 +477,62 @@ def test_cloud_recall_legacy_fallback(external_provider, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "settings,expected",
+    [
+        ("30d", "30d"),
+        ("7H", "7h"),
+        ("0", "0"),
+        ("off", None),
+        ("", "30d"),
+        ("soon", None),
+        ("7", None),
+    ],
+)
+def test_events_decay_protection_setting_normalization(external_provider, monkeypatch, settings, expected):
+    _, provider, _, _ = external_provider("decay-normalize")
+    monkeypatch.setenv("OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION", settings)
+    assert provider._recall_config()["events_decay_protection"] == expected
+
+
+def test_context_recall_forwards_events_decay_protection(external_provider, monkeypatch):
+    from unittest.mock import Mock
+
+    _, provider, _, _ = external_provider("decay-context")
+    monkeypatch.setenv("OPENVIKING_RECALL_COMPRESS", "server")
+    client = Mock()
+    client.post.return_value = {"result": {"rendered": "digest", "entries": []}}
+    provider._search_prefetch_context("deployment preferences", session_id="session", client=client)
+    path, body = client.post.call_args.args
+    assert path == "/api/v1/search/search"
+    assert body["events_time_decay_protection"] == "30d"
+
+
+def test_context_recall_omits_events_decay_protection_when_off(external_provider, monkeypatch):
+    from unittest.mock import Mock
+
+    _, provider, _, _ = external_provider("decay-context-off")
+    monkeypatch.setenv("OPENVIKING_RECALL_COMPRESS", "server")
+    monkeypatch.setenv("OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION", "off")
+    client = Mock()
+    client.post.return_value = {"result": {"rendered": "digest", "entries": []}}
+    provider._search_prefetch_context("deployment preferences", session_id="session", client=client)
+    _, body = client.post.call_args.args
+    assert "events_time_decay_protection" not in body
+
+
+def test_list_recall_forwards_events_decay_protection(external_provider, monkeypatch):
+    from unittest.mock import Mock
+
+    _, provider, _, _ = external_provider("decay-list")
+    client = Mock()
+    client.post.return_value = {"result": {"memories": []}}
+    assert provider._search_prefetch_context("deployment preferences", session_id="session", client=client) == ""
+    path, body = client.post.call_args.args
+    assert path == "/api/v1/search/find" or path == "/api/v1/search/search"
+    assert body["events_time_decay_protection"] == "30d"
+
+
+@pytest.mark.parametrize(
     "uri",
     [
         "viking://user/zayn/memories/profile.md",

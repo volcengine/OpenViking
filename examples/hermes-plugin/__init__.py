@@ -143,8 +143,41 @@ _LEVEL_MAX_CHARS = {"abstract": 1200, "overview": 4000}
 _RECALL_SUMMARY_KEYS = ("abstract", "overview", "text", "content")
 
 
+# The duration shape (``0`` / ``<n>m|h|d``) is not one of the generic setting
+# kinds, so the knob is resolved by _recall_events_decay_protection instead of
+# _setting and stays out of _RECALL_SETTING_KEYS.
+_EVENTS_DECAY_PROTECTION_KEY = "recall_events_decay_protection"
+_EVENTS_DECAY_PROTECTION_SPEC = {
+    "key": _EVENTS_DECAY_PROTECTION_KEY,
+    "description": (
+        "Automatic recall: keep event memories at full score inside this window "
+        "(0, <n>m, <n>h or <n>d); 'off' or empty stops sending the parameter"
+    ),
+    "default": "30d",
+    "env_var": "OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION",
+}
+
+
 def _cfg_field(key: str, description: str, **extra) -> dict:
     return {"key": key, "description": description, **extra, "env_var": f"OPENVIKING_{key.upper()}"}
+
+
+_EVENTS_DECAY_PROTECTION_RE = re.compile(r"^(0|[0-9]+[mhd])$")
+
+
+def _normalize_events_decay_protection(value: Any) -> Optional[str]:
+    """Recall event time-decay window, or None to leave the server default.
+
+    Accepted shape is the server's ``events_time_decay_protection``: ``0`` or
+    ``<n>m|h|d``. Anything else (including the JavaScript plugins' ``off``)
+    drops the field instead of making every recall fail validation.
+    """
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized == "off" or not _EVENTS_DECAY_PROTECTION_RE.fullmatch(normalized):
+        return None
+    return normalized
 
 
 _NUM = {"type": "number", "minimum": 0.25, "maximum": 60.0, "step": 0.25}
@@ -1679,7 +1712,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
             return False
 
     def get_config_schema(self):
-        return [dict(field) for field in _CONFIG_SCHEMA]
+        return [dict(field) for field in _CONFIG_SCHEMA] + [dict(_EVENTS_DECAY_PROTECTION_SPEC)]
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
         """Validate and persist Dashboard configuration for the active profile (secrets excluded)."""
@@ -2157,11 +2190,14 @@ class OpenVikingMemoryProvider(MemoryProvider):
     @classmethod
     def _post_prefetch_search(cls, client: _VikingClient, query: str, session_id: str, *, limit: int,
                               context_type: str | List[str], deadline: float, request_timeout: float,
-                              target_uri: Optional[List[str]] = None) -> dict:
+                              target_uri: Optional[List[str]] = None,
+                              events_decay_protection: Optional[str] = None) -> dict:
         """Session-aware search first, falling back to search/find (budget errors propagate)."""
         base_payload = {"query": query, "limit": limit, "score_threshold": 0, "context_type": context_type}
         if target_uri:
             base_payload["target_uri"] = target_uri
+        if events_decay_protection:
+            base_payload["events_time_decay_protection"] = events_decay_protection
         if session_id:
             try:
                 return client.post("/api/v1/search/search", {**base_payload, "session_id": session_id},
@@ -2231,6 +2267,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 }
                 if session_id:
                     payload["session_id"] = session_id
+                if cfg["events_decay_protection"]:
+                    payload["events_time_decay_protection"] = cfg["events_decay_protection"]
                 if scope in ("shared", "peer"):
                     payload["peer_scope"] = "actor" if scope == "peer" else "all"
                 try:
@@ -2271,6 +2309,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     deadline=deadline,
                     request_timeout=cfg["request_timeout_seconds"],
                     target_uri=target_uri,
+                    events_decay_protection=cfg["events_decay_protection"],
                 )
             )
             if not isinstance(result, dict):
@@ -2346,6 +2385,26 @@ class OpenVikingMemoryProvider(MemoryProvider):
             return default
         return max(spec["minimum"], min(spec["maximum"], parsed)) if "minimum" in spec else parsed
 
+    @classmethod
+    def _recall_events_decay_protection(cls, provider_config: dict, *, env: Optional[dict] = None) -> Optional[str]:
+        """Resolve the decay window directly: the duration shape is not one of the
+        generic setting kinds, so it must not go through ``_setting``."""
+        spec = _EVENTS_DECAY_PROTECTION_SPEC
+        env_value = get_secret(spec["env_var"]) if env is None else env.get(spec["env_var"])
+        if env_value is not None and env_value.strip():
+            value, source = env_value, spec["env_var"]
+        else:
+            value, source = provider_config.get(spec["key"], spec["default"]), f"memory.openviking.{spec['key']}"
+        normalized = _normalize_events_decay_protection(value)
+        if normalized is None and str(value).strip().lower() not in ("", "off"):
+            warning_key = (source, repr(value))
+            with _INVALID_SETTING_WARNINGS_LOCK:
+                first = warning_key not in _INVALID_SETTING_WARNINGS
+                _INVALID_SETTING_WARNINGS.add(warning_key)
+            if first:
+                logger.warning("Invalid %s value %r; omitting events_time_decay_protection.", source, value)
+        return normalized
+
     def _recall_config(self) -> Dict[str, Any]:
         cfg, env = self._profile_config_and_env()
         resolved = {
@@ -2358,6 +2417,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 override = get_secret(_SETTING_SPECS[key]["env_var"]) if env is None else env.get(_SETTING_SPECS[key]["env_var"])
                 if key not in cfg and not override:
                     resolved[key.removeprefix("recall_")] = 55.0
+        resolved["events_decay_protection"] = self._recall_events_decay_protection(cfg, env=env)
         return resolved
 
     def _profile_token_budget(self) -> int:
