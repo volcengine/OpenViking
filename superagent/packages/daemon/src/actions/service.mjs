@@ -1106,7 +1106,11 @@ export class ActionService {
       const result = await this.deliver({
         caller, connector, action: 'message.send',
         input: { chat_id: input.chat_id, content: content.payload },
-        key: this.key(input.idempotency_key, 'send', connector, deliveryRef(fence), deliveryRef(responseTo), input.chat_id, content.canonical),
+        // A final is unique per decision and destination: keep the rendered
+        // content out of its key so a paraphrased second call is a duplicate.
+        // Interim staged replies intentionally remain content-addressed.
+        key: this.key(input.idempotency_key, 'send', connector, deliveryRef(fence), deliveryRef(responseTo), input.chat_id,
+          ...(interim ? [content.canonical] : [])),
         summary: content.summary,
         scope: { chatId: input.chat_id, convKey: responseTo.conv_key },
         fence,
@@ -1133,7 +1137,9 @@ export class ActionService {
       const result = await this.deliver({
         caller, connector, action: 'message.send',
         input: { ...owner.target, content: content.payload },
-        key: this.key(input.idempotency_key, 'notify', connector, deliveryRef(fence), deliveryRef(responseTo), owner.id, content.canonical),
+        // Owner notices are finals too: the decision and destination identify
+        // the delivery, not the wording of this particular render.
+        key: this.key(input.idempotency_key, 'notify', connector, deliveryRef(fence), deliveryRef(responseTo), owner.id),
         summary: content.summary,
         scope: {},
         fence,
@@ -1174,7 +1180,7 @@ export class ActionService {
         caller, connector, action: 'message.reply',
         input: { message_id: input.message_id, content: content.payload, reply_in_thread: inThread },
         key: this.key(input.idempotency_key, 'reply', connector, deliveryRef(fence), deliveryRef(responseTo),
-          input.message_id, inThread, content.canonical),
+          input.message_id, inThread, ...(interim ? [content.canonical] : [])),
         summary: content.summary,
         scope: { chatId, threadId: target?.thread_id ?? null, convKey: target ? target.conv_key : responseTo.conv_key },
         fence,

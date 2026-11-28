@@ -336,8 +336,10 @@ actually went out (with the owner's edits) or that nothing did. A reply is recor
 a mail has no chat, and its history line is rendered from the mail's event.
 
 The Core derives the idempotency key from the decision and response events'
-`(instance, event_id)`, the target and the canonical payload, so two events with
-the same text are two deliveries (a caller-supplied key is bound to that payload), reserves it in
+`(instance, event_id)` and the target; the canonical payload is part of the key
+only for interim staged replies. A final delivery is unique per decision and
+destination, so a paraphrased second final returns the earlier result instead of
+sending again (a caller-supplied key is still bound to the payload). The Core reserves it in
 `outbox` together with a `PENDING` outbound journal row, and only then sends the
 Connector `action` request. It records `SENT` only after the Connector replies
 successfully; any failure, or a process exit between remote acceptance and the
