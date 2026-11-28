@@ -33,3 +33,44 @@ it('aligns changed lines and keeps line numbers across hunks', () => {
     { kind: 'removed', oldLine: 9, oldText: 'gone' },
   ])
 })
+
+const noNewline = '\\ No newline at end of file'
+
+it('keeps a final-newline change on the correct side', () => {
+  const header = '@@ -1 +1 @@'
+  expect(
+    parseSnapshotDiff([header, '-hello', noNewline, '+hello'].join('\n'))[0].rows,
+  ).toEqual([
+    {
+      kind: 'changed',
+      oldLine: 1,
+      newLine: 1,
+      oldText: 'hello',
+      newText: 'hello',
+      oldNoNewline: true,
+    },
+  ])
+  expect(
+    parseSnapshotDiff([header, '-hello', '+hello', noNewline].join('\n'))[0].rows,
+  ).toEqual([
+    {
+      kind: 'changed',
+      oldLine: 1,
+      newLine: 1,
+      oldText: 'hello',
+      newText: 'hello',
+      newNoNewline: true,
+    },
+  ])
+})
+
+it('preserves both markers on changed lines and on shared context', () => {
+  for (const diff of [
+    ['@@ -1 +1 @@', '-old', noNewline, '+new', noNewline],
+    ['@@ -1,2 +1,2 @@', '-old', '+new', ' shared', noNewline],
+  ]) {
+    const row = parseSnapshotDiff(diff.join('\n'))[0].rows.at(-1)
+    expect(row?.oldNoNewline).toBe(true)
+    expect(row?.newNoNewline).toBe(true)
+  }
+})
