@@ -83,6 +83,13 @@ export function hasCaptureKeyword(turns) {
   );
 }
 
+/** Project outgoing parts without changing the transcript cursor's coordinates. */
+function conversationTurn(turn) {
+  const parts = (turn.conversationParts || []).filter((part) => part.type === "text" && part.text?.trim());
+  if (!parts.length) return null;
+  return { ...turn, parts, text: parts.map((part) => part.text).join("\n\n") };
+}
+
 /**
  * Append every transcript turn past `state.capturedTurnCount`.
  *
@@ -93,6 +100,8 @@ export function hasCaptureKeyword(turns) {
  * `shouldSend(newTurns)` lets a caller veto the send (keyword capture mode)
  * without disturbing the cursor.
  *
+ * `newTurns` counts outgoing messages, not excluded source turns. The persisted
+ * cursor always counts source turns, so toggling tool capture cannot move it.
  * Returns `{ newTurns, added, ovSessionId, skipped, unreadable }`. `unreadable`
  * separates "the transcript is empty" from "the transcript could not be read":
  * committing on the latter would archive a session whose tail turns were never
@@ -141,7 +150,9 @@ export async function catchUpTurns({
   // truncate transcript_path. Resume at the latest human turn so the current
   // interaction is captured without replaying compacted history.
   if (turns.length < state.capturedTurnCount) {
-    const humanIndex = findLastHumanTurnIndex(turns);
+    const humanIndex = findLastHumanTurnIndex(cfg.captureToolTraffic === false
+      ? turns.map((turn) => ({ ...turn, parts: turn.conversationParts }))
+      : turns);
     log?.("transcript_shrink_detected", {
       cached: state.capturedTurnCount,
       observed: turns.length,
@@ -151,13 +162,28 @@ export async function catchUpTurns({
     state.capturedTurnCount = Math.max(0, humanIndex);
   }
 
-  const newTurns = turns.slice(state.capturedTurnCount);
+  const sourceStart = state.capturedTurnCount;
+  const pending = turns.slice(sourceStart);
+  const sourceEnds = [];
+  const newTurns = [];
+  for (const [index, turn] of pending.entries()) {
+    const outgoing = cfg.captureToolTraffic === false ? conversationTurn(turn) : turn;
+    if (!outgoing) continue;
+    sourceEnds.push(sourceStart + index + 1);
+    newTurns.push(outgoing);
+  }
   log?.("transcript_parse", {
     totalTurns: turns.length,
     previouslyCaptured: state.capturedTurnCount,
     newTurns: newTurns.length,
   });
-  if (newTurns.length === 0) return { newTurns, added: 0, ovSessionId: "" };
+  if (newTurns.length === 0) {
+    if (pending.length) {
+      state.capturedTurnCount = turns.length;
+      await saveState(state);
+    }
+    return { newTurns, added: 0, ovSessionId: "" };
+  }
 
   if (shouldSend && !shouldSend(newTurns)) {
     log?.("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
@@ -180,14 +206,22 @@ export async function catchUpTurns({
     return body;
   });
 
+  let sent = 0;
   const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads, {
     // The transcript and persisted cursor own retries, including SessionStart
     // catch-up. Queueing the same tail would create a second retry owner.
     onSent: async (n) => {
-      state.capturedTurnCount += n;
+      sent += n;
+      state.capturedTurnCount = sourceEnds[sent - 1];
       await saveState(state);
       await heartbeat?.();
     },
   });
+  // Trailing tool-only slots are consumed only after every outgoing message
+  // landed. Never advance past unsent prose on a partial or failed batch.
+  if (r.sent === newTurns.length && state.capturedTurnCount < turns.length) {
+    state.capturedTurnCount = turns.length;
+    await saveState(state);
+  }
   return { newTurns, added: r.sent, ovSessionId };
 }
