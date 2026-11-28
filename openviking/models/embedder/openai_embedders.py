@@ -314,7 +314,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 extra_body.update(parsed)
             else:
                 # Simple format (e.g., "query" -> {"input_type": "query"})
-                extra_body["input_type"] = active_param
+                extra_body["input_type"] = active_param.lower()
 
         return extra_body if extra_body else None
 

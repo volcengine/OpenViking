@@ -182,7 +182,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             embed_type = self.document_param if self.document_param is not None else "db"
         return {
             "model": self.model_name,
-            "type": embed_type,
+            "type": embed_type.lower(),
             "texts": texts,
         }
 

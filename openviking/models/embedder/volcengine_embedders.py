@@ -32,6 +32,7 @@ logger = get_logger(__name__)
 
 VOLCENGINE_CLIENT_REQUEST_ID_HEADER = "X-Client-Request-Id"
 VOLCENGINE_CLIENT_REQUEST_ID = "ToB-direct,OpenViking_Service,openviking-service_cn-beijing"
+DOUBAO_QUERY_INSTRUCTIONS = "Instruction:根据查询，检索能够回答问题或满足要求的相关内容\nQuery:"
 T = TypeVar("T")
 
 
@@ -173,6 +174,8 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         input_type: str = "multimodal",
         extra_headers: Optional[Dict[str, str]] = None,
         config: Optional[Dict[str, Any]] = None,
+        query_param: Optional[str] = None,
+        document_param: Optional[str] = None,
     ):
         """Initialize Volcengine Dense Embedder
 
@@ -183,6 +186,9 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             dimension: Target dimension for truncation (optional)
             input_type: Input type - "text" or "multimodal" (default: "multimodal")
             config: Additional configuration dict
+            query_param: Query instructions; None selects the supported model's default,
+                an empty string disables it. Overrides require backend support.
+            document_param: Optional document instructions, passed verbatim.
 
         Raises:
             ValueError: If api_key is not provided
@@ -194,6 +200,8 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         self.api_base = api_base or "https://ark.cn-beijing.volces.com/api/v3"
         self.dimension = dimension
         self.input_type = input_type
+        self.query_param = query_param
+        self.document_param = document_param
         self.extra_headers = _build_volcengine_headers(extra_headers)
 
         if not self.api_key:
@@ -255,6 +263,31 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             duration_seconds=duration_seconds,
         )
 
+    def _supports_instructions(self) -> bool:
+        # Ark exposes instructions on Doubao vision models from this version onward.
+        family, _, version = self.model_name.rpartition("-")
+        return (
+            family == "doubao-embedding-vision"
+            and len(version) == 6
+            and version.isdigit()
+            and version >= "251215"
+        )
+
+    def _build_extra_body(
+        self, content: "EmbeddingInput", is_query: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        if not content:
+            return None
+        instructions = self.query_param if is_query else self.document_param
+        if instructions is None and is_query:
+            if not self._supports_instructions() or (
+                not isinstance(content, str) and any(part.get("type") != "text" for part in content)
+            ):
+                return None
+            # Corpus modalities are unknown here; do not infer them from the query.
+            instructions = DOUBAO_QUERY_INSTRUCTIONS
+        return {"instructions": instructions} if instructions else None
+
     @model_error_boundary
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text or multimodal content
@@ -274,12 +307,14 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         def _embed_call():
             if self.input_type == "multimodal":
                 # Use multimodal embeddings API
+                extra_body = self._build_extra_body(content, is_query)
                 response, duration_seconds = _measure_embedding_call(
                     self,
                     lambda: self.client.multimodal_embeddings.create(
                         input=to_multimodal_input(content),
                         model=self.model_name,
                         extra_headers=self.extra_headers,
+                        **({"extra_body": extra_body} if extra_body else {}),
                     ),
                 )
                 self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
@@ -319,12 +354,14 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
 
         async def _embed_call() -> EmbedResult:
             if self.input_type == "multimodal":
+                extra_body = self._build_extra_body(content, is_query)
                 response, duration_seconds = await _measure_embedding_call_async(
                     self,
                     lambda: client.multimodal_embeddings.create(
                         input=to_multimodal_input(content),
                         model=self.model_name,
                         extra_headers=self.extra_headers,
+                        **({"extra_body": extra_body} if extra_body else {}),
                     ),
                 )
                 self._update_telemetry_token_usage(response, duration_seconds=duration_seconds)
