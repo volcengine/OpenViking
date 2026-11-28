@@ -937,3 +937,46 @@ async def test_service_facade_context_schema_and_tenant_isolation():
         backend._adapter.drop_collection()
         await root.close()
         await backend.close()
+
+
+@pytest.mark.parametrize(
+    "excluded, expected",
+    [
+        ([], {"null", "empty", "red", "blue", "null_red", "null_blue"}),
+        (["red"], {"null", "empty", "blue", "null_blue"}),
+        (["red", "blue"], {"null", "empty"}),
+    ],
+)
+def test_array_exclusion_preserves_nonmatching_nulls(adapter, excluded, expected):
+    """Negative tag membership must also keep rows with no matching tag."""
+    tags = {
+        "null": None,
+        "empty": [],
+        "red": ["red"],
+        "blue": ["blue"],
+        "null_red": [None, "red"],
+        "null_blue": [None, "blue"],
+    }
+    adapter.upsert(
+        [
+            {"id": key, "account_id": "one", "search_tags": value, "vector": [1, 0, 0]}
+            for key, value in tags.items()
+        ]
+        + [{"id": "other_tenant", "account_id": "two", "vector": [1, 0, 0]}]
+    )
+    exclusion = {"op": "must_not", "field": "search_tags", "conds": excluded}
+    scope = And([Eq("account_id", "one"), exclusion])
+    for reopened in (False, True):
+        if reopened:
+            adapter._collection = None
+        for vector in (None, [1, 0, 0]):
+            assert {
+                row["id"] for row in adapter.query(filter=scope, query_vector=vector)
+            } == expected
+        assert adapter.count(scope) == len(expected)
+        union = And([Eq("account_id", "one"), Or([exclusion, Eq("id", "red")])])
+        assert {row["id"] for row in adapter.query(filter=union)} == expected | {"red"}
+        # Positive membership must still reject NULL arrays and retain real matches.
+        assert adapter.count(And([Eq("account_id", "one"), Eq("search_tags", "red")])) == 2
+    assert adapter.delete(filter=scope) == len(expected)
+    assert {row["id"] for row in adapter.query()} == (set(tags) - expected) | {"other_tenant"}
