@@ -615,6 +615,12 @@ class AsyncHTTPClient:
             option_values["image_url"] = _normalize_image_input(option_values.pop("image"))
         if "target_uri" in option_values:
             option_values["target_uri"] = cls._normalize_target_uri(option_values["target_uri"])
+        exclude_uris = option_values.get("exclude_uris")
+        if isinstance(exclude_uris, (list, tuple)):
+            option_values["exclude_uris"] = [
+                VikingURI.normalize(uri) if isinstance(uri, str) and uri else uri
+                for uri in exclude_uris
+            ]
         if "context_type" in option_values:
             option_values["context_type"] = cls._normalize_context_type(
                 option_values["context_type"]
