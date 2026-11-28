@@ -344,6 +344,33 @@ OpenAI 已于 2026 年 8 月 31 日[停止在 ChatGPT 登录的 Codex 中提供 
 
 </details>
 
+<details>
+<summary><b>火山引擎 Embedding + LLMTR VLM</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-251215"
+    }
+  },
+  "vlm": {
+    "provider" : "openai",
+    "model"    : "llmtr/gemma-4",
+    "api_key"  : "your-llmtr-api-key",
+    "api_base" : "https://llmtr.com/v1"
+  }
+}
+```
+
+[LLMTR](https://llmtr.com/) 是 OpenAI 兼容网关，因此使用 `provider: "openai"` 并设置它的 `api_base`。以 `llmtr/` 开头的模型部署在土耳其，`llmtr/gemma-4` 支持图片输入。其他模型 ID（例如 `anthropic/claude-sonnet-5`）会转发给对应的厂商。
+
+</details>
+
 ## 配置部分
 
 ### embedding
