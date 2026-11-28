@@ -952,13 +952,7 @@ class OpenVikingService:
         if not self._shared_initialized:
             raise RuntimeError("Prepare shared services before recovering work")
         if self._queue_manager:
-            tracker = get_task_tracker()
-            await self._queue_manager.prepare_task_tracking(tracker)
-            # Target reservations need recovery even when Work is already durable.
-            restored_tasks = await self._queue_manager.get_queued_tasks(
-                tracker, self._queue_manager.EXTERNAL_TASK
-            )
-            await self._external_task_service.restore_tasks(restored_tasks)
+            await self._queue_manager.prepare_task_tracking(get_task_tracker())
 
         self._recovered = True
 

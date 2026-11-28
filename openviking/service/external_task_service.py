@@ -9,7 +9,7 @@ import base64
 import hashlib
 import json
 from dataclasses import asdict, dataclass, replace
-from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol
+from typing import Any, Awaitable, Callable, Mapping, Protocol
 from uuid import uuid4
 
 from openviking.crypto.encryptor import MAGIC, build_credential_encryptor
@@ -156,10 +156,6 @@ class ExternalTaskService:
     def __init__(self, *, credential_encryptor: Any = None) -> None:
         self.credential_encryptor = credential_encryptor
         self._providers: dict[str, ExternalTaskProvider] = {}
-        # Transitional reservations for pre-key deliveries; remove next version.
-        # Restored before workers start, then accessed on the ExternalTask queue loop.
-        self._owners: dict[tuple[str | None, str, str], set[str]] = {}
-        self._executing: set[str] = set()
         self._submission_locks = KeyedAsyncLockPool[str]()
         self._submission_dispatcher = OwnerLoopDispatcher()
 
@@ -206,56 +202,13 @@ class ExternalTaskService:
             )
         return provider
 
-    def _serialization_key(self, task: TaskRecord) -> tuple[str | None, str, str] | None:
-        target = self._provider(task.task_type).serialization_key(task.meta["request"])
-        return (task.account_id, task.task_type, target) if target is not None else None
-
     def queue_serial_key(self, task: TaskRecord) -> str | None:
         """Scope an explicit provider key across users of the same account."""
-        key = self._serialization_key(task)
-        if key is None:
+        target = self._provider(task.task_type).serialization_key(task.meta["request"])
+        if target is None:
             return None
-        account_id, task_type, target = key
-        scope = [account_id, task_type, "target", target]
+        scope = [task.account_id, task.task_type, "target", target]
         return json.dumps(scope, ensure_ascii=False, separators=(",", ":"))
-
-    @staticmethod
-    def _has_target_claim(task: TaskRecord, auth: Mapping[str, Any]) -> bool:
-        """Return whether Runtime submission or unfinished Compile preparation reserves the target."""
-        if auth.get("external_task_id"):
-            return True
-        checkpoint = auth.get("compile_execution") or {}
-        return task.task_type == "compile" and checkpoint.get("phase") not in (None, "finished")
-
-    async def restore_tasks(self, tasks: Iterable[TaskRecord]) -> None:
-        """Restore target owners from unacknowledged deliveries before queue consumers start."""
-        for task in tasks:
-            if task.task_type not in self._providers or (
-                task.status != TaskStatus.CANCELLED
-                and (task.result is not None or task.error is not None)
-            ):
-                continue
-            if task.status not in {
-                TaskStatus.RUNNING,
-                TaskStatus.CANCELLING,
-                TaskStatus.CANCELLED,
-            }:
-                continue
-            # Queue admission can mark waiting work running before Runtime submission.
-            if task.stage in {None, "queued"}:
-                auth = await self._task_auth(task.task_id, task.account_id, task.user_id)
-                if not self._has_target_claim(task, auth):
-                    continue
-            key = self._serialization_key(task)
-            if key is not None:
-                self._owners.setdefault(key, set()).add(task.task_id)
-
-    def _release(self, task: TaskRecord) -> None:
-        key = self._serialization_key(task)
-        if key is not None and key in self._owners:
-            self._owners[key].discard(task.task_id)
-            if not self._owners[key]:
-                del self._owners[key]
 
     async def create(
         self,
@@ -363,8 +316,8 @@ class ExternalTaskService:
         if idempotency_key and task.meta.get("submission_hash") != request_hash:
             raise ConflictError("Idempotency-Key was already used with different parameters")
         if idempotency_key and task.meta.get("submission_token") != token:
-            # Recover a creation interrupted before queue delivery. Duplicate
-            # deliveries are safe: execute claims each task before submitting.
+            # Recover a creation interrupted before queue delivery.
+            # QueueFS serializes deliveries for the same Compile target.
             await self._resume_submission(task, ctx)
             return task
         fail_on_error = True
@@ -494,84 +447,63 @@ class ExternalTaskService:
     async def _execute_once(self, task_id: str, account_id: str, user_id: str) -> bool:
         """Resume a delivery; return False while admission or finalization is pending."""
         tracker = get_task_tracker()
-        claimed = False
-        try:
-            task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
-            if task is None:
-                return True
-            if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
-                self._release(task)
-                return True
-            if task.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}:
-                raise asyncio.CancelledError()
-            # A recovered delivery can ACK an already saved outcome without resubmission.
-            if task.result is not None or task.error is not None:
-                self._release(task)
-                return True
-            provider = self._provider(task.task_type)
-            payload = task.meta.get("request")
-            if not isinstance(payload, dict):
-                await tracker.fail(
-                    task_id,
-                    "INVALID_ARGUMENT: External task request is missing",
-                    account_id=account_id,
-                    user_id=user_id,
-                )
-                return True
-            key = self._serialization_key(task)
-            owners = self._owners.get(key, set()) if key is not None else set()
-            if task_id in self._executing or (owners and task_id not in owners):
-                return False
-            # No await between checking and claiming on the queue loop.
-            if key is not None:
-                self._owners.setdefault(key, set()).add(task_id)
-            self._executing.add(task_id)
-            claimed = True
-            auth = await self._task_auth(task_id, account_id, user_id)
-            task.auth = auth
-            terminal = auth.get("external_terminal_snapshot")
-            if task.has_compile_dependency_failure() or (
-                auth.get("external_cleanup_failure") and terminal is None
-            ):
-                await self.cancel_recovered(task_id, account_id, user_id)
-                return True
-            if terminal is not None:
-                while not await self._apply_snapshot(
-                    ExternalTaskSnapshot(**terminal),
-                    task_id=task_id,
-                    account_id=account_id,
-                    user_id=user_id,
-                    auth=auth,
-                ):
-                    await asyncio.sleep(provider.poll_interval_seconds)
-                return True
-            try:
-                started = await provider.on_start(task)
-            except (ResourceBusyError, GitConcurrentCommitError) as exc:
-                if isinstance(exc, ResourceBusyError) and not exc.retryable:
-                    raise
-                started = "busy"
-            if started == "busy":
-                if not self._has_target_claim(task, task.auth):
-                    self._release(task)
-                return False
-            if isinstance(started, ExternalTaskSnapshot):
-                finished = await self._apply_snapshot(
-                    started,
-                    task_id=task_id,
-                    account_id=account_id,
-                    user_id=user_id,
-                    auth=auth,
-                )
-                if not finished:
-                    await asyncio.sleep(provider.poll_interval_seconds)
-                return finished
-            await self._execute_task(task, provider, payload, account_id, user_id)
+        task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
+        if task is None or task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
             return True
-        finally:
-            # Interrupted execution retains the reservation until cleanup confirms termination.
-            if claimed:
-                self._executing.remove(task_id)
+        if task.status in {TaskStatus.CANCELLING, TaskStatus.CANCELLED}:
+            raise asyncio.CancelledError()
+        # A recovered delivery can ACK an already saved outcome without resubmission.
+        if task.result is not None or task.error is not None:
+            return True
+        provider = self._provider(task.task_type)
+        payload = task.meta.get("request")
+        if not isinstance(payload, dict):
+            await tracker.fail(
+                task_id,
+                "INVALID_ARGUMENT: External task request is missing",
+                account_id=account_id,
+                user_id=user_id,
+            )
+            return True
+        auth = await self._task_auth(task_id, account_id, user_id)
+        task.auth = auth
+        terminal = auth.get("external_terminal_snapshot")
+        if task.has_compile_dependency_failure() or (
+            auth.get("external_cleanup_failure") and terminal is None
+        ):
+            await self.cancel_recovered(task_id, account_id, user_id)
+            return True
+        if terminal is not None:
+            while not await self._apply_snapshot(
+                ExternalTaskSnapshot(**terminal),
+                task_id=task_id,
+                account_id=account_id,
+                user_id=user_id,
+                auth=auth,
+            ):
+                await asyncio.sleep(provider.poll_interval_seconds)
+            return True
+        try:
+            started = await provider.on_start(task)
+        except (ResourceBusyError, GitConcurrentCommitError) as exc:
+            if isinstance(exc, ResourceBusyError) and not exc.retryable:
+                raise
+            started = "busy"
+        if started == "busy":
+            return False
+        if isinstance(started, ExternalTaskSnapshot):
+            finished = await self._apply_snapshot(
+                started,
+                task_id=task_id,
+                account_id=account_id,
+                user_id=user_id,
+                auth=auth,
+            )
+            if not finished:
+                await asyncio.sleep(provider.poll_interval_seconds)
+            return finished
+        await self._execute_task(task, provider, payload, account_id, user_id)
+        return True
 
     async def _execute_task(
         self,
@@ -671,7 +603,6 @@ class ExternalTaskService:
             await tracker.unregister_running_task(task_id)
             task = await tracker.get(task_id, account_id=account_id, user_id=user_id)
             if task and task.task_type == "compile" and task.status == TaskStatus.CANCELLED:
-                self._release(task)
                 return
             auth = await self._task_auth(task_id, account_id, user_id)
             saved_failure = auth.get("external_cleanup_failure")
@@ -808,7 +739,6 @@ class ExternalTaskService:
             task.status != TaskStatus.CANCELLED
             and (task.result is not None or task.error is not None)
         ):
-            self._release(task)
             return
         payload = task.meta.get("request")
         if not isinstance(payload, dict):
@@ -825,7 +755,6 @@ class ExternalTaskService:
             and "openviking_connection" not in auth
         ):
             # Cancellation outcome was recorded before its Work was ACKed.
-            self._release(task)
             return
         provider = self._provider(task.task_type)
         request = self._session_request(task, auth)
@@ -952,11 +881,9 @@ class ExternalTaskService:
                     f"Unknown external task status: {finished.status}",
                     transient=False,
                 )
-            self._release(task)
             return True
         if task.is_terminal() or task.result is not None or task.error is not None:
             # The outcome may already be recorded while QueueFS still owns this Work.
-            self._release(task)
             return True
         if snapshot.stage is not None or snapshot.meta:
             # Runtime termination can still require local finalization before the Task ends.
@@ -1062,8 +989,6 @@ class ExternalTaskService:
                 if attempt == 2:
                     raise ExternalTaskResultSaveError(f"Outcome save exhausted: {exc}") from exc
                 await asyncio.sleep(0.2 * (attempt + 1))
-        if task is not None:
-            self._release(task)
         return True
 
     @staticmethod

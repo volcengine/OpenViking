@@ -547,7 +547,7 @@ async def test_legacy_task_work_settlement(
 async def test_deleted_history_settles_delegated_task(
     setup, monkeypatch, tmp_path, backend, deletion, status
 ):
-    """Deleted history preserves Runtime outcome, closes Work, and releases the target."""
+    """Deleted history preserves the Runtime outcome and closes Work."""
     compile_store = (
         SQLiteCompileStore({"path": str(tmp_path / "compile.db")}, "test")
         if backend == "sqlite"
@@ -596,7 +596,6 @@ async def test_deleted_history_settles_delegated_task(
         await tracker.register_work(task.task_id, "work", "ExternalTask", **owner)
         await tracker.start_work(task.task_id, "work", queue_name="ExternalTask", **owner)
         await lifecycle.on_start(task)
-        external._owners[external._serialization_key(task)] = {task.task_id}
         commits = deepcopy(setup.fs.commits)
         terminal = ExternalTaskSnapshot(
             status=status,
@@ -648,8 +647,6 @@ async def test_deleted_history_settles_delegated_task(
             external = ExternalTaskService()
             external.register(provider)
             provider.configure_lifecycle(CompileLifecycle(compile_store, setup.fs))
-            await external.restore_tasks([await tracker.get(task.task_id, **owner)])
-            assert external._owners
             assert await external.execute(task.task_id, **owner)
         else:
             assert await external._apply_snapshot(terminal, task_id=task.task_id, auth={}, **owner)
@@ -661,7 +658,6 @@ async def test_deleted_history_settles_delegated_task(
         assert finished.status is TaskStatus(status)
         if status != "cancelled":
             assert finished.result == expected_result
-        assert not external._owners
         assert (
             await tracker.get_work_state(task.task_id, "work", **owner)
             is {

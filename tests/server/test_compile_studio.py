@@ -550,6 +550,7 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch, stage, auth,
     from openviking.service.compile_service import CompileService
     from openviking.service.external_task_service import ExternalTaskSnapshot
     from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
+    from openviking.storage.queuefs.process_result import ProcessOutcome
     from openviking.storage.queuefs.queue_manager import QueueManager
     from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 
@@ -617,23 +618,24 @@ async def test_concurrent_submission_retry_and_restart(monkeypatch, stage, auth,
         service = ExternalTaskService()
         service.register(provider)
         await manager.prepare_task_tracking(tracker)
-        recovered = await manager.get_queued_tasks(tracker, manager.EXTERNAL_TASK)
-        assert {task.task_id for task in recovered} == {again.task_id, waiting.task_id}
-        await service.restore_tasks(recovered)
 
-        assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
         provider.on_start.side_effect = ["busy", None, None]
-        assert not await service.execute(again.task_id, **owner)
-        assert not await service.execute(waiting.task_id, other.account_id, other.user.user_id)
         queue = manager.get_queue(manager.EXTERNAL_TASK)
         queue.set_dequeue_handler(ExternalTaskProcessor(service))
         message = await queue.dequeue_raw()
         assert json.loads(message["data"])["task_id"] == again.task_id
         # Other users cannot dequeue the same target while its original ID is unacked.
         assert await queue.dequeue_raw() is None
+        retry = await queue.process_dequeued(message)
+        assert retry.outcome is ProcessOutcome.RETRY
         provider.submit.assert_not_awaited()
-        await queue.process_dequeued(message)
-        await queue.ack(message["id"], message)
+        await queue.settle_dequeued(message, retry)
+        retried = await queue.dequeue_raw()
+        assert retried["id"] == message["id"]
+        assert await queue.dequeue_raw() is None
+        result = await queue.process_dequeued(retried)
+        assert result.outcome is ProcessOutcome.SUCCESS
+        await queue.settle_dequeued(retried, result)
         for _ in range(len(await queue.snapshot())):
             await queue.dequeue()
         assert (await tracker.get(waiting.task_id, account_id="acme", user_id="bob")).result == {

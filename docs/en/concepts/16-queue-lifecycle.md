@@ -166,9 +166,9 @@ cleanup or Task/Work persistence errors leave the delivery unacknowledged; handl
 business failures are ACKed after Work settlement. Cancellation uses the common
 Task middleware contract. ACK uses the common queue behavior: a failed write logs
 a warning and leaves the delivery for recovery while consumption continues.
-For this release, ExternalTaskService retains its baseline target reservations
-and execution guard for pre-key deliveries, restoring reservations before workers
-start. These transitional guards are scheduled for removal in the next release.
+ExternalTaskService relies on QueueFS to serialize deliveries. Compile messages
+enqueued before `serial_key` support do not get same-target serialization.
+Drain those messages before upgrading if they are still queued.
 
 SessionCommit uses an account/user `group_key` on initial and recovery enqueue,
 allowing concurrent sessions to share the streaming-memory batcher. Waiting for

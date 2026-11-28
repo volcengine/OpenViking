@@ -144,9 +144,9 @@ admission busy 或本地 finalization 未完成时返回 `ProcessResult.retry()`
 External 业务结果保存最多尝试三次；向外传播的执行、清理及
 Task/Work 保存异常均不 ACK，已处理的业务失败在 Work 结算后 ACK。
 取消沿用通用 Task middleware 契约；ACK 沿用通用队列行为，写入失败记录
-warning，消息留待恢复，消费继续。本版本 ExternalTaskService 保留基线的目标
-占用和执行保护，并在 worker 启动前恢复占用，以兼容未携带 key 的旧消息；
-这些过渡保护计划在下个版本移除。
+warning，消息留待恢复，消费继续。ExternalTaskService 依赖 QueueFS 串行投递。
+在支持 `serial_key` 之前入队的 Compile 消息没有同目标串行保护。
+如果队列中仍有这类消息，请先处理完再升级。
 
 SessionCommit 的首次提交和恢复入队均按账号/用户生成 `group_key`，
 让同用户的并发会话共用流式 Memory 批处理器。等待前一个 archive 时返回
