@@ -107,6 +107,78 @@ def configure_query_recall(provider, behavior, *, scope, compress):
     provider._profile_prefetched_sessions.add("recall-session")
 
 
+@pytest.mark.parametrize("compress", ["off", "server", "auto"])
+@pytest.mark.parametrize("scope", ["shared", "peer"])
+def test_public_prefetch_can_disable_planning_without_changing_recall_mode(
+    recall_provider, compress, scope
+):
+    provider, _module, requests, behavior = recall_provider
+    configure_query_recall(provider, behavior, scope=scope, compress=compress)
+    provider.save_config({"session_aware_search": False}, str(behavior["home"]))
+    payloads = []
+
+    def respond(request):
+        if request.url.path == "/api/v1/system/status":
+            return httpx.Response(200, json={"result": {"user": "private-identity"}})
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        if payload.get("mode") == "context":
+            result = {"rendered": "The decision is retained.", "entries": [],
+                      "stats": {"peer_scope": payload["peer_scope"]}}
+        else:
+            result = {"memories": [{
+                "uri": "viking://user/private-identity/memories/decision.md",
+                "abstract": "The decision is retained.", "score": 0.9,
+            }]}
+        return httpx.Response(200, json={"result": result})
+
+    behavior["respond"] = respond
+    assert "The decision is retained." in provider.prefetch("private query", session_id="recall-session")
+    assert requests == (["/api/v1/system/status"] if scope == "peer" else []) + ["/api/v1/search/search"]
+    assert len(payloads) == 1
+    payload = payloads[0]
+    if compress == "off":
+        assert "session_id" not in payload
+        if scope == "peer":
+            assert payload["target_uri"] == [
+                "viking://user/private-identity/memories",
+                "viking://user/private-identity/peers/telegram.private-sender/memories",
+            ]
+    else:
+        assert payload["session_id"] == "recall-session"
+        assert payload["query_expansion"] == "off"
+        assert payload["rewrite"] == (True if compress == "server" else "auto")
+        assert payload["peer_scope"] == ("actor" if scope == "peer" else "all")
+
+
+@pytest.mark.parametrize("compress", ["server", "auto"])
+def test_public_compression_fallback_does_not_reenable_session_planning(
+    recall_provider, compress
+):
+    provider, _module, requests, behavior = recall_provider
+    configure_query_recall(provider, behavior, scope="shared", compress=compress)
+    provider.save_config({"session_aware_search": False}, str(behavior["home"]))
+    payloads = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        payloads.append(payload)
+        if payload.get("mode") == "context":
+            return httpx.Response(400, json={"error": "unsupported context mode"})
+        return httpx.Response(200, json={"result": {"memories": [{
+            "uri": "viking://user/private-identity/memories/decision.md",
+            "abstract": "The decision is retained.", "score": 0.9,
+        }]}})
+
+    behavior["respond"] = respond
+    assert "The decision is retained." in provider.prefetch("private query", session_id="recall-session")
+    assert requests == ["/api/v1/search/search", "/api/v1/search/search"]
+    assert payloads[0]["session_id"] == "recall-session"
+    assert payloads[0]["query_expansion"] == "off"
+    assert "session_id" not in payloads[1]
+    assert "rewrite" not in payloads[1]
+
+
 def assert_timeout_warning(caplog, provider, error):
     warnings = [record.getMessage() for record in caplog.records
                 if record.name == type(provider).__module__ and record.levelno == logging.WARNING]

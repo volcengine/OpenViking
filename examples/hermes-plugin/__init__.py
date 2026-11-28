@@ -157,6 +157,8 @@ _CONFIG_SCHEMA = [
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
+    _cfg_field("session_aware_search", "Use conversation history to plan automatic recall and deep searches.",
+               type="boolean", default=True),
     _cfg_field("recall_scope", "Automatic recall: all peers (shared) or current sender (peer). Unset preserves existing behavior.",
                type="string", choices=["shared", "peer"], default=None),
     _cfg_field(
@@ -2157,14 +2159,16 @@ class OpenVikingMemoryProvider(MemoryProvider):
     @classmethod
     def _post_prefetch_search(cls, client: _VikingClient, query: str, session_id: str, *, limit: int,
                               context_type: str | List[str], deadline: float, request_timeout: float,
-                              target_uri: Optional[List[str]] = None) -> dict:
-        """Session-aware search first, falling back to search/find (budget errors propagate)."""
+                              target_uri: Optional[List[str]] = None,
+                              session_aware_search: bool = True) -> dict:
+        """Keep search reranking when session planning is off; preserve the find fallback."""
         base_payload = {"query": query, "limit": limit, "score_threshold": 0, "context_type": context_type}
         if target_uri:
             base_payload["target_uri"] = target_uri
         if session_id:
+            search_payload = {**base_payload, "session_id": session_id} if session_aware_search else base_payload
             try:
-                return client.post("/api/v1/search/search", {**base_payload, "session_id": session_id},
+                return client.post("/api/v1/search/search", search_payload,
                                    timeout=cls._remaining_recall_timeout(deadline, request_timeout))
             except TimeoutError:
                 raise
@@ -2231,6 +2235,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 }
                 if session_id:
                     payload["session_id"] = session_id
+                if not cfg["session_aware_search"]:
+                    # Keep the session for deduplication and leave rewrite independent.
+                    payload["query_expansion"] = "off"
                 if scope in ("shared", "peer"):
                     payload["peer_scope"] = "actor" if scope == "peer" else "all"
                 try:
@@ -2271,6 +2278,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     deadline=deadline,
                     request_timeout=cfg["request_timeout_seconds"],
                     target_uri=target_uri,
+                    session_aware_search=cfg["session_aware_search"],
                 )
             )
             if not isinstance(result, dict):
@@ -2351,6 +2359,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         resolved = {
             key.removeprefix("recall_"): self._setting(key, cfg, env=env) for key in _RECALL_SETTING_KEYS
         }
+        resolved["session_aware_search"] = self._setting("session_aware_search", cfg, env=env)
         if resolved["compress"] in ("server", "auto"):
             # Retrieval plus server rewrite has a longer fuse. Keep explicit
             # user deadlines authoritative and the default off path unchanged.
@@ -3372,7 +3381,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
         payload: Dict[str, Any] = {"query": query, **({"target_uri": args["scope"]} if args.get("scope") else {}), **({"limit": args["limit"]} if args.get("limit") else {})}
         deep = args.get("mode", "auto") == "deep"
         if deep and self._session_id:
-            payload["session_id"] = self._session_id
+            cfg, env = self._profile_config_and_env()
+            if self._setting("session_aware_search", cfg, env=env):
+                payload["session_id"] = self._session_id
         result = self._client.post("/api/v1/search/search" if deep else "/api/v1/search/find", payload).get("result", {})
 
         scored_entries = []

@@ -61,7 +61,8 @@ def test_rule_search_keeps_complete_rules_and_does_not_reingest_them(external_pr
     assert "judge unavailable" in provider.handle_tool_call("viking_rule_search", {"task_context": "deploy"})
 
 
-def test_initialized_profile_owns_connection_and_recall_across_other_profile(external_provider, monkeypatch):
+@pytest.mark.parametrize("session_aware_search", [True, False])
+def test_initialized_profile_owns_connection_and_recall_across_other_profile(external_provider, monkeypatch, session_aware_search):
     from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
@@ -115,7 +116,9 @@ def test_initialized_profile_owns_connection_and_recall_across_other_profile(ext
             (home / ".env").write_text(
                 f"OPENVIKING_API_KEY=key-{label}\n"
                 f"OPENVIKING_ACCOUNT=account-{label}\nOPENVIKING_USER=user-{label}\n"
-                f"OPENVIKING_AGENT=peer-{label}\nOV_TEST_BUDGET={budget}\n", encoding="utf-8"
+                f"OPENVIKING_AGENT=peer-{label}\nOV_TEST_BUDGET={budget}\n"
+                f"OPENVIKING_SESSION_AWARE_SEARCH={str(session_aware_search if label == 'a' else not session_aware_search).lower()}\n",
+                encoding="utf-8"
             )
 
         monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
@@ -134,13 +137,16 @@ def test_initialized_profile_owns_connection_and_recall_across_other_profile(ext
             (home_a / ".env").write_text(
                 "OPENVIKING_API_KEY=key-a-new\nOPENVIKING_ACCOUNT=account-a\n"
                 "OPENVIKING_USER=user-a\nOPENVIKING_AGENT=peer-a-new\n"
-                "OV_TEST_BUDGET=1100\n", encoding="utf-8"
+                f"OV_TEST_BUDGET=1100\nOPENVIKING_SESSION_AWARE_SEARCH={str(session_aware_search).lower()}\n",
+                encoding="utf-8"
             )
             provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
 
             # Removing A's credentials must not borrow B's active or process values.
             (home_a / ".env").write_text(
-                "OPENVIKING_AGENT=peer-a\nOV_TEST_BUDGET=1100\n", encoding="utf-8"
+                "OPENVIKING_AGENT=peer-a\nOV_TEST_BUDGET=1100\n"
+                f"OPENVIKING_SESSION_AWARE_SEARCH={str(session_aware_search).lower()}\n",
+                encoding="utf-8"
             )
             monkeypatch.setenv("OPENVIKING_API_KEY", "process-b-key")
             monkeypatch.setenv("OPENVIKING_ACCOUNT", "process-b-account")
@@ -159,7 +165,8 @@ def test_initialized_profile_owns_connection_and_recall_across_other_profile(ext
             ("a", "key-a", "peer-a"), ("a", "key-a-new", "peer-a-new"),
             ("a", None, "peer-a")
         ]
-        assert all(body["session_id"] == "session-a" for _, _, body, _, _ in requests)
+        assert all(body.get("session_id") == ("session-a" if session_aware_search else None)
+                   for _, _, body, _, _ in requests)
     finally:
         for server, worker in servers:
             server.shutdown()
@@ -434,6 +441,7 @@ def test_cancelled_external_setup_keeps_existing_config(external_provider, monke
 
 
 @pytest.mark.parametrize("mode,rewrite", [("server", True), ("auto", "auto")])
+@pytest.mark.parametrize("session_aware_search", [True, False])
 @pytest.mark.parametrize(
     "response,expected",
     [
@@ -442,11 +450,12 @@ def test_cancelled_external_setup_keeps_existing_config(external_provider, monke
         ({"rendered": "raw", "stats": {"rewrite": "no_relevant"}}, ""),
     ],
 )
-def test_cloud_recall(external_provider, monkeypatch, mode, rewrite, response, expected):
+def test_cloud_recall(external_provider, monkeypatch, mode, rewrite, session_aware_search, response, expected):
     from unittest.mock import Mock
 
     _, provider, _, _ = external_provider("cloud-recall")
     monkeypatch.setenv("OPENVIKING_RECALL_COMPRESS", mode)
+    monkeypatch.setenv("OPENVIKING_SESSION_AWARE_SEARCH", str(session_aware_search).lower())
     client = Mock()
     client.post.return_value = {"result": response}
     assert (
@@ -461,7 +470,38 @@ def test_cloud_recall(external_provider, monkeypatch, mode, rewrite, response, e
     assert body["mode"] == "context"
     assert body["rewrite"] == rewrite
     assert body["session_id"] == "session"
+    assert body.get("query_expansion") == (None if session_aware_search else "off")
     assert 50 < client.post.call_args.kwargs["timeout"] <= 55
+
+
+@pytest.mark.parametrize(
+    "yaml_value,env_value,session_aware",
+    [(None, None, True), (False, None, False), (True, None, True),
+     (True, "false", False), (False, "true", True), (False, "", False),
+     (False, "invalid", True), ("invalid", None, True)],
+)
+def test_session_planning_setting_preserves_search_modes(
+    external_provider, monkeypatch, yaml_value, env_value, session_aware
+):
+    from unittest.mock import Mock
+
+    home, provider, _, _ = external_provider("planning-setting")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    if yaml_value is not None:
+        provider.save_config({"session_aware_search": yaml_value}, str(home))
+    if env_value is not None:
+        monkeypatch.setenv("OPENVIKING_SESSION_AWARE_SEARCH", env_value)
+    client = Mock()
+    client.post.return_value = {"result": {"memories": []}}
+    provider._client = client
+    provider._session_id = "planning-session"
+    monkeypatch.setattr(provider, "_ensure_client", lambda: client)
+
+    for mode in ("deep", "fast", "auto"):
+        provider.handle_tool_call("viking_search", {"query": "deployment preference", "mode": mode})
+        path, payload = client.post.call_args.args
+        assert path == ("/api/v1/search/search" if mode == "deep" else "/api/v1/search/find")
+        assert payload.get("session_id") == ("planning-session" if mode == "deep" and session_aware else None)
 
 
 def test_cloud_recall_legacy_fallback(external_provider, monkeypatch):
