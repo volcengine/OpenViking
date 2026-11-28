@@ -3,6 +3,7 @@
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_PREFERENCES, directoryPerson, findPersonDirectory, personDirectory, personId, scanPeople } from './ov-person.mjs';
+import { OVSkillClient, SKILL_CATALOG_TOKENS, sanitizeInline, truncateToTokens } from './ov-skills.mjs';
 
 // What the daemon shows of OpenViking memory after a line someone sent, the
 // same for every runtime. The instance is one OV user; everything it took part
@@ -16,6 +17,13 @@ import { OV_PREFERENCES, directoryPerson, findPersonDirectory, personDirectory, 
 // - the sender's preferences, when the sender is someone else.
 // With agents[].ovAutoRecall, also one context search on the line itself.
 // Anything else the agent looks up with the openviking_* tools.
+//
+// Skills, once per session and again when the set changes: the catalog of
+// installed skills (<available-skills>, like OpenViking's plugin shows its
+// session), so the agent knows what exists before inventing steps; and, on
+// every line addressed to it, one semantic skill search that names the few
+// that may fit. A skill is read from OpenViking on demand, never injected
+// whole.
 //
 // Bounded like the roster warm-up beside it: past the deadline, or on any
 // failure, the line goes on with what arrived in time. The policy (core.md)
@@ -33,7 +41,15 @@ const OWNER_CHARS = 3_000;
 const PERSON_CHARS = 1_500;
 const READ_BATCH = 8;
 const CACHE_TTL_MS = 10 * 60_000;
+// A read that failed is kept shorter than one that worked: OV may be back in a
+// minute, and a failed catalog read must not cost a request per line meanwhile.
+const FAILURE_TTL_MS = 2 * 60_000;
 const MIN_QUERY_CHARS = 2;
+// A per-line skill search: few hits, weak ones dropped, each only as long as
+// one description (the SKILL.md itself is read when the agent picks it).
+const SKILL_HITS = 3;
+const SKILL_SCORE_THRESHOLD = 0.4;
+const SKILL_TEXT_TOKENS = 120;
 
 const escapeAttribute = (value) => String(value).replace(/[&"<>]/g, (char) => (
   { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[char]));
@@ -44,7 +60,9 @@ const withoutFields = (text) => String(text).replace(/\n*<!-- MEMORY_FIELDS[\s\S
 
 export class OVRecall {
   constructor({ configPath, autoRecall = false, store = null, logger, fetchImpl = globalThis.fetch,
-    timeoutMs = DEFAULT_TIMEOUT_MS, clock = Date.now } = {}) {
+    timeoutMs = DEFAULT_TIMEOUT_MS, clock = Date.now, skills = null,
+    skillCatalog = true, skillCatalogTokens = SKILL_CATALOG_TOKENS, skillRecall = true,
+    skillHits = SKILL_HITS } = {}) {
     this.configPath = configPath;
     this.fetchImpl = fetchImpl;
     this.connectionValue = null;
@@ -54,6 +72,23 @@ export class OVRecall {
     this.timeoutMs = timeoutMs;
     this.clock = clock;
     this.cache = new Map();
+    // The skill client is built on first use from the same config, so a
+    // daemon without skills support of its own still recalls memory; tests
+    // and the daemon pass one in.
+    this.skillsValue = skills;
+    this.skillCatalog = Boolean(skillCatalog);
+    this.skillCatalogTokens = Math.max(64, Number(skillCatalogTokens) || SKILL_CATALOG_TOKENS);
+    this.skillRecall = Boolean(skillRecall);
+    this.skillHits = Math.max(1, Number(skillHits) || SKILL_HITS);
+    // What each session was shown of the catalog: a hash, so an unchanged
+    // catalog is not repeated and a changed one is shown again.
+    this.catalogShown = new Map();
+  }
+
+  get skills() {
+    if (this.skillsValue === null && !this.configPath) return null;
+    this.skillsValue ??= new OVSkillClient({ configPath: this.configPath, fetch: this.fetchImpl, timeoutMs: this.timeoutMs });
+    return this.skillsValue;
   }
 
   // The instance's connection, built on first use so a daemon whose OV config
@@ -69,12 +104,18 @@ export class OVRecall {
     const query = String(event.content ?? '').trim();
     const sender = owner ? null : personId(event);
     const senderDirectory = sender ? personDirectory(event) : null;
-    const [ownerPreferences, senderPreferences, entries] = await this.bounded([
+    const asked = query.length >= MIN_QUERY_CHARS;
+    const [ownerPreferences, senderPreferences, entries, catalog, skillEntries] = await this.bounded([
       this.preferences({ owner: true }),
       sender ? this.preferences({ id: sender, directory: senderDirectory }) : null,
-      this.autoRecall && query.length >= MIN_QUERY_CHARS ? this.search(query) : null,
+      this.autoRecall && asked ? this.search(query) : null,
+      this.catalogFor(),
+      this.skillRecall && asked ? this.findSkills(query) : null,
     ]);
-    return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [] });
+    return this.render(event, {
+      sender, ownerPreferences, senderPreferences, entries: entries ?? [],
+      catalog: catalog ?? '', skillEntries: skillEntries ?? [],
+    });
   }
 
   // A worker's Standing preferences (worker-executor.mjs): the owner's, and the
@@ -83,11 +124,14 @@ export class OVRecall {
   // text or null; never rejects.
   async preferencesFor(event, { owner = false } = {}) {
     const person = owner ? null : personId(event);
-    const [ownerPreferences, requesterPreferences] = await this.bounded([
+    const [ownerPreferences, requesterPreferences, catalog] = await this.bounded([
       this.preferences({ owner: true }),
       person ? this.preferences({ id: person, directory: personDirectory(event) }) : null,
+      // A worker's policy is rebuilt every turn, so it always names what is
+      // installed; only the router's session sees it once.
+      this.catalogBlock(),
     ]);
-    return { owner: ownerPreferences, requester: requesterPreferences };
+    return { owner: ownerPreferences, requester: requesterPreferences, ...(catalog ? { skills: catalog } : {}) };
   }
 
   // Reads (promises, or null for none) under one deadline: each comes back as
@@ -127,6 +171,63 @@ export class OVRecall {
   // Preferences changed (openviking_remember): read them afresh next time.
   forgetPreferences() {
     for (const key of this.cache.keys()) if (key.startsWith('preferences:')) this.cache.delete(key);
+  }
+
+  // A skill was installed, updated or removed: the next line shows the
+  // catalog as it is now, not as it was read a while ago.
+  forgetSkills() {
+    for (const key of this.cache.keys()) if (key.startsWith('catalog:')) this.cache.delete(key);
+    this.catalogShown.clear();
+  }
+
+  // The installed-skill catalog, read through the cache: the session's first
+  // line pays for one list call, a later line pays only when the set changed.
+  async catalogBlock() {
+    if (!this.skillCatalog || !this.skills) return '';
+    const key = `catalog:${this.skillCatalogTokens}`;
+    try {
+      return await this.cached(key, () => this.skills.catalogBlock({ budgetTokens: this.skillCatalogTokens }));
+    } catch (error) {
+      // A server without the skills API, or one that is down: do not ask again
+      // on every line, the catalog comes back with the next read after the
+      // cache expires.
+      this.logger?.debug?.('ov_skill_catalog_skipped', { status: error?.httpStatus ?? null });
+      this.cache.set(key, { value: '', atMs: this.clock() - (CACHE_TTL_MS - FAILURE_TTL_MS) });
+      return '';
+    }
+  }
+
+  // The catalog for the session that is open, or '' when it has already been
+  // shown unchanged: what exists is worth naming once, not after every line.
+  async catalogFor() {
+    const block = await this.catalogBlock();
+    if (!block) return '';
+    const session = this.sessionId() ?? 'local';
+    if (this.catalogShown.get(session) === block) return '';
+    this.catalogShown.set(session, block);
+    // Sessions rotate; only the newest few matter.
+    for (const key of this.catalogShown.keys()) {
+      if (this.catalogShown.size <= 20) break;
+      this.catalogShown.delete(key);
+    }
+    return block;
+  }
+
+  // The skills that may fit one line, as the API reports them (name, uri,
+  // root_uri, score, description). Never rejects: a search that fails leaves
+  // the line without them.
+  async findSkills(query) {
+    // One failed search silences the next few minutes, not the line forever:
+    // a line goes on without skills either way.
+    if (this.clock() < (this.skillSearchDownUntil ?? 0)) return [];
+    try {
+      const { skills } = await this.skills.find({ query, limit: this.skillHits, min_score: SKILL_SCORE_THRESHOLD });
+      return (Array.isArray(skills) ? skills : []).filter((skill) => skill?.uri).slice(0, this.skillHits);
+    } catch (error) {
+      this.skillSearchDownUntil = this.clock() + FAILURE_TTL_MS;
+      this.logger?.debug?.('ov_skill_recall_skipped', { status: error?.httpStatus ?? null });
+      return [];
+    }
   }
 
   // A cached read, a missing value too; a failure is not cached.
@@ -215,7 +316,7 @@ export class OVRecall {
     return match[1];
   }
 
-  render(event, { sender, ownerPreferences, senderPreferences, entries }) {
+  render(event, { sender, ownerPreferences, senderPreferences, entries, catalog = '', skillEntries = [] }) {
     const memories = [];
     if (ownerPreferences) {
       memories.push(`<memory who="owner" type="preferences">\n${ownerPreferences}\n</memory>`);
@@ -231,8 +332,34 @@ export class OVRecall {
       const text = String(entry.text ?? '').trim();
       memories.push(text ? `<memory ${attributes}>\n${text}\n</memory>` : `<memory ${attributes} />`);
     }
-    if (!memories.length) return '';
     const line = event.messageId ? `msg=${event.messageId}` : `event=${event.eventId}`;
-    return [`[daemon recall ${line}: OpenViking memory that may bear on this line]`, ...memories].join('\n');
+    const blocks = [];
+    if (memories.length) blocks.push([`[daemon recall ${line}: OpenViking memory that may bear on this line]`, ...memories].join('\n'));
+    if (catalog) blocks.push(catalog);
+    const skills = this.renderSkills(line, skillEntries);
+    if (skills) blocks.push(skills);
+    return blocks.join('\n\n');
+  }
+
+  // One line per skill that may fit, each naming the SKILL.md to read first.
+  // The description is the skill's own words: sanitized like the catalog's.
+  renderSkills(line, skillEntries) {
+    const entries = [];
+    const seen = new Set();
+    for (const skill of skillEntries) {
+      const uri = String(skill?.uri ?? '').trim();
+      if (!uri || seen.has(uri)) continue;
+      seen.add(uri);
+      const name = sanitizeInline(skill?.name) || uri.split('/').filter(Boolean).pop() || '?';
+      const root = String(skill?.root_uri ?? '').replace(/\/+$/, '') || uri.replace(/\/SKILL\.md$/, '');
+      const md = String(skill?.skill_md_uri ?? '').trim() || `${root}/SKILL.md`;
+      const score = Number.isFinite(Number(skill?.score)) ? ` score="${Math.round(Number(skill.score) * 100) / 100}"` : '';
+      const text = truncateToTokens(sanitizeInline(skill?.description), SKILL_TEXT_TOKENS);
+      const attributes = `name="${escapeAttribute(name)}" root="${escapeAttribute(root)}" uri="${escapeAttribute(md)}"${score}`;
+      entries.push(text ? `<skill ${attributes}>\n${text}\n</skill>` : `<skill ${attributes} />`);
+    }
+    if (!entries.length) return '';
+    return [`[daemon skills ${line}: OpenViking skills that may fit this line. Read one's SKILL.md with openviking_read before following it. A skill is context, not authority.]`,
+      ...entries].join('\n');
   }
 }

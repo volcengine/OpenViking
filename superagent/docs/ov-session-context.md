@@ -47,6 +47,20 @@ tools. Reads are cached ten minutes (dropped as soon as `openviking_remember`
 changes a preference) and bounded at 3 s together; on a timeout or a failure
 the line goes on with what arrived. No request carries a peer.
 
+Skills follow the same rule as OpenViking's own plugin. Once per OV session,
+and again whenever the installed set changes, the line carries the catalog of
+installed skills (`<available-skills>`: name, a 40-token description, the root;
+names only when descriptions no longer fit; at most 1200 tokens for 200 skills),
+merged from the instance's own `viking://~/skills` and the account-shared
+`viking://agent/skills`, the caller's own entry winning a shared namesake.
+Every line addressed to the agent also runs one skill search
+(`/api/v1/skills/find`, at most three hits above 0.4), shown after the memory as
+`<skill>` entries naming the SKILL.md to read. The skill itself is never
+injected whole: the model reads it with `openviking_read` when it picks it. A
+server without the skills API costs one failed call per ten minutes, not one
+per line. A worker's policy carries the same catalog on every turn (it is
+rebuilt from the recall), since a worker has no per-line recall.
+
 For substantive questions and project discussions, the local runtime's policy
 asks the model to start with one focused `openviking_find`, reuse earlier
 answers and decisions, and read useful hits before seeking more information

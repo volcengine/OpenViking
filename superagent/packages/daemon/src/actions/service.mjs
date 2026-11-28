@@ -12,6 +12,7 @@ import { meetingFolder, meetingNotesRoot, meetingReadTarget } from '../meeting/n
 import { meetingContextLines } from '../meeting/index.mjs';
 import { OVUnavailableError } from '../ov-connection.mjs';
 import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs';
+import { OVSkillClient } from '../ov-skills.mjs';
 import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
 import { BOT_SENDERS, isoMinute, readMetadataTag, senderLabel } from '../runtime-input.mjs';
@@ -72,6 +73,13 @@ const HANDLERS = {
   openviking_add_resource: 'openvikingAddResource',
   openviking_remember: 'openvikingRemember',
   openviking_write: 'openvikingWrite',
+  openviking_skill_list: 'openvikingSkillList',
+  openviking_skill_find: 'openvikingSkillFind',
+  openviking_skill_show: 'openvikingSkillShow',
+  openviking_skill_add: 'openvikingSkillAdd',
+  openviking_skill_update: 'openvikingSkillUpdate',
+  openviking_skill_remove: 'openvikingSkillRemove',
+  openviking_skill_validate: 'openvikingSkillValidate',
 };
 
 // What a worker's authority may call (workers scheduler): its own task's
@@ -81,6 +89,7 @@ const WORKER_TOOLS = new Set([
   'task_check', 'task_report', 'task_handback', 'task_list', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
   'list_thread_messages', 'get_message_media', 'read_email', 'read_meeting_note', 'read_openviking_session_context',
   'get_time', 'openviking_find', 'openviking_search', 'openviking_read', 'openviking_list',
+  'openviking_skill_list', 'openviking_skill_find', 'openviking_skill_show', 'openviking_skill_validate',
 ]);
 
 // What answers for a task's report (workers scheduler): a final delivery or a
@@ -101,7 +110,10 @@ function blocked(code, message) {
 const STATE_TOOLS = new Set(['stay_silent', 'create_timer', 'cancel_timer']);
 function changesState(tool, result) {
   if (tool?.name === 'finish_timer_occurrence') return result?.data?.completed === true;
-  if (tool?.openviking) return Boolean(result?.data?.task_id || result?.data?.root_uri || result?.data?.stored || result?.data?.removed);
+  if (tool?.openviking) {
+    return Boolean(result?.data?.task_id || result?.data?.root_uri || result?.data?.stored
+      || result?.data?.removed || result?.data?.changed);
+  }
   return Boolean(tool?.action) || STATE_TOOLS.has(tool?.name);
 }
 
@@ -159,17 +171,19 @@ export class ActionService {
     meetingEnabled = false,
     ovClient = null,
     ovTools = null,
+    ovSkills = null,
     timers = null,
     clock = () => Date.now(),
     onTimersChanged = () => {},
     onPreferencesChanged = () => {},
+    onSkillsChanged = () => {},
     onNoProgress = null,
     loopBreakAfter = LOOP_BREAK_AFTER,
     logger,
   }) {
     Object.assign(this, {
-      config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, timers, clock, onTimersChanged, onPreferencesChanged,
-      onNoProgress, loopBreakAfter, logger,
+      config, store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, ovSkills, timers, clock, onTimersChanged, onPreferencesChanged,
+      onSkillsChanged, onNoProgress, loopBreakAfter, logger,
     });
     // Loop guard: duplicate outcomes per input in the current turn, cleared
     // by resetLoopGuard() at every turn end.
@@ -416,7 +430,7 @@ export class ActionService {
     if (tool.connector) return this.connectors.manifests().some(([, manifest]) => manifest.name === tool.connector);
     if (tool.meeting) return this.meetingEnabled;
     if (tool.meetingNotes) return Boolean(this.config.meetingNotes);
-    if (tool.openviking) return Boolean(this.ovTools || this.ovClient || this.config.openVikingConfigPath);
+    if (tool.openviking) return Boolean(this.ovTools || this.ovSkills || this.ovClient || this.config.openVikingConfigPath);
     if (tool.timer) return Boolean(this.timers);
     if (tool.explicitSilence) return Boolean(this.config.explicitSilence);
     if (tool.inbox) return ['inbox', 'workers'].includes(this.config.scheduler);
@@ -1941,6 +1955,79 @@ export class ActionService {
   async openvikingWrite(input, caller) {
     caller.trace.invoked = true;
     return await this.ovToolClient().write({ uri: input.uri, content: input.content, mode: input.mode });
+  }
+
+  // OpenViking's agent skills: the management the OV CLI and plugin offer,
+  // over the same connection as the memory tools but in a client of its own
+  // (ov-skills.mjs), built on first use like the rest.
+  ovSkillClient() {
+    this.ovSkills ??= new OVSkillClient({
+      configPath: this.config.openVikingConfigPath,
+      timeoutMs: this.config.openVikingToolTimeoutMs ?? 20_000,
+      installTimeoutMs: this.config.openVikingSkillTimeoutMs ?? 120_000,
+    });
+    return this.ovSkills;
+  }
+
+  async openvikingSkillList(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovSkillClient().list(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingSkillFind(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovSkillClient().find(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingSkillShow(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovSkillClient().show(input);
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  async openvikingSkillValidate(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovSkillClient().validate({ ...input, workspace: this.config.workspace });
+    this.assertAuthority(caller.authority);
+    return result;
+  }
+
+  // Installs and removals check authority only before the request leaves: a
+  // write the server took must not be reported failed because the runtime was
+  // retired while it landed, and neither is retried.
+  async openvikingSkillAdd(input, caller) {
+    caller.trace.invoked = true;
+    const result = await this.ovSkillClient().add({ ...input, workspace: this.config.workspace });
+    if (result?.data?.changed) this.onSkillsChanged();
+    return result;
+  }
+
+  // A named skill is replaced from its recorded Git source or the given
+  // content; without a name, every installed skill with a Git source is
+  // refreshed (the CLI's `ov skills update` with no names).
+  async openvikingSkillUpdate(input, caller) {
+    caller.trace.invoked = true;
+    const client = this.ovSkillClient();
+    const result = !String(input.name ?? '').trim()
+      ? await client.updateInstalled({ wait: input.wait, target_uri: input.target_uri })
+      : await client.update({ ...input, workspace: this.config.workspace });
+    if (result?.data?.changed) this.onSkillsChanged();
+    return result;
+  }
+
+  async openvikingSkillRemove(input, caller) {
+    caller.trace.invoked = true;
+    if (input.all !== true && !String(input.name ?? '').trim()) {
+      throw blocked('invalid_input', `Pass the skill name, or all: true to remove every skill in that root. ${NO_ACTION}`);
+    }
+    const result = await this.ovSkillClient().remove({ name: input.name, all: input.all === true, target_uri: input.target_uri });
+    if (result?.data?.changed) this.onSkillsChanged();
+    return result;
   }
 
   // Whether the owner sent an event, by the connector's authenticated identity.

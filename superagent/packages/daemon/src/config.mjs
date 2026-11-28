@@ -308,6 +308,9 @@ export function getConfig() {
     // One OpenViking tool request, bounded for the model-facing tools (the
     // faster read/list paths get half of it).
     openVikingToolTimeoutMs: intEnv('OV_SUPERAGENT_OV_TOOL_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
+    // One skill install or update: the server may clone a repository and
+    // summarise the package before it answers.
+    openVikingSkillTimeoutMs: intEnv('OV_SUPERAGENT_OV_SKILL_TIMEOUT_MS', 120_000, { min: 5_000, max: 600_000 }),
     agentName: process.env.OV_SUPERAGENT_AGENT_NAME || process.env.OV_SUPERAGENT_INSTANCE_ID || 'Agent',
     instanceId: process.env.OV_SUPERAGENT_INSTANCE_ID || 'default',
     timerStorage: enumEnv('OV_SUPERAGENT_TIMER_STORAGE', 'ov', ['ov', 'sqlite']),

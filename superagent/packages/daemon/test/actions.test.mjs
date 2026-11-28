@@ -34,7 +34,7 @@ const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return 
 const mcpPath = fileURLToPath(new URL('../src/actions/mcp.mjs', import.meta.url));
 
 function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, meetingEnabled = false, ovClient = null,
-  ovTools = null, openVikingConfigPath = undefined,
+  ovTools = null, ovSkills = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
   larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null, serverFence = false,
   scheduler = undefined } = {}) {
@@ -50,7 +50,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
       larkMessageAccess, serverFence, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}),
       ...(scheduler !== undefined ? { scheduler } : {}) },
-    store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
+    store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, ovSkills, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
   });
   t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -706,7 +706,8 @@ describe('agent tools', () => {
 
 describe('OpenViking tools', () => {
   const ovNames = (service) => service.tools().map((tool) => tool.name).filter((name) => name.startsWith('openviking_'));
-  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember', 'openviking_write'];
+  const OV_TOOLS = ['openviking_find', 'openviking_search', 'openviking_read', 'openviking_list', 'openviking_add_resource', 'openviking_remember', 'openviking_write',
+    'openviking_skill_list', 'openviking_skill_find', 'openviking_skill_show', 'openviking_skill_add', 'openviking_skill_update', 'openviking_skill_remove', 'openviking_skill_validate'];
   // A scripted tool client: every method stands for one remote OV call.
   const fakeOvTools = (over = {}) => ({
     find: over.find ?? (async () => ({ text: 'No matching context found.', data: { hits: [], total: 0 } })),
@@ -719,7 +720,7 @@ describe('OpenViking tools', () => {
     write: over.write ?? (async ({ uri, mode }) => ({ text: `Wrote ${uri} (${mode}).`, data: { stored: true, uri, mode } })),
   });
 
-  it('offers all seven tools whenever the instance has an OpenViking connection, and none without', (t) => {
+  it('offers every OpenViking tool whenever the instance has an OpenViking connection, and none without', (t) => {
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'] }).service), []);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovTools: fakeOvTools() }).service), OV_TOOLS);
     assert.deepEqual(ovNames(setup(t, { ids: ['weixin'], ovClient: {} }).service), OV_TOOLS);
@@ -740,6 +741,41 @@ describe('OpenViking tools', () => {
     await assert.rejects(() => call('openviking_remember', { decision_id: 'message:om_nowhere', topic: '称呼', preference: '叫他老张' }),
       (error) => error.code === 'unknown_decision' && /^Not remembered/.test(error.message));
     assert.match((await call('openviking_find', { query: 'hello' })).text, /No matching context found/);
+  });
+
+  it('manages OpenViking skills through the Core, naming the workspace for a local package', async (t) => {
+    const seen = [];
+    const ovSkills = {
+      list: async (input) => { seen.push(['list', input]); return { text: 'Skills (0):', data: { skills: [], total: 0 } }; },
+      find: async (input) => { seen.push(['find', input]); return { text: 'No matching skill found.', data: { skills: [], total: 0 } }; },
+      show: async (input) => { seen.push(['show', input]); return { text: 'Skill x:', data: { skill: { name: 'x' } } }; },
+      validate: async (input) => { seen.push(['validate', input]); return { text: 'SKILL.md is valid.', data: { valid: true } }; },
+      add: async (input) => { seen.push(['add', input]); return { text: 'Skill added (1):', data: { changed: true, root_uri: 'viking://~/skills/x' } }; },
+      update: async (input) => { seen.push(['update', input]); return { text: 'Skill updated (1):', data: { changed: true, root_uri: 'viking://~/skills/x' } }; },
+      updateInstalled: async (input) => { seen.push(['updateInstalled', input]); return { text: 'Skill update: 0 updated, 0 skipped.', data: { changed: false } }; },
+      remove: async (input) => { seen.push(['remove', input]); return { text: 'Removed 1 skill(s): x.', data: { changed: true, removed: [] } }; },
+    };
+    const { call, workspace, service } = setup(t, { ids: ['weixin'], ovSkills });
+    let changed = 0;
+    service.onSkillsChanged = () => { changed += 1; };
+    await call('openviking_skill_list', { limit: 10 });
+    await call('openviking_skill_find', { query: 'pdf', limit: 2, min_score: 0.5 });
+    await call('openviking_skill_show', { name: 'pdf-tables', include_source: true, level: 2 });
+    await call('openviking_skill_validate', { data: '---\nname: x\ndescription: y\n---\n' });
+    await call('openviking_skill_add', { data: '---\nname: x\ndescription: y\n---\n' });
+    await call('openviking_skill_add', { directory: 'skills/x', target_uri: 'viking://agent/skills' });
+    await call('openviking_skill_update', { name: 'x', from_source: true });
+    await call('openviking_skill_update', {});
+    await call('openviking_skill_remove', { name: 'x' });
+    assert.deepEqual(seen.map(([method]) => method),
+      ['list', 'find', 'show', 'validate', 'add', 'add', 'update', 'updateInstalled', 'remove']);
+    assert.equal(seen[5][1].workspace, workspace, 'a local skill is read from the instance workspace');
+    assert.equal(seen[5][1].target_uri, 'viking://agent/skills');
+    assert.equal(changed, 4, 'each add, update and remove refreshes the catalog');
+    // A bad name, or a removal that names nothing, fails before any call.
+    await assert.rejects(() => call('openviking_skill_show', { name: '../etc' }), /name has an invalid format/);
+    await assert.rejects(() => call('openviking_skill_remove', {}), (error) => error.code === 'invalid_input');
+    assert.equal(seen.length, 9);
   });
 
   it('rechecks read authority after the remote answer', async (t) => {

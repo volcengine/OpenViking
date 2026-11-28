@@ -260,6 +260,9 @@ export class PersonalAgentDaemon {
         onTimersChanged: () => this.timerConnector?.wake(),
         // A stored or removed preference shows from the person's next line.
         onPreferencesChanged: () => this.harness?.recall?.forgetPreferences(),
+        // An installed, updated or removed skill shows in the catalog from the
+        // next line, not after the catalog's read is stale.
+        onSkillsChanged: () => this.harness?.recall?.forgetSkills(),
         // A model that keeps redoing a settled decision: end its turn so the
         // inputs it holds go on (AgentRuntime.breakLoop).
         onNoProgress: (info) => this.agentRuntime?.breakLoop(info),
@@ -346,8 +349,10 @@ export class PersonalAgentDaemon {
       }) : null;
       this.actions.attachInbox(this.inbox);
       // Preferences are always shown; the per-line search only with ovAutoRecall.
-      // One recall serves the router's lines (Harness) and the workers'
-      // policies, so a changed preference reaches both.
+      // Skills are shown as a catalog once per session (again when the set
+      // changes) and, on a line it may fit, as a few ranked hits. One recall
+      // serves the router's lines (Harness) and the workers' policies, so a
+      // changed preference or skill reaches both.
       this.recall = this.config.openVikingConfigPath
         ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
           store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })

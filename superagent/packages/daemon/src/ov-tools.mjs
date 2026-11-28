@@ -39,18 +39,20 @@ const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '');
 
 // A refusal the model can act on; `code` is what logs and activities record.
-function ovError(code, message) {
+export function ovError(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
-// One model-readable code per failure of the shared connection.
-function toolError(error) {
+// One model-readable code per failure of the shared connection. `notFound`
+// says what a 404 means on the route that asked (a missing skill, not a
+// missing file), since the server's own message is never passed on.
+export function toolError(error, { notFound = 'Nothing is stored at that address', invalid = 'OpenViking rejected the input' } = {}) {
   if (error?.code) return error;
   const status = error?.httpStatus;
-  if (status === 400 || status === 422) return ovError('openviking_invalid_input', 'OpenViking rejected the input');
+  if (status === 400 || status === 422) return ovError('openviking_invalid_input', invalid);
   if (status === 401) return ovError('openviking_unauthorized', 'OpenViking rejected the credentials');
   if (status === 403) return ovError('openviking_forbidden', 'OpenViking refused this action');
-  if (status === 404) return ovError('openviking_not_found', 'Nothing is stored at that address');
+  if (status === 404) return ovError('openviking_not_found', notFound);
   if (status === undefined || status === null || status === 408 || status === 429 || status >= 500) {
     return ovError('openviking_unavailable', error?.timedOut ? 'OpenViking timed out' : 'OpenViking is temporarily unavailable');
   }

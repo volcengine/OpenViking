@@ -40,6 +40,15 @@ const REF_MAX_LENGTH = 4096;
 // toolbox: no \u escapes, no lookaround, no repeat count above 1000. Longer
 // bounds go in maxLength. test/tool-schemas.test.mjs holds this for all tools.
 const VIKING_URI = { pattern: '^viking://[^\\s%\\\\]+$', maxLength: 2009 };
+// OV names a skill package with ASCII letters, digits, '_' and '-' only.
+const SKILL_NAME = {
+  type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$',
+  description: 'The skill name: the package directory under its root, ASCII letters, digits, _ or -.',
+};
+const SKILL_ROOT = {
+  type: 'string', pattern: '^viking://[^\\s%\\\\]+$', maxLength: 2009,
+  description: 'Skill root to act on: viking://~/skills (this instance\'s own, the default) or viking://agent/skills (shared with the whole account).',
+};
 const DECISION = {
   type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH,
   description: 'The input this action decides on: event= (never msg=) of the newest daemon-authenticated input you have seen in that chat/thread, or about that subject for a non-chat event. Copy the value exactly. Freshness fence: the action is blocked if anything newer has arrived there.',
@@ -587,6 +596,110 @@ export const TOOLS = [
       mode: { type: 'string', enum: ['replace', 'append'], default: 'replace', description: 'replace the whole file, or append to its end.' },
     }, ['uri', 'content']),
     annotations: WRITE,
+  },
+  {
+    // OpenViking skills, the same management the OV CLI and plugin offer:
+    // list, find, show, install, update, remove and validate. A skill is a
+    // package of files under a skills root, indexed as a whole; its SKILL.md is
+    // the definition to read before following it. Runtimes started by the
+    // daemon do not load OpenViking's plugin, so these stand in for it.
+    name: 'openviking_skill_list',
+    openviking: true,
+    title: 'List OpenViking skills',
+    description: 'List the installed OpenViking skills with their descriptions and SKILL.md uri: this instance\'s own and, unless target_uri names one root, the account-shared ones too. A skill is stored in OpenViking, not as a local file. Use openviking_skill_find to look one up by what it does, and openviking_read on its SKILL.md before following it.',
+    inputSchema: schema({
+      target_uri: SKILL_ROOT,
+      limit: LIMIT(1000, 200),
+    }),
+    annotations: READ,
+  },
+  {
+    name: 'openviking_skill_find',
+    openviking: true,
+    title: 'Find OpenViking skills',
+    description: 'Find installed OpenViking skills by what they do, ranked by relevance, across this instance\'s own and the account-shared skills. Use it when a task may have a skill for it (a document format, a tool, a workflow) before writing the steps yourself. Read the chosen skill\'s SKILL.md with openviking_read.',
+    inputSchema: schema({
+      query: { type: 'string', minLength: 1, maxLength: 1000, description: 'What the skill should do, in natural language.' },
+      limit: LIMIT(50, 5),
+      min_score: { type: 'number', minimum: 0, maximum: 1, description: 'Optional relevance threshold between 0 and 1; drops weaker hits.' },
+      level: { type: 'array', maxItems: 3, items: { type: 'integer', minimum: 0, maximum: 2 }, description: 'Only hits from these levels: 0 an abstract, 1 an overview, 2 a file inside the package.' },
+      target_uri: SKILL_ROOT,
+    }, ['query']),
+    annotations: READ,
+  },
+  {
+    name: 'openviking_skill_show',
+    openviking: true,
+    title: 'Show one OpenViking skill',
+    description: 'Show one installed skill: its description, root, SKILL.md uri and files, the source it was installed from, and its SKILL.md text. Prefer openviking_read on the SKILL.md uri when you only need the text.',
+    inputSchema: schema({
+      name: SKILL_NAME,
+      target_uri: SKILL_ROOT,
+      include_content: { type: 'boolean', description: 'Include the SKILL.md text (default true).' },
+      include_files: { type: 'boolean', description: 'Include the file list (default true).' },
+      include_source: { type: 'boolean', default: false, description: 'Include where the skill was installed from.' },
+      level: { type: 'integer', minimum: 0, maximum: 2, description: 'Detail level instead of the default: 0 the abstract, 1 the overview, 2 the SKILL.md content.' },
+    }, ['name']),
+    annotations: READ,
+  },
+  {
+    name: 'openviking_skill_add',
+    openviking: true,
+    title: 'Add an OpenViking skill',
+    description: 'Install a skill into OpenViking from exactly one source: `data` (the full SKILL.md text, with YAML frontmatter naming it), `url` (a Git repository or a GitHub tree URL; every skill in it is installed unless `skills` names some), `file_path` (one workspace SKILL.md or .zip) or `directory` (a workspace skill directory, zipped and uploaded). Installing under an existing name replaces its SKILL.md and adds the new files; files the new version no longer has are kept. Ask the user before installing from a source they did not name. Without target_uri it goes into this instance\'s own viking://~/skills; viking://agent/skills shares it with the whole account.',
+    inputSchema: schema({
+      data: { type: 'string', minLength: 1, maxLength: 100_000, description: 'The full SKILL.md text: YAML frontmatter with name and description, then the Markdown body.' },
+      url: { type: 'string', maxLength: 4096, pattern: '^(?:https?://|git@|ssh://|git://)\\S+$', description: 'Git source: repository URL, or a GitHub .../tree/<ref>/<dir> URL. The server clones it itself.' },
+      file_path: { type: 'string', maxLength: 1024, description: 'One workspace file: a SKILL.md or a .zip of a skill package.' },
+      directory: { type: 'string', maxLength: 1024, description: 'One workspace directory holding SKILL.md at its top level; uploaded as a .zip.' },
+      skills: { type: 'array', maxItems: 50, items: SKILL_NAME, description: 'When a Git or local source holds several skills, install only these (directories by name).' },
+      target_uri: SKILL_ROOT,
+      list_only: { type: 'boolean', default: false, description: 'Describe the skills in the source without installing anything.' },
+      wait: { type: 'boolean', default: false, description: 'Wait for processing to finish before answering; false answers once the server accepted it.' },
+    }),
+    annotations: WRITE,
+  },
+  {
+    name: 'openviking_skill_update',
+    openviking: true,
+    title: 'Update an OpenViking skill',
+    description: 'Replace an installed skill\'s package. From its recorded Git source with from_source: true (the usual case for a skill installed from a repository, and the only way to refresh it). Otherwise give the new content: `data` (SKILL.md text, whose name must match), `url`, `file_path` or `directory`. With neither name nor from_source and no content, every installed skill with a Git source is refreshed and the rest reported as skipped. The whole package is replaced, so anything edited inside it before is overwritten.',
+    inputSchema: schema({
+      name: SKILL_NAME,
+      from_source: { type: 'boolean', default: false, description: 'Refetch the Git source recorded when the skill was installed.' },
+      data: { type: 'string', minLength: 1, maxLength: 100_000, description: 'The replacement SKILL.md text; its frontmatter name must be the skill name.' },
+      url: { type: 'string', maxLength: 4096, pattern: '^(?:https?://|git@|ssh://|git://)\\S+$', description: 'A Git source to replace the package from.' },
+      file_path: { type: 'string', maxLength: 1024, description: 'One workspace file: a SKILL.md or a .zip of the new package.' },
+      directory: { type: 'string', maxLength: 1024, description: 'One workspace directory holding SKILL.md at its top level.' },
+      target_uri: SKILL_ROOT,
+      wait: { type: 'boolean', default: false, description: 'Wait for processing to finish before answering.' },
+    }),
+    annotations: WRITE,
+  },
+  {
+    name: 'openviking_skill_remove',
+    openviking: true,
+    title: 'Remove an OpenViking skill',
+    description: 'Remove an installed skill and its whole package. Pass its name, or all: true to remove every skill in that root. Only do this when the user asked for it.',
+    inputSchema: schema({
+      name: SKILL_NAME,
+      all: { type: 'boolean', default: false, description: 'Remove every skill in the root instead of one.' },
+      target_uri: SKILL_ROOT,
+    }),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  },
+  {
+    name: 'openviking_skill_validate',
+    openviking: true,
+    title: 'Validate a SKILL.md',
+    description: 'Check a SKILL.md against the Agent Skills format before installing it: frontmatter name and description, allowed name characters, and the fields OV keeps. Errors mean OpenViking would refuse it; warnings are worth fixing. Pass the text as data, or a workspace file_path or directory to read it from.',
+    inputSchema: schema({
+      data: { type: 'string', minLength: 1, maxLength: 100_000, description: 'The SKILL.md text to validate.' },
+      file_path: { type: 'string', maxLength: 1024, description: 'A workspace SKILL.md to read and validate instead of data.' },
+      directory: { type: 'string', maxLength: 1024, description: 'A workspace skill directory whose SKILL.md to read and validate instead of data.' },
+      strict: { type: 'boolean', default: false, description: 'Report warnings such as a name mismatch as errors.' },
+    }),
+    annotations: READ,
   },
 ];
 

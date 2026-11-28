@@ -50,7 +50,9 @@ describe('conversation policy assemble', () => {
     }
     // Lark's own rules stay with Lark.
     const weixin = assembleConversationPolicy({ connectors: ['weixin'] });
-    assert.doesNotMatch(weixin, /## Lark|ca_|om_|image_key/);
+    // Word boundaries keep Lark ids out without tripping on a field name such
+    // as from_source.
+    assert.doesNotMatch(weixin, /## Lark|\bca_|\bom_|image_key/);
     assert.match(assembleConversationPolicy({ connectors: ['lark'] }), /never pass `--profile`/);
   });
 
@@ -573,6 +575,12 @@ describe('the workers scheduler', () => {
     assert.match(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { runtime: 'traex' }),
       /- A shell command is stopped after 60 minutes: a build, test run or install must finish within that/);
     assert.doesNotMatch(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { runtime: 'codex' }), /stopped after 60 minutes/);
+    // The catalog of installed OpenViking skills, when the recall read one.
+    const withSkills = assembleWorkerPolicy({ ...base, scheduler: 'workers' },
+      { preferences: { owner: '## 信息披露\n- 不透露', skills: '<available-skills>\n  viking://~/skills/\n    - charts — Chart making\n</available-skills>' } });
+    assert.match(withSkills, /## Standing preferences[\s\S]*## OpenViking skills[\s\S]*Before following one, read its SKILL\.md with the OpenViking read tool/);
+    assert.match(withSkills, /<available-skills>\n {2}viking:\/\/~\/skills\/\n {4}- charts — Chart making\n<\/available-skills>/);
+    assert.doesNotMatch(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { preferences: { owner: null, requester: null } }), /## OpenViking skills/);
   });
 });
 

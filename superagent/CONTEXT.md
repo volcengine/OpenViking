@@ -31,8 +31,12 @@ and OpenViking context preserve source instance, event kind/id, and subject.
 _Avoid_: daemon class, orchestrator, coordinator
 
 **OpenViking connection**:
-The instance's own OV user (`ovConfig`), which OpenViking SuperAgent owns for the agent: the daemon mirrors the session journal into OV with each line's speaker in `from=` and no peer, and before a turn shows the owner's and the sender's preferences (`ov-recall.mjs`); the model reads and writes through the Core's `openviking_*` tools. Extraction keeps profile, entities and events; preferences are written only by `openviking_remember`, into the directory the Core keeps for the sender (`ov-person.mjs`). The runtimes' own OpenViking plugins stay switched off (`ov-isolation.mjs`, `docs/openviking-ownership.md`).
+The instance's own OV user (`ovConfig`), which OpenViking SuperAgent owns for the agent: the daemon mirrors the session journal into OV with each line's speaker in `from=` and no peer, and before a turn shows the owner's and the sender's preferences and the skills that fit (`ov-recall.mjs`); the model reads and writes through the Core's `openviking_*` tools. Extraction keeps profile, entities and events; preferences are written only by `openviking_remember`, into the directory the Core keeps for the sender (`ov-person.mjs`). The runtimes' own OpenViking plugins stay switched off (`ov-isolation.mjs`, `docs/openviking-ownership.md`).
 _Avoid_: OV client, memory service
+
+**Skill**:
+An agent skill stored in OpenViking: a package under `viking://~/skills/<name>` (or the account-shared `viking://agent/skills`), defined by its `SKILL.md` and indexed as a whole. `ov-skills.mjs` speaks OV's skill API for the Core (`openviking_skill_*`); the catalog a session is shown comes from the same client, since the runtimes' plugins stay off.
+_Avoid_: local skill directory, prompt snippet
 
 **Meeting plugin**:
 A standalone inbound source for Lark meetings the bot is invited to. Meeting events stay in their own store, and the model reads them with `read_meeting_inbox`.

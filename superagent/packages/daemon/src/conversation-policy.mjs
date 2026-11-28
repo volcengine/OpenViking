@@ -344,10 +344,25 @@ function standingPreferencesSection(preferences) {
   ].join('\n');
 }
 
+// The installed-skill catalog of the instance's OpenViking, as the router's
+// recall shows it after a line: the worker learns what exists before writing
+// steps of its own, and reads SKILL.md only when it picks one.
+function skillsCatalogSection(skills) {
+  const catalog = String(skills ?? '').trim();
+  if (!catalog) return '';
+  return [
+    '## OpenViking skills',
+    '',
+    'Skills are stored in OpenViking, not as local files. Before following one, read its SKILL.md with the OpenViking read tool; openviking_skill_find finds others by what they do.',
+    '',
+    catalog,
+  ].join('\n');
+}
+
 // A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
 // shares the router's rules that hold for its work too, keeps the instance's
 // Role for the domain and the voice of its drafts, and gets the preferences
-// the router sees after each line (worker-executor.mjs).
+// and skills the router sees after each line (worker-executor.mjs).
 export function assembleWorkerPolicy(config = {}, { runtime = null, preferences = null } = {}) {
   return joinSections([
     renderPrompt(config, 'worker.md'),
@@ -356,6 +371,7 @@ export function assembleWorkerPolicy(config = {}, { runtime = null, preferences 
     roleSection(config),
     naturalWritingSection(config),
     standingPreferencesSection(preferences),
+    skillsCatalogSection(preferences?.skills),
     runtimeCompletionSection(runtime),
   ]);
 }

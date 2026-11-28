@@ -15,7 +15,9 @@ import path from 'node:path';
 // `errors` maps one route ("POST /api/v1/search/find") to an HTTP status to
 // answer once... or until deleted; `searchResult` is what find/search return;
 // `listings` maps a directory uri to { entries, has_more } for fs/ls;
-// `sessions` holds what the session routes did. GET /content/read pages by
+// `sessions` holds what the session routes did; `skills` holds installed
+// agent skills by name (uri -> package), what the skill routes read and write,
+// and `skillFind` what /skills/find ranks (derived from `skills` when unset). GET /content/read pages by
 // line for a numeric limit and returns the whole text for limit=-1.
 function split(text, max = 6000) {
   const pieces = [''];
@@ -32,6 +34,7 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
     files: new Map(), uploads: new Map(), tasks: new Map(), requests: [], down: false, slowParse: new Set(slowParse),
     errors: new Map(), searchResult: { memories: [], resources: [], skills: [], total: 0 },
     listings: new Map(), sessions: new Map(),
+    skills: new Map(), skillFind: null, validate: null,
   };
   let next = 0;
   const server = http.createServer(async (request, response) => {
@@ -89,6 +92,113 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
       const offset = Number(url.searchParams.get('offset') ?? 0);
       const limit = Number(url.searchParams.get('node_limit') ?? 1000);
       return reply(200, listing.entries.slice(offset, offset + limit), { has_more: Boolean(listing.has_more) });
+    }
+    if (url.pathname === '/api/v1/skills' || url.pathname.startsWith('/api/v1/skills/')) {
+      const skillsRoot = `viking://user/${user}/skills`;
+      const rootOf = (target) => (target === 'viking://agent/skills' ? 'viking://agent/skills' : skillsRoot);
+      const summary = (skill) => ({
+        type: 'skill', name: skill.name, uri: skill.uri, root_uri: skill.root_uri,
+        skill_md_uri: `${skill.uri}/SKILL.md`, description: skill.description, tags: [], allowed_tools: [],
+      });
+      const meta = (text) => {
+        const front = /^---\n([\s\S]*?)\n---/.exec(String(text ?? ''));
+        const field = (key) => new RegExp(`^${key}:\\s*(.+)$`, 'm').exec(front?.[1] ?? '')?.[1]?.trim().replace(/^["']|["']$/g, '') ?? '';
+        return { name: field('name'), description: field('description') };
+      };
+      const install = (body, name, content) => {
+        const root = rootOf(body?.target_uri);
+        const uri = `${root}/${name}`;
+        const previous = state.skills.get(`${uri}`);
+        state.skills.set(uri, {
+          ...(previous ?? {}), name, uri, root_uri: uri, parent: root, content: content ?? previous?.content ?? '',
+          description: meta(content ?? previous?.content).description,
+          source: body?.source_metadata ?? previous?.source ?? { type: 'api' },
+        });
+        return {
+          name, uri, root_uri: uri, skill_md_uri: `${uri}/SKILL.md`, task_id: `skill-${next += 1}`,
+          status: 'success', action: previous ? 'update' : 'add',
+        };
+      };
+      const uploadName = (body) => {
+        const upload = state.uploads.get(body?.temp_file_id);
+        if (!upload) return null;
+        const stem = path.basename(upload.name, path.extname(upload.name));
+        return { name: stem === 'SKILL' ? meta(upload.data.toString('utf8')).name : stem, upload };
+      };
+      if (route === 'GET /api/v1/skills') {
+        const wanted = url.searchParams.get('target_uri');
+        const root = wanted ? rootOf(wanted) : null;
+        const all = [...state.skills.values()].filter((skill) => !root || skill.parent === root)
+          .slice(0, Number(url.searchParams.get('node_limit') ?? 1000) || 1000);
+        return reply(200, {
+          ...(wanted ? { root_uri: root } : { root_uris: [skillsRoot, 'viking://agent/skills'] }),
+          skills: all.map(summary), total: all.length,
+        });
+      }
+      if (route === 'POST /api/v1/skills/find') {
+        const found = state.skillFind ?? [...state.skills.values()]
+          .filter((skill) => !body.target_uri || skill.parent === rootOf(body.target_uri))
+          .map((skill, index) => ({ ...summary(skill), score: 0.8 - index * 0.1 }));
+        return reply(200, { skills: found.slice(0, Number(body.limit ?? 10)), total: found.length });
+      }
+      if (route === 'POST /api/v1/skills/validate') {
+        if (state.validate) return reply(200, state.validate(body.data));
+        return reply(200, { valid: Boolean(meta(body.data).name), name: meta(body.data).name, description: meta(body.data).description, errors: [], warnings: [] });
+      }
+      if (route === 'POST /api/v1/skills') {
+        if (body.list_only) {
+          return reply(200, { skills: state.sourceSkills ?? [{ name: 'a', description: 'A', path: 'a' }], total: 1 });
+        }
+        if (body.temp_file_id) {
+          const found = uploadName(body);
+          if (!found) return reply(400, 'unknown upload');
+          return reply(200, install(body, found.name, found.upload.data.toString('utf8')));
+        }
+        if (/^(?:https?:\/\/|git@|ssh:\/\/|git:\/\/)/.test(String(body.data))) {
+          const name = String(body.data).split('/').filter(Boolean).pop();
+          return reply(200, install({ ...body, source_metadata: { type: 'git', clone_url: String(body.data), source: String(body.data) } }, name));
+        }
+        const parsed = meta(body.data);
+        return reply(200, install(body, parsed.name, body.data));
+      }
+      const named = url.pathname.match(/^\/api\/v1\/skills\/([^/]+)$/);
+      if (named) {
+        const name = decodeURIComponent(named[1]);
+        const root = rootOf(url.searchParams.get('target_uri'));
+        const uri = `${root}/${name}`;
+        const skill = state.skills.get(uri);
+        if (request.method === 'GET') {
+          if (!skill) return reply(404, 'not found');
+          const level = url.searchParams.get('level');
+          return reply(200, {
+            ...summary(skill),
+            ...(level === '0' ? { abstract: `name: ${name}` } : {}),
+            files: [{ path: 'SKILL.md', size: skill.content.length, is_dir: false }],
+            source: skill.source,
+            ...(url.searchParams.get('include_content') === 'false' ? {} : { content: skill.content }),
+          });
+        }
+        if (request.method === 'PUT') {
+          if (!skill) return reply(404, 'not found');
+          if (body.from_source) {
+            if (skill.source?.type !== 'git') return reply(400, 'Skill has no recorded Git source');
+            return reply(200, install(body, name, skill.content));
+          }
+          if (body.temp_file_id) {
+            const found = uploadName(body);
+            if (!found) return reply(400, 'unknown upload');
+            if (found.name !== name) return reply(400, 'Skill name mismatch');
+            return reply(200, install(body, name, found.upload.data.toString('utf8')));
+          }
+          if (meta(body.data).name !== name) return reply(400, 'Skill name mismatch');
+          return reply(200, install(body, name, body.data));
+        }
+        if (request.method === 'DELETE') {
+          if (!skill) return reply(404, 'not found');
+          state.skills.delete(uri);
+          return reply(200, { name, uri, root_uri: root });
+        }
+      }
     }
     if (route === 'POST /api/v1/resources/temp_upload') {
       const form = await new Response(raw, { headers: { 'content-type': request.headers['content-type'] } }).formData();
