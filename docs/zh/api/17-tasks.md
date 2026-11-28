@@ -319,7 +319,7 @@ ov task cancel uuid-xxx
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | task_type | str | 否 | None | 按任务类型过滤，例如 `session_commit` |
-| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`cancelling`、`completed`、`failed`、`cancelled` |
+| status | str | 否 | None | 按任务状态过滤：`pending`、`running`、`cancelling`、`completed`、`failed`、`cancelled`。使用 `active` 可匹配 `pending`、`running`、`cancelling`。 |
 | resource_id | str | 否 | None | 按资源 ID 过滤，例如会话 ID |
 | include_internal | bool | 否 | false | 是否包含 Connector 导入和 Compile 产生的内部任务 |
 | limit | int | 否 | 50 | 每次最多返回的任务条数，范围 1～200 |

@@ -110,7 +110,10 @@ async def list_tasks(
     task_type: Optional[str] = Query(None, description="Filter by task type (e.g. session_commit)"),
     status: Optional[str] = Query(
         None,
-        description="Filter by status (pending/running/cancelling/completed/failed/cancelled)",
+        description=(
+            "Filter by status (pending/running/cancelling/completed/failed/cancelled), "
+            "or use active to match pending, running, and cancelling"
+        ),
     ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
     include_internal: bool = Query(

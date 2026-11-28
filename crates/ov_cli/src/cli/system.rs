@@ -23,6 +23,7 @@ pub(crate) enum TaskCommands {
         #[arg(long, value_name = "type")]
         task_type: Option<String>,
         /// Filter by status (pending, running, cancelling, completed, failed, cancelled)
+        /// or use active to match pending, running, and cancelling
         #[arg(long, value_name = "status")]
         status: Option<String>,
     },

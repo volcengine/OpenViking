@@ -10,6 +10,7 @@ import json
 import math
 from typing import Any
 
+from openviking.service.task_domain import ACTIVE_TASK_STATUSES
 from openviking_cli.exceptions import InvalidArgumentError
 
 
@@ -65,7 +66,10 @@ def matches(
 ) -> bool:
     if task_type and task.get("task_type") != task_type:
         return False
-    if status and task.get("status") != status:
+    if status == "active":
+        if task.get("status") not in ACTIVE_TASK_STATUSES:
+            return False
+    elif status and task.get("status") != status:
         return False
     if resource_id and task.get("resource_id") != resource_id:
         return False

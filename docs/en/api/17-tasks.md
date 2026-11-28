@@ -322,7 +322,7 @@ List background tasks visible to the current caller, supporting filtering by typ
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | task_type | str | No | None | Filter by task type, for example `session_commit` |
-| status | str | No | None | Filter by task status: `pending`, `running`, `cancelling`, `completed`, `failed`, `cancelled` |
+| status | str | No | None | Filter by task status: `pending`, `running`, `cancelling`, `completed`, `failed`, `cancelled`. Use `active` to match `pending`, `running`, and `cancelling`. |
 | resource_id | str | No | None | Filter by task resource ID, for example a session ID |
 | include_internal | bool | No | false | Include internal tasks for Connector imports and Compile directory indexing |
 | limit | int | No | 50 | Maximum records per response, 1–200 |
