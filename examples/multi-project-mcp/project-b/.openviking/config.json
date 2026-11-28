@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "peer": {"id": "project-b"},
+  "recall": {"enabled": false, "peer_scope": "actor"},
+  "capture": {"enabled": false}
+}
