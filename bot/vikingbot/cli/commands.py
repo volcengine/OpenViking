@@ -545,7 +545,7 @@ def gateway(
     bus = MessageBus()
     path = Path(config_path).expanduser() if config_path is not None else None
     config = ensure_config(path)
-    from vikingbot.utils.startup import report_startup
+    from vikingbot.utils.startup import lifeline_fd, report_startup, watch_lifeline
 
     startup_timeout = getattr(getattr(config, "sandbox", None), "backends", None)
     report_startup(
@@ -594,6 +594,7 @@ def gateway(
         agent_loop=agent_loop,
     )
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
+    stop_requested = False  # set by SIGTERM; the cancellation it causes is a normal stop
 
     async def run():
         import uvicorn
@@ -613,10 +614,25 @@ def gateway(
         manager = getattr(agent_loop, "sandbox_manager", None)
         loop = asyncio.get_running_loop()
         current = asyncio.current_task()
-        previous_sigterm = signal.signal(
-            signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(current.cancel)
-        )
+
+        def request_stop(*_):
+            nonlocal stop_requested
+            if stop_requested:  # a second SIGTERM must not interrupt sandbox cleanup
+                return
+            stop_requested = True
+            loop.call_soon_threadsafe(current.cancel)
+
+        previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
         tasks = []
+        lifeline = lifeline_fd()
+        if lifeline is not None:
+
+            def stop_orphaned_gateway():
+                logger.warning("OpenViking server exited; stopping gateway")
+                # A real SIGTERM, so uvicorn shuts down gracefully and the sandbox is released.
+                signal.raise_signal(signal.SIGTERM)
+
+            watch_lifeline(lifeline, stop_orphaned_gateway)
 
         async def report_ready(server_task):
             while not getattr(server, "started", False):
@@ -645,6 +661,8 @@ def gateway(
             else:
                 await server_task
         finally:
+            if lifeline is not None:
+                loop.remove_reader(lifeline)  # a dying server must not interrupt this cleanup
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -669,6 +687,9 @@ def gateway(
     try:
         asyncio.run(run())
     except (Exception, asyncio.CancelledError) as exc:
+        if stop_requested and isinstance(exc, asyncio.CancelledError):
+            console.print("Gateway stopped.")
+            return
         report_startup("failed", error=str(exc) or "Gateway startup cancelled")
         console.print(f"[red]Gateway failed:[/red] {exc}")
         raise typer.Exit(1) from exc
