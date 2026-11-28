@@ -189,3 +189,74 @@ async def test_generation_failure_uses_a_placeholder(response):
     assert result.abstract == "[Directory overview is not generated]"
     assert result.abstract in result.overview
     assert "[a.md]" in result.overview
+
+
+@pytest.mark.asyncio
+async def test_abstract_that_opens_with_a_numbered_marker_keeps_its_text():
+    # The generation prompt opens the overview with "1. **<name>**". The "." of that
+    # marker is a list marker, not a sentence end: a long first sentence must not be
+    # truncated down to the marker itself.
+    abstract = (
+        "1. **Alpha** a directory of quarterly reports and the modelling spreadsheets "
+        "that feed them, written without an inner sentence break"
+    )
+    result = await generate_directory_semantics(
+        "viking://resources/reports",
+        {"q3.pdf": {"kind": "file", "summary": "Q3 results."}},
+        previous=None,
+        total_entries=1,
+        config=SemanticConfig(abstract_max_chars=40),
+        language="en",
+        complete=AsyncMock(return_value=abstract),
+        max_concurrent_llm=2,
+    )
+
+    assert result.abstract != "1."
+    assert result.abstract.startswith("1. **Alpha** a directory")
+    assert len(result.abstract) > len("1. **Alpha**")
+
+
+def test_abstract_truncation_still_prefers_a_sentence_end():
+    from openviking.storage.queuefs.semantic_ops.directory_generation import (
+        _truncate_generated_text,
+    )
+
+    text = "First sentence ends here. Second sentence would be cut."
+    assert _truncate_generated_text(text, 30) == "First sentence ends here."
+
+
+def test_abstract_truncation_does_not_treat_a_decimal_as_a_list_marker():
+    from openviking.storage.queuefs.semantic_ops.directory_generation import (
+        _truncate_generated_text,
+    )
+
+    # "2.5" is a number inside the sentence, so the period after "2" is neither a
+    # sentence end nor a numbered marker; the text is kept whole as one sentence.
+    text = "Raised 2.5 million in total funding for the quarter without a break anywhere."
+    assert _truncate_generated_text(text, 40) == text
+
+    # A real sentence end still wins when it falls inside the limit.
+    mixed = "Raised 2.5 million. The rest of this sentence is cut off by the limit."
+    assert _truncate_generated_text(mixed, 40) == "Raised 2.5 million."
+
+
+@pytest.mark.parametrize("terminal", ["?", "!"])
+def test_abstract_truncation_keeps_a_question_or_exclamation_after_a_number(terminal):
+    from openviking.storage.queuefs.semantic_ops.directory_generation import (
+        _truncate_generated_text,
+    )
+
+    text = (
+        f"The release shipped in 2026{terminal} It also shipped a lot of other things "
+        "that go well past the limit."
+    )
+    assert _truncate_generated_text(text, 40) == f"The release shipped in 2026{terminal}"
+
+
+def test_abstract_truncation_treats_a_sentence_end_on_a_year_as_an_end():
+    from openviking.storage.queuefs.semantic_ops.directory_generation import (
+        _truncate_generated_text,
+    )
+
+    text = "We grew in 2026. Then the rest of this sentence continues far beyond the limit."
+    assert _truncate_generated_text(text, 40) == "We grew in 2026."
