@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from openviking.models.embedder.attempt import observe_embedding
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
@@ -189,6 +190,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
             return self.document_param
         return None
 
+    @observe_embedding("vikingdb")
     @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         input_type = self._resolve_input_type(is_query)
@@ -218,10 +220,13 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
             model_name=self.model_name,
             provider="volcengine",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result
 
+    @observe_embedding("vikingdb")
     @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
@@ -248,6 +253,8 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
             model_name=self.model_name,
             provider="volcengine",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result
@@ -279,6 +286,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
             "version": model_version,
         }
 
+    @observe_embedding("vikingdb")
     @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         def _call() -> EmbedResult:
@@ -304,10 +312,13 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
             model_name=self.model_name,
             provider="volcengine",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result
 
+    @observe_embedding("vikingdb")
     @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
@@ -334,6 +345,8 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
             model_name=self.model_name,
             provider="volcengine",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result
@@ -379,6 +392,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             return self.document_param
         return None
 
+    @observe_embedding("vikingdb")
     @model_error_boundary
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         input_type = self._resolve_input_type(is_query)
@@ -416,10 +430,13 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             model_name=self.model_name,
             provider="volcengine",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result
 
+    @observe_embedding("vikingdb")
     @model_error_boundary
     async def embed_async(self, text: str, is_query: bool = False) -> EmbedResult:
         async def _call() -> EmbedResult:
@@ -453,6 +470,8 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             model_name=self.model_name,
             provider="volcengine",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result

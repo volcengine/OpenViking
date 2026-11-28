@@ -196,26 +196,53 @@ class EmbeddingEventDataSource(EventMetricDataSource):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
         cost_bearer: str | None = None,
+        attempt_id: str | None = None,
+        observation_scope: str = "legacy_usage",
+        outcome: str | None = None,
+        usage_quality: str = "actual",
+        usage_provenance: str = "provider_reported",
     ) -> None:
         """Emit one embedding provider call with tokens, latency, and optional account context."""
+        outcome = outcome or ("success" if error_code == "OK" else "failed")
         EventMetricDataSource._emit(
             "embedding.call",
             {
                 "provider": str(provider),
                 "model_name": str(model_name),
                 "duration_seconds": float(duration_seconds),
-                "prompt_tokens": int(prompt_tokens),
-                "completion_tokens": int(completion_tokens),
+                "prompt_tokens": None if prompt_tokens is None else int(prompt_tokens),
+                "completion_tokens": None if completion_tokens is None else int(completion_tokens),
                 "error_code": str(error_code or "unknown"),
                 "account_id": None if account_id is None else str(account_id),
                 "source_type": source_type,
                 "cost_bearer": cost_bearer,
+                "attempt_id": attempt_id,
+                "event_id": attempt_id,
+                "observation_scope": observation_scope,
+                "outcome": outcome,
+                "status": outcome,
+                "usage_quality": usage_quality if prompt_tokens is not None else "unknown",
+                "usage_provenance": usage_provenance,
+                "usage_known_fields": [
+                    name
+                    for name, value in (
+                        ("prompt_tokens", prompt_tokens),
+                        ("completion_tokens", completion_tokens),
+                    )
+                    if value is not None
+                ],
+                "usage_complete": (
+                    prompt_tokens is not None
+                    and completion_tokens is not None
+                    and usage_quality == "actual"
+                    and outcome in {"success", "refused"}
+                ),
             },
         )
 

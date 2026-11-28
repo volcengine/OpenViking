@@ -75,6 +75,16 @@ If your deployment protects `/metrics` at the gateway layer, configure the scrap
 - For human-readable component snapshots, prefer `/api/v1/observer/*`.
 - `/metrics` also includes VikingBot feedback observability metrics derived from scrape-time aggregation of persisted session data; see the Metrics concept documentation for the feedback metric families and examples.
 
+## Embedding usage observations
+
+Concrete embedding entrypoints publish one content-free `embedding.call` observation per existing operation through the shared event bus. It includes `attempt_id`, `outcome`, `observation_scope`, nullable token counts, `usage_known_fields`, `usage_complete`, `usage_quality`, and `usage_provenance`. Retries settle separately; cancellation while waiting for document admission does not represent a provider attempt.
+
+`embedding_operation` describes the adapter operation, including local inference; it is not a physical HTTP request count. Ark uses `provider_attempt` for each SDK invocation, so multimodal hybrid's two requests remain separate. An SDK invocation may fail before sending data, and these events are not a complete billing ledger. Existing query admission, retries, and model outputs are unchanged.
+
+Missing usage stays `null`; explicit zero stays zero. Embedding totals are not converted into generated output tokens when input usage is missing. Character estimates remain available as `usage_quality="estimated"` with `usage_provenance="character_estimate"`; provider-reported input takes precedence where supported. Estimates are excluded from `openviking_embedding_tokens_*` and ingestion token counters, which now contain reported known values. `openviking_embedding_usage_reports_total{quality="actual|estimated|unknown"}` exposes the observation quality. Total counters require both input and output to be known. Historical pull-model counters retain known and estimated subtotals for compatibility and must not be treated as complete bills or added to event counters.
+
+No prompts, response bodies, keys, raw errors, or source document content are added to observations. This change does not introduce cross-request batching or allocate one operation's usage across different subjects.
+
 ## Related Documentation
 
 - [Metrics](../concepts/12-metrics.md) - Metric families, labels, feedback metrics, and PromQL examples

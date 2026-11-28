@@ -56,7 +56,9 @@ class EmbeddingCollector(EventMetricCollector):
     TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "tokens", unit="total")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_ingestion_tokens_total
     # e.g.: openviking_embedding_ingestion_tokens_total
-    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "ingestion_tokens", unit="total")
+    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "ingestion_tokens", unit="total"
+    )
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_requests_total
     # e.g.: openviking_embedding_requests_total
     REQUESTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "requests", unit="total")
@@ -66,6 +68,10 @@ class EmbeddingCollector(EventMetricCollector):
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_errors_total
     # e.g.: openviking_embedding_errors_total
     ERRORS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "errors", unit="total")
+
+    USAGE_REPORTS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "usage_reports", unit="total"
+    )
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -92,13 +98,15 @@ class EmbeddingCollector(EventMetricCollector):
                 provider=str(payload["provider"]),
                 model_name=str(payload["model_name"]),
                 duration_seconds=float(payload["duration_seconds"]),
-                prompt_tokens=int(payload["prompt_tokens"]),
-                completion_tokens=int(payload["completion_tokens"]),
+                prompt_tokens=payload.get("prompt_tokens"),
+                completion_tokens=payload.get("completion_tokens"),
                 error_code=str(payload.get("error_code") or "OK"),
                 account_id=(
                     None if payload.get("account_id") is None else str(payload.get("account_id"))
                 ),
                 source_type=payload.get("source_type"),
+                usage_quality=payload.get("usage_quality", "actual"),
+                observation_scope=payload.get("observation_scope", "legacy_usage"),
             )
             return
         if event_name == "embedding.success":
@@ -126,11 +134,13 @@ class EmbeddingCollector(EventMetricCollector):
         provider: str,
         model_name: str,
         duration_seconds: float,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
         error_code: str = "OK",
         account_id: str | None = None,
         source_type: str | None = None,
+        usage_quality: str = "actual",
+        observation_scope: str = "legacy_usage",
     ) -> None:
         """Record one embedding provider call as calls/tokens counters and a latency sample."""
         labels = {
@@ -151,33 +161,46 @@ class EmbeddingCollector(EventMetricCollector):
             label_names=("provider", "model_name", "error_code"),
             account_id=account_id,
         )
+        quality = (
+            usage_quality if usage_quality in {"actual", "estimated", "unknown"} else "unknown"
+        )
+        if prompt_tokens is None:
+            quality = "unknown"
+        registry.inc_counter(
+            self.USAGE_REPORTS_TOTAL,
+            labels={"provider": str(provider), "model_name": str(model_name), "quality": quality},
+            label_names=("provider", "model_name", "quality"),
+            account_id=account_id,
+        )
+        # Estimates remain in the event for diagnostics, not reported-token counters.
+        # Interrupted operations may still have provider-reported usage; legacy error
+        # events without an operation owner retain their old exclusion semantics.
+        if quality != "actual" or (
+            labels["error_code"] != "OK"
+            and observation_scope not in {"embedding_operation", "provider_attempt"}
+        ):
+            return
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
-        if labels["error_code"] == "OK" and int(prompt_tokens) > 0:
-            registry.inc_counter(
-                self.TOKENS_INPUT_TOTAL,
-                labels=token_labels,
-                label_names=("provider", "model_name"),
-                amount=int(prompt_tokens),
-                account_id=account_id,
-            )
-        if labels["error_code"] == "OK" and int(completion_tokens) > 0:
-            registry.inc_counter(
-                self.TOKENS_OUTPUT_TOTAL,
-                labels=token_labels,
-                label_names=("provider", "model_name"),
-                amount=int(completion_tokens),
-                account_id=account_id,
-            )
-        total_tokens = int(prompt_tokens) + int(completion_tokens)
-        if labels["error_code"] == "OK" and total_tokens > 0:
-            registry.inc_counter(
-                self.TOKENS_TOTAL,
-                labels=token_labels,
-                label_names=("provider", "model_name"),
-                amount=total_tokens,
-                account_id=account_id,
-            )
-        if labels["error_code"] == "OK" and total_tokens > 0 and source_type:
+        values = {
+            self.TOKENS_INPUT_TOTAL: prompt_tokens,
+            self.TOKENS_OUTPUT_TOTAL: completion_tokens,
+            self.TOKENS_TOTAL: (
+                prompt_tokens + completion_tokens
+                if prompt_tokens is not None and completion_tokens is not None
+                else None
+            ),
+        }
+        for name, value in values.items():
+            if value is not None and value > 0:
+                registry.inc_counter(
+                    name,
+                    labels=token_labels,
+                    label_names=("provider", "model_name"),
+                    amount=value,
+                    account_id=account_id,
+                )
+        total_tokens = values[self.TOKENS_TOTAL]
+        if total_tokens is not None and total_tokens > 0 and source_type:
             registry.inc_counter(
                 self.INGESTION_TOKENS_TOTAL,
                 labels={"source_type": str(source_type)},

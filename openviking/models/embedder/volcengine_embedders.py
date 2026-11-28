@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 import volcenginesdkarkruntime
 
-from openviking.metrics.datasources import EmbeddingEventDataSource
+from openviking.models.embedder.attempt import embedding_usage, observe_embedding, observe_request
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbeddingInput,
@@ -22,10 +22,8 @@ from openviking.models.network import (
     create_optional_async_httpx_client,
     create_optional_sync_httpx_client,
 )
-from openviking.observability.context import get_root_observability_context
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking.utils.model_retry import extract_metric_error_code
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -35,35 +33,11 @@ VOLCENGINE_CLIENT_REQUEST_ID = "ToB-direct,OpenViking_Service,openviking-service
 T = TypeVar("T")
 
 
-def _record_failed_embedding_call(embedder, *, duration_seconds: float, error: Exception) -> None:
-    """Emit a failed Ark request attempt with the same model labels as a success."""
-    try:
-        root_context = get_root_observability_context()
-        EmbeddingEventDataSource.record_call(
-            provider="volcengine",
-            model_name=str(embedder.model_name),
-            duration_seconds=max(float(duration_seconds), 0.0),
-            prompt_tokens=0,
-            completion_tokens=0,
-            error_code=extract_metric_error_code(error),
-            cost_bearer=getattr(embedder, "cost_bearer", None),
-            account_id=root_context.account_id if root_context is not None else None,
-        )
-    except Exception:
-        # Metrics must never change the provider failure behavior.
-        return
-
-
 def _measure_embedding_call(embedder, call: Callable[[], T]) -> tuple[T, float]:
-    """Measure one Ark SDK request and emit its failed-attempt metric when needed."""
+    """Measure each Ark invocation, including both requests in multimodal hybrid."""
     started = time.perf_counter()
-    try:
+    with observe_request(embedder):
         return call(), time.perf_counter() - started
-    except Exception as error:
-        _record_failed_embedding_call(
-            embedder, duration_seconds=time.perf_counter() - started, error=error
-        )
-        raise
 
 
 async def _measure_embedding_call_async(
@@ -71,13 +45,8 @@ async def _measure_embedding_call_async(
 ) -> tuple[T, float]:
     """Async equivalent of :func:`_measure_embedding_call`."""
     started = time.perf_counter()
-    try:
+    with observe_request(embedder):
         return await call(), time.perf_counter() - started
-    except Exception as error:
-        _record_failed_embedding_call(
-            embedder, duration_seconds=time.perf_counter() - started, error=error
-        )
-        raise
 
 
 def _create_sync_ark(kwargs: Dict[str, Any]):
@@ -230,20 +199,13 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         if not usage:
             return
 
-        def _usage_value(key: str, default: int = 0) -> int:
-            if isinstance(usage, dict):
-                return int(usage.get(key, default) or default)
-            return int(getattr(usage, key, default) or default)
-
-        prompt_tokens = _usage_value("prompt_tokens", 0)
-        total_tokens = _usage_value("total_tokens", prompt_tokens)
-        completion_tokens = max(total_tokens - prompt_tokens, 0)
+        prompt_tokens, completion_tokens = embedding_usage(usage)
 
         # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
-            prompt_tokens,
-            completion_tokens,
+            prompt_tokens or 0,
+            completion_tokens or 0,
         )
 
         # Update token tracker
@@ -255,6 +217,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             duration_seconds=duration_seconds,
         )
 
+    @observe_embedding("volcengine", owns_requests=True)
     @model_error_boundary
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text or multimodal content
@@ -313,6 +276,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
     def _get_async_client(self):
         return self._async_client_cache.get(lambda: _create_async_ark(self._ark_kwargs))
 
+    @observe_embedding("volcengine", owns_requests=True)
     @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
@@ -408,20 +372,13 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         if not usage:
             return
 
-        def _usage_value(key: str, default: int = 0) -> int:
-            if isinstance(usage, dict):
-                return int(usage.get(key, default) or default)
-            return int(getattr(usage, key, default) or default)
-
-        prompt_tokens = _usage_value("prompt_tokens", 0)
-        total_tokens = _usage_value("total_tokens", prompt_tokens)
-        completion_tokens = max(total_tokens - prompt_tokens, 0)
+        prompt_tokens, completion_tokens = embedding_usage(usage)
 
         # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
-            prompt_tokens,
-            completion_tokens,
+            prompt_tokens or 0,
+            completion_tokens or 0,
         )
 
         # Update token tracker
@@ -433,6 +390,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             duration_seconds=duration_seconds,
         )
 
+    @observe_embedding("volcengine", owns_requests=True)
     @model_error_boundary
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text or multimodal content
@@ -477,6 +435,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
     def _get_async_client(self):
         return self._async_client_cache.get(lambda: _create_async_ark(self._ark_kwargs))
 
+    @observe_embedding("volcengine", owns_requests=True)
     @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()
@@ -575,20 +534,13 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         if not usage:
             return
 
-        def _usage_value(key: str, default: int = 0) -> int:
-            if isinstance(usage, dict):
-                return int(usage.get(key, default) or default)
-            return int(getattr(usage, key, default) or default)
-
-        prompt_tokens = _usage_value("prompt_tokens", 0)
-        total_tokens = _usage_value("total_tokens", prompt_tokens)
-        completion_tokens = max(total_tokens - prompt_tokens, 0)
+        prompt_tokens, completion_tokens = embedding_usage(usage)
 
         # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
-            prompt_tokens,
-            completion_tokens,
+            prompt_tokens or 0,
+            completion_tokens or 0,
         )
 
         # Update token tracker
@@ -619,6 +571,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             )
         return requests
 
+    @observe_embedding("volcengine", owns_requests=True)
     @model_error_boundary
     def embed(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text or multimodal content
@@ -666,6 +619,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
     def _get_async_client(self):
         return self._async_client_cache.get(lambda: _create_async_ark(self._ark_kwargs))
 
+    @observe_embedding("volcengine", owns_requests=True)
     @model_error_boundary
     async def embed_async(self, content: "EmbeddingInput", is_query: bool = False) -> EmbedResult:
         client = self._get_async_client()

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, cast
 import httpx
 import openai
 
+from openviking.models.embedder.attempt import embedding_usage, observe_embedding
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbeddingInput,
@@ -233,20 +234,13 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         if not usage:
             return
 
-        def _usage_value(key: str, default: int = 0) -> int:
-            if isinstance(usage, dict):
-                return int(usage.get(key, default) or default)
-            return int(getattr(usage, key, default) or default)
-
-        prompt_tokens = _usage_value("prompt_tokens", 0)
-        total_tokens = _usage_value("total_tokens", prompt_tokens)
-        completion_tokens = max(total_tokens - prompt_tokens, 0)
+        prompt_tokens, completion_tokens = embedding_usage(usage)
 
         # Update telemetry
         get_current_telemetry().add_token_usage_by_source(
             "embedding",
-            prompt_tokens,
-            completion_tokens,
+            prompt_tokens or 0,
+            completion_tokens or 0,
         )
 
         # Update token tracker
@@ -322,7 +316,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def supports_multimodal(self) -> bool:
         return self._supports_multimodal
 
-    def _prepare_embedding_input(self, text: EmbeddingInput | List[str]) -> EmbeddingInput | List[str]:
+    def _prepare_embedding_input(
+        self, text: EmbeddingInput | List[str]
+    ) -> EmbeddingInput | List[str]:
         if isinstance(text, list) and all(isinstance(item, str) for item in text):
             if self.max_input_tokens is None:
                 return text
@@ -368,6 +364,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         return self._async_client_cache.get(_build_async_client)
 
+    @observe_embedding("openai")
     @model_error_boundary
     def embed(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text, text batches, or multimodal content
@@ -407,8 +404,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
+    @observe_embedding("openai")
     @model_error_boundary
-    async def embed_async(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, text: EmbeddingInput | List[str], is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
         embedding_input = self._prepare_embedding_input(text)
 
@@ -461,6 +461,7 @@ class OpenAISparseEmbedder(SparseEmbedderBase):
             "Consider using VolcengineSparseEmbedder or other providers."
         )
 
+    @observe_embedding("openai")
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         raise NotImplementedError()
 
@@ -481,6 +482,7 @@ class OpenAIHybridEmbedder(HybridEmbedderBase):
             "Consider using VolcengineHybridEmbedder or other providers."
         )
 
+    @observe_embedding("openai")
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         raise NotImplementedError()
 

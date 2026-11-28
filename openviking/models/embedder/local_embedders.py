@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from openviking.models.embedder.attempt import observe_embedding
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.storage.errors import EmbeddingConfigurationError
 from openviking_cli.utils import get_logger
@@ -198,6 +199,7 @@ class LocalDenseEmbedder(DenseEmbedderBase):
             payload = self._llama.create_embedding(formatted)
             return EmbedResult(dense_vector=self._extract_embedding(payload))
 
+    @observe_embedding("local")
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         formatted = self._format_text(text, is_query=is_query)
 
@@ -215,6 +217,8 @@ class LocalDenseEmbedder(DenseEmbedderBase):
             model_name=self.model_name,
             provider="local",
             prompt_tokens=estimated_tokens,
+            usage_quality="estimated",
+            usage_provenance="character_estimate",
             completion_tokens=0,
         )
         return result
