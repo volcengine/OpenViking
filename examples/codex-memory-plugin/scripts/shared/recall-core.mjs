@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { compressRecallContext } from "./recall-compress-core.mjs";
+import { compressRecallContext, skipsCompressionForShortPrompt } from "./recall-compress-core.mjs";
 
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
 const TEMPORAL_QUERY_RE = /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天/i;
@@ -149,8 +149,14 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
   const excludeUris = Array.isArray(options.excludeUris) ? options.excludeUris.slice(0, 200) : [];
   if (excludeUris.length) body.exclude_uris = excludeUris;
 
-  if (rewriteMode === "server") body.rewrite = true;
-  else if (rewriteMode === "auto" && !options.localCompressorAvailable) body.rewrite = "auto";
+  // A short prompt is the turn where the digest earns least and costs most, so
+  // it also takes the server rewrite out of the request: no stage of the
+  // pipeline should spend a model round trip on "yes" or "proceed".
+  const shortPrompt = skipsCompressionForShortPrompt(cfg, options.query);
+  if (!shortPrompt) {
+    if (rewriteMode === "server") body.rewrite = true;
+    else if (rewriteMode === "auto" && !options.localCompressorAvailable) body.rewrite = "auto";
+  }
   const rewriteMaxBullets = Math.max(
     1,
     Math.floor(Number(cfg.recallCompressMaxBullets || DEFAULT_REWRITE_MAX_BULLETS)),
@@ -502,7 +508,7 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
   const actorPeerId = options.actorPeerId || "";
   const log = options.log || (() => {});
 
-  const body = buildContextSearchBody(cfg, options);
+  const body = buildContextSearchBody(cfg, { ...options, query });
   body.query = query;
   const res = await fetchJSON("/api/v1/search/search", {
     method: "POST",

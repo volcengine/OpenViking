@@ -107,6 +107,31 @@ test("context requests omit defaults owned by the server", () => {
   assert.equal(body.dedup_turns, 5);
 });
 
+test("a short prompt drops the server rewrite from the context request", () => {
+  const short = buildContextSearchBody(
+    { recallRewrite: "server", recallCompressMinPromptChars: 20 },
+    { query: "yes" },
+  );
+  const long = buildContextSearchBody(
+    { recallRewrite: "server", recallCompressMinPromptChars: 20 },
+    { query: "where did we land on the recall dedup ledger design" },
+  );
+  const unset = buildContextSearchBody({ recallRewrite: "server" }, { query: "yes" });
+
+  assert.equal(short.rewrite, undefined);
+  assert.equal(long.rewrite, true);
+  assert.equal(unset.rewrite, true);
+});
+
+test("a short prompt also drops the auto rewrite on a server without a local compressor", () => {
+  const short = buildContextSearchBody(
+    { recallRewrite: "auto", recallCompressMinPromptChars: 120 },
+    { query: "proceed", localCompressorAvailable: false },
+  );
+
+  assert.equal(short.rewrite, undefined);
+});
+
 test("coding-agent fallback recall explicitly uses the 0.35 threshold", () => {
   const body = buildRecallEndpointBody({});
 
@@ -533,6 +558,31 @@ for (const source of ["context", "legacy"]) {
     assert.equal(paths.length, source === "context" ? 1 : 2);
   });
 }
+
+test("a short prompt injects the raw block and asks the server for no rewrite", async () => {
+  const uri = "viking://user/default/memories/editor.md";
+  const bodies = [];
+  let compressorCalls = 0;
+  const recalled = await buildRecallBlockDetailed(async (path, init) => {
+    assert.equal(path, "/api/v1/search/search");
+    bodies.push(JSON.parse(init.body));
+    return { ok: true, result: {
+      rendered: `RAW_CONTEXT ${uri}`,
+      entries: [{ uri, text: "raw fact" }],
+      stats: { rewrite: "off" },
+    } };
+  }, { recallRewrite: "client", recallCompressMinInputChars: 0, recallCompressMinPromptChars: 120 }, "yes", {
+    legacyCachePath: await tempPath("context-face.json"),
+    digestCachePath: await tempPath("digest.json"),
+    localCompressorAvailable: true,
+    runCompressor: async () => { compressorCalls += 1; return `- unused digest 来源：${uri}`; },
+  });
+
+  assert.equal(compressorCalls, 0);
+  assert.equal(bodies[0].query, "yes");
+  assert.match(recalled.block, /RAW_CONTEXT/);
+  assert.doesNotMatch(recalled.block, /unused digest/);
+});
 
 test("legacy recall feeds normalized entries to the shared local compressor", async () => {
   const uri = "viking://user/default/memories/editor.md";

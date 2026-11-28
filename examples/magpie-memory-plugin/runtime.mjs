@@ -66,7 +66,10 @@ export async function recallRequest(body, ctx, env = process.env, resolvedConfig
         if (isRecallEnabled(cfg) && (users.length === 1 || query.length >= cfg.minQueryLength)) {
           try {
             const shouldSearch = query.length >= cfg.minQueryLength;
-            const recallBody = buildContextSearchBody(cfg, { excludeUris: cfg.recallExcludeUris });
+            // Pass the query in: the short-prompt skip is decided inside the
+            // body builder, so assigning `query` afterwards left the rewrite
+            // flag computed against an empty prompt.
+            const recallBody = buildContextSearchBody(cfg, { excludeUris: cfg.recallExcludeUris, query });
             recallBody.query = query.slice(0, 16000);
             // Match Magpie's per-hook option validation; the host exposes no remaining deadline.
             const configuredBudget = ctx.options?.gatewayTimeoutMs;
