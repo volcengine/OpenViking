@@ -53,8 +53,6 @@ class ExecTool(Tool):
 
             if working_dir:
                 command = f"cd {shlex.quote(working_dir)} && {command}"
-            elif command.strip() == "pwd":
-                return sandbox.sandbox_cwd
 
             return await sandbox.execute(command, timeout=self.timeout)
         except Exception as e:
