@@ -34,6 +34,7 @@ class DirectoryGeneration:
     abstract: str | None
     overview: str | None
     preset_abstract: bool = False
+    sampled_entries: int = 0
 
 
 def _truncate_generated_text(text: str, max_chars: int) -> str:
@@ -162,6 +163,7 @@ async def generate_directory_semantics(
     preset_abstract: str | None = None,
 ) -> DirectoryGeneration:
     """Build L0 and L1 from the same directory summary."""
+    sampled_entries = len(entries)
     manual = previous is not None and previous.is_manual_abstract
     # A template-backed directory has a fixed purpose. Preserve any existing
     # L0, or seed the template text on the first refresh of a populated folder.
@@ -179,7 +181,7 @@ async def generate_directory_semantics(
                 {
                     "dir_name": dir_uri.rstrip("/").rsplit("/", 1)[-1],
                     "material": "\n".join(material),
-                    "sampled_entries": len(entries),
+                    "sampled_entries": sampled_entries,
                     "total_entries": total_entries,
                     "output_language": language,
                 },
@@ -243,4 +245,9 @@ async def generate_directory_semantics(
         total_entries=total_entries,
         navigation_renderer=navigation_renderer,
     )
-    return DirectoryGeneration(abstract=abstract, overview=overview, preset_abstract=seeded)
+    return DirectoryGeneration(
+        abstract=abstract,
+        overview=overview,
+        preset_abstract=seeded,
+        sampled_entries=sampled_entries,
+    )

@@ -11,6 +11,7 @@ from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Mapping, Optional, Tuple
 
 import yaml
+from pydantic import ValidationError
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri
@@ -1379,6 +1380,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 else ""
             )
             fields = {}
+            invalid_cards = 0
             for name, entry in list(entries.items()):
                 if entry["kind"] != "file":
                     fields[name] = {}
@@ -1391,13 +1393,29 @@ class SemanticProcessor(DequeueHandlerBase):
                         raise
                     entries.pop(name)
                     continue
-                memory = MemoryFileUtils.read(raw, uri=file_uri)
+                try:
+                    memory = MemoryFileUtils.read(raw, uri=file_uri)
+                except ValidationError:
+                    entries.pop(name)
+                    invalid_cards += 1
+                    logger.debug(
+                        "skipping memory card with invalid fields target=%s",
+                        safe_uri_for_log(file_uri),
+                    )
+                    continue
                 fields[name] = memory.to_metadata()
                 if not entry["summary"]:
                     summary = memory.extra_fields.get("summary")
                     entry["summary"] = (
                         summary if isinstance(summary, str) and summary.strip() else memory.content
                     ) or ""
+
+            if invalid_cards:
+                logger.info(
+                    "memory directory refresh skipped cards with invalid fields target=%s",
+                    safe_uri_for_log(dir_uri),
+                    extra={"degraded": True, "skipped": invalid_cards},
+                )
 
             if overview_template:
 

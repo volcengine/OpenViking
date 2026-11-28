@@ -92,7 +92,11 @@ class _FakeProcessor:
             assert all(
                 f"{dir_uri}/{item['name']}" in self.vectorized_files for item in file_summaries
             )
-        return DirectoryGeneration(overview="overview", abstract="abstract")
+        return DirectoryGeneration(
+            overview="overview",
+            abstract="abstract",
+            sampled_entries=len(file_summaries) + len(children_abstracts),
+        )
 
     async def _vectorize_directory(
         self,
