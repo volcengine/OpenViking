@@ -49,6 +49,54 @@ async def test_webdav_get_content_length_uses_delivered_body_size(client, servic
     assert fetched.headers["last-modified"] == head.headers["last-modified"]
 
 
+async def test_webdav_put_new_file_dispatches_file_level_semantics(monkeypatch):
+    """A new-file PUT must reach the semantic executor with the file URI (#6234)."""
+    file_uri = "viking://resources/scratch/notes.md"
+    parent_uri = "viking://resources/scratch"
+    calls: list[tuple[str, str, str]] = []
+
+    class FakeFS:
+        async def stat(self, uri: str, ctx=None, skip_count=False):
+            if uri == parent_uri:
+                return {"isDir": True, "name": "scratch"}
+            return None
+
+        async def write_file(self, uri: str, content: str, ctx=None, **kwargs):
+            calls.append(("write", uri, content))
+
+    class FakeResources:
+        async def summarize(self, uris, ctx=None, **kwargs):
+            calls.append(("summarize", uris[0], ""))
+
+    class FakeService:
+        fs = FakeFS()
+        viking_fs = FakeFS()
+        resources = FakeResources()
+
+    monkeypatch.setattr(webdav_router, "get_service", lambda: FakeService())
+
+    async def receive():
+        return {"type": "http.request", "body": b"# orchard irrigation", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "PUT",
+            "path": "/webdav/resources/scratch/notes.md",
+            "headers": [(b"content-type", b"text/markdown")],
+        },
+        receive=receive,
+    )
+
+    resp = await webdav_router.put(request, "scratch/notes.md", None)
+
+    assert resp.status_code == 201
+    assert calls == [
+        ("write", file_uri, "# orchard irrigation"),
+        ("summarize", file_uri, ""),
+    ]
+
+
 async def test_webdav_options_advertises_dav(client: httpx.AsyncClient):
     resp = await client.request("OPTIONS", "/webdav/resources")
     assert resp.status_code == 204

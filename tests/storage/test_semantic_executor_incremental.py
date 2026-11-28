@@ -48,8 +48,12 @@ class _FakeVikingFS:
         return self._tree.get(self._norm(uri), [])
 
     async def stat(self, uri, ctx=None, skip_count=False):
-        content = self._file_contents.get(self._norm(uri), "")
-        return {"size": len(content)}
+        norm_uri = self._norm(uri).rstrip("/")
+        content = self._file_contents.get(norm_uri, "")
+        is_dir = norm_uri in self._tree or any(
+            path.startswith(f"{norm_uri}/") for path in self._file_contents
+        )
+        return {"size": len(content), "isDir": is_dir}
 
     async def read_file(self, path, ctx=None):
         return self._file_contents.get(self._norm(path), "")
@@ -264,6 +268,31 @@ async def test_file_root_semantic_plan_runs_file_node_without_listing_or_sidecar
     assert processor.vectorized_files == [file_uri]
     assert fake_fs.writes == []
     assert executor.get_stats().indexed_records == 1
+
+
+@pytest.mark.asyncio
+async def test_file_root_without_plan_summarizes_instead_of_listing(monkeypatch):
+    """A plain file URI must not be dispatched as a directory (#6234)."""
+    file_uri = "viking://resources/webdav/alpha.md"
+    fake_fs = _FakeVikingFS(
+        tree={}, file_contents={file_uri: "# orchard irrigation\nsoil moisture sensors"}
+    )
+    fake_fs.ls = AsyncMock(side_effect=AssertionError("file root must not be listed"))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fake_fs
+    )
+    processor = _FakeProcessor(fake_fs)
+    executor = SemanticTreeExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=1,
+        ctx=RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER),
+    )
+
+    await executor.run(file_uri)
+
+    assert processor.summarized_files == [file_uri]
+    assert processor.vectorized_files == [file_uri]
 
 
 @pytest.mark.asyncio
