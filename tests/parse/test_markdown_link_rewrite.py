@@ -12,6 +12,7 @@ from openviking.parse.output import LocalParseOutputStore
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.markdown import MarkdownParser, _RewriteContext
+from openviking_cli.utils.config.parser_config import ParserConfig
 
 
 @pytest.mark.asyncio
@@ -73,6 +74,56 @@ class TestRewriteRelativeLinks:
             section_subpath=section_subpath,
             rewrite_ctx=rewrite_ctx,
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "title,fragment",
+        [
+            ("Fish & Chips", "fish--chips"),
+            ("Fish &amp; Chips", "fish--chips"),
+            ("Fish &#38; Chips", "fish--chips"),
+            ("Fish &#x26; Chips", "fish--chips"),
+            ("Café", "café"),
+            ("Caf&#233;", "café"),
+            ("Caf&#xE9;", "café"),
+            ("Fish &NotARealEntity; Chips", "fish-notarealentity-chips"),
+            ("Fish &copy Chips", "fish-copy-chips"),
+            ("Fish `&amp;` Chips", "fish-amp-chips"),
+            (r"Fish \&amp; Chips", "fish-amp-chips"),
+            ("Fish &amp;amp; Chips", "fish-amp-chips"),
+            ("Fish &#35; Chips", "fish--chips"),
+            ("Fish `&#35;` Chips", "fish-35-chips"),
+            ("&lt;em&gt;word&lt;/em&gt;", "emwordem"),
+            ("部署&#x6D41;&#31243;", "部署流程"),
+        ],
+    )
+    async def test_plain_heading_references_locate_the_actual_section(
+        self, tmp_path, title, fragment
+    ):
+        target = tmp_path / "target.md"
+        target.write_text(
+            f"# {title}\n\n" + "A" * 600 + "\n\n# Other\n\n" + "B" * 600,
+            encoding="utf-8",
+        )
+        parser = MarkdownParser(config=ParserConfig(max_section_chars=900))
+        context = _RewriteContext(
+            source_path=str(tmp_path / "index.md"),
+            doc_name="index",
+            root_dir="viking://temp/index",
+            import_root=str(tmp_path),
+            base_dir=tmp_path,
+            allowed_media_dirs=None,
+            split_content=True,
+            adaptive_flatten_requested=False,
+            flatten_single_output=False,
+        )
+        layout = await parser._target_split_files(str(target), context)
+        assert layout is not None
+        [section] = [name for name, body in layout.items() if body.startswith(f"# {title}\n")]
+        actual = await parser._rewrite_single_link(
+            "target.md#" + fragment, str(tmp_path), str(tmp_path), str(tmp_path / "index"), context
+        )
+        assert actual == f"../{section}#{fragment}"
 
     async def test_md_target_becomes_directory(self, tmp_path: Path):
         kb = self._make_tree(tmp_path)
